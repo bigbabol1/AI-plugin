@@ -112,7 +112,16 @@ class Orchestrator:
         Raises:
             OrchestratorError: on provider failure.
         """
-        voice_mode: bool = self._entry.options.get(CONF_VOICE_MODE, False)
+        # Heuristic: if a device_id is present the request came from a voice
+        # assistant pipeline (Assist mic → media player → device).  We also
+        # honour the explicit CONF_VOICE_MODE config toggle as a fallback for
+        # setups where the device_id is unavailable but the user always wants
+        # the compact voice prompt.  Note: HA does not expose a dedicated
+        # is_voice flag on ConversationInput (Context is not a dict), so
+        # device_id presence is the closest reliable signal available.
+        voice_mode: bool = (device_id is not None) or bool(
+            self._entry.options.get(CONF_VOICE_MODE, False)
+        )
         system_prompt = self._build_system_prompt(voice_mode)
 
         async with self._lock:
