@@ -3,22 +3,28 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from . import ChatResponse
 
 
 class AbstractProvider(ABC):
     """Abstract base for LLM provider adapters.
 
     Each provider adapter must implement:
-    - async_complete: send messages, return assistant reply text
+    - async_chat: send messages (+ optional tool schemas), return ChatResponse
+    - async_complete: convenience wrapper returning plain reply text
     - async_list_models: return available model IDs for the config flow
     - async_close: close any open network sessions
 
     ┌──────────────────────────────────────────────────────┐
     │               AbstractProvider                        │
     │                                                      │
-    │  async_complete(messages) → str                      │
-    │  async_list_models()      → list[str]                │
-    │  async_close()            → None                     │
+    │  async_chat(messages, tools) → ChatResponse          │
+    │  async_complete(messages)    → str  (convenience)    │
+    │  async_list_models()         → list[str]             │
+    │  async_close()               → None                  │
     └──────────────────────────────────────────────────────┘
            ▲
            │ (subclasses)
@@ -28,21 +34,31 @@ class AbstractProvider(ABC):
     """
 
     @abstractmethod
-    async def async_complete(
+    async def async_chat(
         self,
-        messages: list[dict[str, str]],
-    ) -> str:
-        """Send a list of messages and return the assistant's reply.
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ChatResponse:
+        """Send messages with optional tool schemas, return a ChatResponse.
 
-        Args:
-            messages: OpenAI-format message list:
-                      [{"role": "system"|"user"|"assistant", "content": "..."}]
-
-        Returns:
-            The assistant's reply as a plain string.
+        ChatResponse.content holds the text reply (None if LLM made a tool call).
+        ChatResponse.tool_calls holds the calls to execute (empty for text reply).
 
         Raises:
             OrchestratorError: on provider failure (connection, timeout, auth, parse).
+        """
+
+    @abstractmethod
+    async def async_complete(
+        self,
+        messages: list[dict[str, Any]],
+    ) -> str:
+        """Convenience wrapper: send messages, return reply text.
+
+        Used by ContextManager summarization and no-tools paths.
+
+        Raises:
+            OrchestratorError: on provider failure.
         """
 
     @abstractmethod

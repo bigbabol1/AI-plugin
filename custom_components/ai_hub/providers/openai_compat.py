@@ -14,7 +14,8 @@ from typing import Any
 
 import aiohttp
 
-from ..exceptions import CannotConnect, InvalidAuth, OrchestratorError
+from ..exceptions import CannotConnect, OrchestratorError
+from . import ChatResponse, normalize_tool_calls
 from .base import AbstractProvider
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,17 +64,27 @@ class OpenAICompatProvider(AbstractProvider):
             self._session = aiohttp.ClientSession(headers=self._build_headers())
         return self._session
 
-    async def async_complete(
+    async def async_chat(
         self,
-        messages: list[dict[str, str]],
-    ) -> str:
-        """Send messages to the chat completions endpoint and return the reply."""
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ChatResponse:
+        """Send messages (optionally with tool schemas) and return a ChatResponse.
+
+        ChatResponse contains:
+        - content: the assistant's text reply (None when the LLM made a tool call)
+        - tool_calls: list of ToolCall objects to execute (empty for a text reply)
+
+        Raises OrchestratorError on any provider failure.
+        """
         session = self._get_session()
         url = f"{self._base_url}/chat/completions"
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
         }
+        if tools:
+            payload["tools"] = tools
 
         try:
             async with session.post(
@@ -88,11 +99,15 @@ class OpenAICompatProvider(AbstractProvider):
                 resp.raise_for_status()
                 data = await resp.json(content_type=None)
                 try:
-                    return data["choices"][0]["message"]["content"]
+                    message = data["choices"][0]["message"]
                 except (KeyError, IndexError) as exc:
                     raise OrchestratorError(
                         f"Unexpected response format: {exc}"
                     ) from exc
+                return ChatResponse(
+                    content=message.get("content"),
+                    tool_calls=normalize_tool_calls(message),
+                )
 
         except OrchestratorError:
             raise
@@ -106,6 +121,20 @@ class OpenAICompatProvider(AbstractProvider):
             ) from exc
         except aiohttp.ClientError as exc:
             raise OrchestratorError(f"HTTP error: {exc}") from exc
+
+    async def async_complete(
+        self,
+        messages: list[dict[str, Any]],
+    ) -> str:
+        """Backward-compatible wrapper: send messages, return reply text only.
+
+        Used by ContextManager.summarize_if_needed() and no-tools paths.
+        Delegates to async_chat().
+        """
+        response = await self.async_chat(messages)
+        if response.content is None:
+            raise OrchestratorError("Unexpected response format: content is None")
+        return response.content
 
     async def async_list_models(self) -> list[str]:
         """Fetch available models from /models endpoint."""

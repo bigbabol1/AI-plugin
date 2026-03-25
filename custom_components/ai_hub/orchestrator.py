@@ -31,6 +31,7 @@ from .const import (
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_CONTEXT_WINDOW,
+    CONF_MAX_TOOL_ITERATIONS,
     CONF_MODEL,
     CONF_RESPONSE_TIMEOUT,
     CONF_SUMMARIZATION_ENABLED,
@@ -38,8 +39,10 @@ from .const import (
     CONF_VOICE_MODE,
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
+    DOMAIN,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
 )
@@ -49,6 +52,7 @@ from .providers.openai_compat import OpenAICompatProvider
 
 if TYPE_CHECKING:
     from .providers.base import AbstractProvider
+    from .tools.mcp_client import MCPToolRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,14 +68,29 @@ class Orchestrator:
         self._hass = hass
         self._entry = entry
         self._provider: AbstractProvider = self._build_provider()
+
+        # Retrieve MCPToolRegistry created by async_setup_entry (may be None
+        # if no MCP servers are configured or during tests).
+        self._mcp: MCPToolRegistry | None = (
+            hass.data.get(DOMAIN, {}).get(entry.entry_id)
+            if hass is not None
+            else None
+        )
+
         opts = entry.options
+        # Use real schema token budget if MCPToolRegistry is available.
+        tool_budget = (
+            self._mcp.estimate_schema_tokens() if self._mcp else 2000
+        )
         self._context_mgr = ContextManager(
             max_tokens=opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW),
-            # Week 3: MCP client will supply actual schema token count here.
-            tool_token_budget=2000,
+            tool_token_budget=tool_budget,
         )
         self._summarization_enabled: bool = opts.get(
             CONF_SUMMARIZATION_ENABLED, DEFAULT_SUMMARIZATION_ENABLED
+        )
+        self._max_tool_iterations: int = opts.get(
+            CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS
         )
 
     def _build_provider(self) -> AbstractProvider:
@@ -145,21 +164,73 @@ class Orchestrator:
         # 3. Build the message list (system prompt + trimmed history).
         messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
 
+        # 4. Get available tool schemas (empty list = no tool calling).
+        tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
+
         _LOGGER.debug(
-            "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d",
+            "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
             conversation_id,
             language,
             voice_mode,
             len(messages),
+            len(tool_schemas),
         )
 
-        # 4. Call the LLM.
-        reply = await self._provider.async_complete(messages)
+        # 5. Call LLM (with tool loop if tools are available).
+        if tool_schemas and self._mcp is not None:
+            reply = await self._tool_loop(messages, tool_schemas)
+        else:
+            reply = await self._provider.async_complete(messages)
 
-        # 5. Append assistant reply to history.
+        # 6. Append assistant reply to history.
         await self._context_mgr.add_turn(conversation_id, "assistant", reply)
 
         return reply
+
+    async def _tool_loop(
+        self,
+        messages: list[dict],
+        tool_schemas: list[dict],
+    ) -> str:
+        """Run the tool-use loop: call LLM → execute tools → repeat.
+
+        Exits when:
+        (a) LLM returns a plain text response (no tool calls), or
+        (b) max_tool_iterations is reached.
+
+        On iteration limit with an unresolved tool call, appends a note so
+        the user knows the response may be incomplete — never silently truncates.
+        """
+        assert self._mcp is not None  # guarded by caller
+        last_response = None
+
+        for iteration in range(self._max_tool_iterations):
+            response = await self._provider.async_chat(messages, tool_schemas)
+            last_response = response
+
+            if not response.has_tool_calls:
+                return response.reply_text()
+
+            _LOGGER.debug(
+                "Tool loop iteration %d/%d: %d tool call(s): %s",
+                iteration + 1,
+                self._max_tool_iterations,
+                len(response.tool_calls),
+                [tc.name for tc in response.tool_calls],
+            )
+
+            # Add assistant's tool-call message to the thread.
+            for tc in response.tool_calls:
+                messages.append(tc.to_assistant_message())
+
+            # Execute all tool calls and add results.
+            for tc in response.tool_calls:
+                result = await self._mcp.call_tool(tc.name, tc.arguments)
+                messages.append(tc.to_tool_result_message(result))
+
+        # Hit iteration limit while still getting tool calls.
+        suffix = " [Note: reached tool call limit — response may be incomplete.]"
+        return (last_response.reply_text() if last_response else "") + suffix
 
     async def async_close(self) -> None:
         """Close provider sessions. Called on integration unload."""

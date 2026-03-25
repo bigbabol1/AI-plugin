@@ -6,20 +6,36 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
+from .const import CONF_MCP_SERVERS, DOMAIN
+from .tools.mcp_client import MCPToolRegistry
+
 PLATFORMS = [Platform.CONVERSATION]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AI Hub from a config entry."""
+    # Build and start the MCP tool registry (may be empty if no servers configured).
+    server_configs: list[dict] = entry.options.get(CONF_MCP_SERVERS, [])
+    mcp = MCPToolRegistry(server_configs)
+    await mcp.async_setup()
+
+    # Store in hass.data so Orchestrator can retrieve it.
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = mcp
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    # Reload the entry when options are updated so the Orchestrator picks up
-    # the new provider URL, model, or settings immediately.
+
+    # Reload the entry when options change so Orchestrator picks up new settings.
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry — tear down MCP connections first."""
+    mcp: MCPToolRegistry | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if mcp is not None:
+        # Kill stdio subprocesses and close HTTP sessions to prevent zombies.
+        await mcp.async_teardown()
+
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

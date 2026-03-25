@@ -84,6 +84,8 @@ async def test_process_happy_path() -> None:
     orch._entry = entry
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False  # keep test simple
+    orch._mcp = None
+    orch._max_tool_iterations = 5
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Lights are on.")
@@ -111,6 +113,8 @@ async def test_process_multi_turn_maintains_history() -> None:
     orch._entry = entry
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
+    orch._mcp = None
+    orch._max_tool_iterations = 5
 
     responses = ["Hello!", "The temperature is 72°F."]
     call_count = 0
@@ -145,6 +149,8 @@ async def test_process_isolates_conversation_ids() -> None:
     orch._entry = entry
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
+    orch._mcp = None
+    orch._max_tool_iterations = 5
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Reply")
@@ -168,6 +174,8 @@ async def test_process_propagates_orchestrator_error() -> None:
     orch._entry = entry
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
+    orch._mcp = None
+    orch._max_tool_iterations = 5
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(
@@ -177,6 +185,97 @@ async def test_process_propagates_orchestrator_error() -> None:
 
     with pytest.raises(OrchestratorError, match="Provider down"):
         await orch.async_process("Hello", "conv-1", "en")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Orchestrator: tool calling loop
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _make_orch_with_mcp(mock_mcp, mock_provider):
+    """Helper: build a minimal Orchestrator with MCP and provider pre-wired."""
+    from custom_components.ai_hub.context_manager import ContextManager
+
+    entry = _make_mock_entry()
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._entry = entry
+    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch._summarization_enabled = False
+    orch._mcp = mock_mcp
+    orch._max_tool_iterations = 5
+    orch._provider = mock_provider
+    return orch
+
+
+async def test_tool_loop_single_tool_call() -> None:
+    """Tool loop executes one tool call and returns the final text reply."""
+    from custom_components.ai_hub.providers import ChatResponse, ToolCall
+
+    tool_call = ToolCall(id="c1", name="get_time", arguments={})
+    responses = [
+        ChatResponse(content=None, tool_calls=[tool_call]),   # first: tool call
+        ChatResponse(content="It is 22:00.", tool_calls=[]),  # second: final answer
+    ]
+    call_count = 0
+
+    async def mock_chat(messages, tools=None):
+        nonlocal call_count
+        r = responses[call_count]
+        call_count += 1
+        return r
+
+    mock_provider = MagicMock()
+    mock_provider.async_chat = mock_chat
+
+    mock_mcp = MagicMock()
+    mock_mcp.get_tool_schemas = MagicMock(return_value=[{"type": "function", "function": {"name": "get_time"}}])
+    mock_mcp.call_tool = AsyncMock(return_value="22:00")
+
+    orch = _make_orch_with_mcp(mock_mcp, mock_provider)
+    reply = await orch.async_process("What time is it?", "c", "en")
+
+    assert reply == "It is 22:00."
+    mock_mcp.call_tool.assert_awaited_once_with("get_time", {})
+
+
+async def test_tool_loop_max_iterations_appends_note() -> None:
+    """When max_tool_iterations is reached, a note is appended to the reply."""
+    from custom_components.ai_hub.providers import ChatResponse, ToolCall
+
+    async def always_tool_call(messages, tools=None):
+        return ChatResponse(
+            content="partial",
+            tool_calls=[ToolCall(id="x", name="loop_tool", arguments={})],
+        )
+
+    mock_provider = MagicMock()
+    mock_provider.async_chat = always_tool_call
+
+    mock_mcp = MagicMock()
+    mock_mcp.get_tool_schemas = MagicMock(return_value=[{"type": "function", "function": {"name": "loop_tool"}}])
+    mock_mcp.call_tool = AsyncMock(return_value="result")
+
+    orch = _make_orch_with_mcp(mock_mcp, mock_provider)
+    orch._max_tool_iterations = 2
+    reply = await orch.async_process("Loop forever", "c", "en")
+
+    assert "tool call limit" in reply.lower()
+
+
+async def test_no_tools_skips_tool_loop() -> None:
+    """When MCP has no tools, async_complete is used directly."""
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(return_value="Direct reply.")
+    mock_provider.async_chat = AsyncMock()
+
+    mock_mcp = MagicMock()
+    mock_mcp.get_tool_schemas = MagicMock(return_value=[])  # empty = no tools
+
+    orch = _make_orch_with_mcp(mock_mcp, mock_provider)
+    reply = await orch.async_process("Hello", "c", "en")
+
+    assert reply == "Direct reply."
+    mock_provider.async_chat.assert_not_awaited()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

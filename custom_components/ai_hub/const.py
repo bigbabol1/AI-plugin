@@ -30,6 +30,9 @@ CONF_XML_FALLBACK = "xml_fallback"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
 
+# MCP server list (list of dicts: {transport, url|command, args, env})
+CONF_MCP_SERVERS = "mcp_servers"
+
 # Routing keys (CEO cherry-pick 2 — Week 3+ scope)
 CONF_ROUTE_HOME_CONTROL = "route_home_control"
 CONF_ROUTE_WEB_SEARCH = "route_web_search"

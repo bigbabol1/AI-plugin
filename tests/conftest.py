@@ -161,5 +161,7 @@ import pytest
 
 @pytest.fixture
 def hass():
-    """Minimal hass stand-in for tests that just need the attribute."""
-    return MagicMock()
+    """Minimal hass stand-in for tests that need hass.data."""
+    h = MagicMock()
+    h.data = {}
+    return h
