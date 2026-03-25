@@ -295,3 +295,184 @@ async def test_registry_teardown_calls_stop_on_all_servers() -> None:
 
     conn1.async_stop.assert_awaited_once()
     conn2.async_stop.assert_awaited_once()
+
+
+async def test_server_async_start_logs_warning_on_timeout() -> None:
+    """async_start logs a warning when the server doesn't connect in time."""
+    conn = _MCPServerConnection({"url": "http://localhost:8080", "name": "slow"})
+    # Patch asyncio.wait_for to raise TimeoutError (server too slow)
+    with patch("asyncio.wait_for", side_effect=TimeoutError):
+        with patch("asyncio.ensure_future", return_value=MagicMock()):
+            # Should not raise — timeout is handled gracefully
+            await conn.async_start()
+
+
+async def test_server_async_stop_cancels_slow_task() -> None:
+    """async_stop cancels the task when it times out during shutdown."""
+    conn = _MCPServerConnection({"url": "http://localhost:8080"})
+
+    mock_task = MagicMock()
+    mock_task.done = MagicMock(return_value=False)
+    mock_task.cancel = MagicMock()
+    conn._task = mock_task
+
+    with patch("asyncio.wait_for", side_effect=TimeoutError):
+        await conn.async_stop()
+
+    mock_task.cancel.assert_called_once()
+
+
+async def test_server_async_stop_with_no_task_does_not_raise() -> None:
+    """async_stop is safe to call when no task was started."""
+    conn = _MCPServerConnection({"url": "http://localhost:8080"})
+    conn._task = None  # never started
+    await conn.async_stop()  # should not raise
+
+
+async def test_run_with_retry_handles_cancelled_error() -> None:
+    """_run_with_retry exits cleanly on CancelledError."""
+    conn = _MCPServerConnection({"url": "http://localhost:8080"})
+
+    async def raise_cancelled():
+        raise asyncio.CancelledError
+
+    with patch.object(conn, "_run_once", side_effect=raise_cancelled):
+        await conn._run_with_retry()
+
+    assert conn._state == _State.DISCONNECTED
+
+
+async def test_run_with_retry_handles_exception_then_shutdown() -> None:
+    """_run_with_retry logs warning on exception and exits when shutdown is set."""
+    conn = _MCPServerConnection({"url": "http://localhost:8080"})
+
+    call_count = 0
+
+    async def fail_then_shutdown():
+        nonlocal call_count
+        call_count += 1
+        conn._shutdown.set()  # signal shutdown after first failure
+        raise RuntimeError("connection refused")
+
+    with patch.object(conn, "_run_once", side_effect=fail_then_shutdown):
+        await conn._run_with_retry()
+
+    assert conn._state == _State.DISCONNECTED
+    assert call_count == 1
+
+
+async def test_run_with_retry_retries_on_transient_error() -> None:
+    """_run_with_retry retries after a transient error then succeeds."""
+    conn = _MCPServerConnection({"url": "http://localhost:8080"})
+
+    call_count = 0
+
+    async def fail_once_then_shutdown():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("transient error")
+        conn._shutdown.set()  # succeed and trigger exit on second call
+
+    with patch.object(conn, "_run_once", side_effect=fail_once_then_shutdown):
+        with patch("asyncio.wait_for", side_effect=TimeoutError):
+            await conn._run_with_retry()
+
+    assert call_count == 2
+    assert conn._state == _State.DISCONNECTED
+
+
+async def test_run_once_dispatches_to_stdio() -> None:
+    """_run_once calls _run_stdio when transport is 'stdio'."""
+    conn = _MCPServerConnection({"transport": "stdio", "command": "npx", "args": ["-y", "server"]})
+
+    with patch.object(conn, "_run_stdio", new_callable=AsyncMock) as mock_stdio:
+        await conn._run_once()
+
+    mock_stdio.assert_awaited_once()
+
+
+async def test_run_stdio_connects_and_lists_tools() -> None:
+    """_run_stdio connects via stdio transport and exposes tool list."""
+    tools = [_mock_tool("stdio_tool")]
+
+    mock_session = AsyncMock()
+    mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=tools))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    mock_transport = MagicMock()
+    mock_transport.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+    mock_transport.__aexit__ = AsyncMock(return_value=False)
+
+    conn = _MCPServerConnection({
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-time"],
+    })
+
+    with (
+        patch("custom_components.ai_hub.tools.mcp_client.stdio_client", return_value=mock_transport),
+        patch("custom_components.ai_hub.tools.mcp_client.ClientSession", return_value=mock_session),
+    ):
+        task = asyncio.ensure_future(conn.async_start())
+        await asyncio.sleep(0.05)
+
+        assert conn.state == _State.CONNECTED
+        assert len(conn.tools) == 1
+        assert conn.tools[0].name == "stdio_tool"
+
+        conn._shutdown.set()
+        await task
+
+
+async def test_registry_setup_calls_async_start_on_all_servers() -> None:
+    """async_setup() calls async_start() on every server and rebuilds tool index."""
+    registry = MCPToolRegistry([])
+    conn1 = MagicMock()
+    conn1.async_start = AsyncMock()
+    conn1.state = _State.CONNECTED
+    conn1.tools = []
+    conn2 = MagicMock()
+    conn2.async_start = AsyncMock()
+    conn2.state = _State.CONNECTED
+    conn2.tools = []
+    registry._servers = [conn1, conn2]
+
+    await registry.async_setup()
+
+    conn1.async_start.assert_awaited_once()
+    conn2.async_start.assert_awaited_once()
+
+
+async def test_registry_estimate_schema_tokens_zero_when_no_tools() -> None:
+    """estimate_schema_tokens() returns 0 when no tools are available."""
+    registry = MCPToolRegistry([])
+    # No servers — schemas list is empty → returns 0
+    tokens = registry.estimate_schema_tokens()
+    assert tokens == 0
+
+
+async def test_server_connection_call_tool_handles_binary_and_other_blocks() -> None:
+    """call_tool() handles binary data blocks and fallback str() blocks."""
+
+    class BinaryBlock:
+        data = b"rawbytes"
+
+    class OtherBlock:
+        def __str__(self):
+            return "other_repr"
+
+    conn = _MCPServerConnection({"url": "http://localhost:8080"})
+    conn._state = _State.CONNECTED
+
+    mock_result = MagicMock()
+    mock_result.content = [BinaryBlock(), OtherBlock()]
+    mock_session = MagicMock()
+    mock_session.call_tool = AsyncMock(return_value=mock_result)
+    conn._session = mock_session
+
+    result = await conn.call_tool("some_tool", {})
+
+    assert "[binary data: 8 bytes]" in result
+    assert "other_repr" in result

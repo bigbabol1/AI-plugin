@@ -227,6 +227,15 @@ async def test_searxng_no_url_returns_message() -> None:
     assert "not configured" in result.lower() or "url" in result.lower()
 
 
+async def test_searxng_non_200_returns_fallback() -> None:
+    """SearXNG non-200 response returns fallback message."""
+    resp = _mock_resp(503)
+    tool = _make_tool(BACKEND_SEARXNG, **{CONF_SEARXNG_URL: "https://search.example.com"})
+    with patch("aiohttp.ClientSession", return_value=_mock_session(resp)):
+        result = await tool.async_search("query")
+    assert "No results" in result or "search" in result.lower()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Tavily backend
 # ══════════════════════════════════════════════════════════════════════════════
@@ -248,6 +257,24 @@ async def test_tavily_no_key_returns_message() -> None:
     """Tavily without API key returns configuration message."""
     result = await _make_tool(BACKEND_TAVILY).async_search("test")
     assert "not configured" in result.lower() or "api key" in result.lower()
+
+
+async def test_tavily_401_returns_invalid_key_message() -> None:
+    """Tavily 401 response returns invalid API key message."""
+    resp = _mock_resp(401)
+    tool = _make_tool(BACKEND_TAVILY, **{CONF_TAVILY_API_KEY: "bad-key"})
+    with patch("aiohttp.ClientSession", return_value=_mock_session(resp)):
+        result = await tool.async_search("query")
+    assert "invalid" in result.lower() or "api key" in result.lower()
+
+
+async def test_tavily_429_returns_quota_message() -> None:
+    """Tavily 429 response returns quota exceeded message."""
+    resp = _mock_resp(429)
+    tool = _make_tool(BACKEND_TAVILY, **{CONF_TAVILY_API_KEY: "valid-key"})
+    with patch("aiohttp.ClientSession", return_value=_mock_session(resp)):
+        result = await tool.async_search("query")
+    assert "quota" in result.lower() or "exceeded" in result.lower()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

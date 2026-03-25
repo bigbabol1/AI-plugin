@@ -213,3 +213,146 @@ async def test_async_close_is_idempotent_when_no_session() -> None:
     """async_close does nothing if no session was ever created."""
     provider = _make_provider()
     await provider.async_close()  # should not raise
+
+
+async def test_get_session_recreates_when_closed() -> None:
+    """_get_session creates a new session when the existing one is closed."""
+    provider = _make_provider()
+    mock_closed = MagicMock()
+    mock_closed.closed = True
+    provider._session = mock_closed
+
+    with patch("aiohttp.ClientSession") as mock_cls:
+        new_session = MagicMock()
+        mock_cls.return_value = new_session
+        result = provider._get_session()
+
+    assert result is new_session
+    assert provider._session is new_session
+
+
+async def test_async_chat_includes_tools_in_payload() -> None:
+    """async_chat sends tools and tool_choice when tools are provided."""
+    provider = _make_provider()
+    mock_resp = _mock_response(
+        200,
+        {"choices": [{"message": {"content": "reply", "tool_calls": None}}]},
+    )
+
+    captured_kwargs = {}
+    original_post = MagicMock(return_value=mock_resp)
+
+    def capturing_post(url, **kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_resp
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.post = capturing_post
+        tools = [{"type": "function", "function": {"name": "get_time"}}]
+        await provider.async_chat([{"role": "user", "content": "hi"}], tools=tools)
+
+    assert "tools" in captured_kwargs.get("json", {})
+    assert captured_kwargs["json"]["tool_choice"] == "auto"
+
+
+async def test_async_complete_raises_when_content_is_none() -> None:
+    """async_complete raises OrchestratorError when response content is None."""
+    from custom_components.ai_hub.providers import ChatResponse
+
+    provider = _make_provider()
+    with patch.object(
+        provider,
+        "async_chat",
+        new_callable=AsyncMock,
+        return_value=ChatResponse(content=None, tool_calls=[]),
+    ):
+        with pytest.raises(OrchestratorError, match="content is None"):
+            await provider.async_complete([{"role": "user", "content": "hi"}])
+
+
+async def test_async_chat_raises_on_generic_client_error() -> None:
+    """Generic aiohttp.ClientError in async_chat raises OrchestratorError."""
+    provider = _make_provider()
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.post = MagicMock(
+            side_effect=aiohttp.ClientError("generic error")
+        )
+        with pytest.raises(OrchestratorError, match="HTTP error"):
+            await provider.async_complete([{"role": "user", "content": "hi"}])
+
+
+async def test_list_models_raises_cannot_connect_on_malformed_response() -> None:
+    """Malformed /models response (missing 'id' key) raises CannotConnect."""
+    provider = _make_provider()
+    # Data where items don't have 'id' key
+    mock_resp = _mock_response(200, {"data": [{"name": "llama"}]})
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.get = MagicMock(return_value=mock_resp)
+        with pytest.raises(CannotConnect, match="Unexpected"):
+            await provider.async_list_models()
+
+
+async def test_async_fetch_models_with_api_key_sends_auth_header() -> None:
+    """async_fetch_models includes Authorization header when api_key is given."""
+    mock_resp = _mock_response(200, {"data": [{"id": "gpt-4"}]})
+    mock_session_ctx = MagicMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_ctx)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_session_ctx.get = MagicMock(return_value=mock_resp)
+
+    captured_headers = {}
+
+    def fake_client_session(headers=None, **kwargs):
+        if headers:
+            captured_headers.update(headers)
+        return mock_session_ctx
+
+    with patch("aiohttp.ClientSession", side_effect=fake_client_session):
+        models = await async_fetch_models("http://localhost:11434/v1", api_key="sk-test")
+
+    assert models == ["gpt-4"]
+    assert "Authorization" in captured_headers
+    assert captured_headers["Authorization"] == "Bearer sk-test"
+
+
+async def test_async_fetch_models_raises_cannot_connect_on_malformed_response() -> None:
+    """async_fetch_models raises CannotConnect when response lacks 'id' key."""
+    mock_resp = _mock_response(200, {"data": [{"name": "no-id"}]})
+    mock_session_ctx = MagicMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_ctx)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_session_ctx.get = MagicMock(return_value=mock_resp)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session_ctx):
+        with pytest.raises(CannotConnect, match="Unexpected"):
+            await async_fetch_models("http://localhost:11434/v1")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AbstractProvider: default async_chat fallback
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def test_abstract_provider_default_async_chat_wraps_complete() -> None:
+    """AbstractProvider.async_chat default wraps async_complete in a ChatResponse."""
+    from custom_components.ai_hub.providers import ChatResponse
+    from custom_components.ai_hub.providers.base import AbstractProvider
+
+    class ConcreteProvider(AbstractProvider):
+        async def async_complete(self, messages):
+            return "hello from complete"
+
+        async def async_list_models(self):
+            return []
+
+        async def async_close(self):
+            pass
+
+    provider = ConcreteProvider()
+    response = await provider.async_chat([{"role": "user", "content": "hi"}])
+
+    assert isinstance(response, ChatResponse)
+    assert response.content == "hello from complete"
+    assert response.tool_calls == []
