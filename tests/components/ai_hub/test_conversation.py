@@ -86,6 +86,8 @@ async def test_process_happy_path() -> None:
     orch._summarization_enabled = False  # keep test simple
     orch._mcp = None
     orch._max_tool_iterations = 5
+    orch._xml_fallback = False
+    orch._web_search = None
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Lights are on.")
@@ -115,6 +117,8 @@ async def test_process_multi_turn_maintains_history() -> None:
     orch._summarization_enabled = False
     orch._mcp = None
     orch._max_tool_iterations = 5
+    orch._xml_fallback = False
+    orch._web_search = None
 
     responses = ["Hello!", "The temperature is 72°F."]
     call_count = 0
@@ -151,6 +155,8 @@ async def test_process_isolates_conversation_ids() -> None:
     orch._summarization_enabled = False
     orch._mcp = None
     orch._max_tool_iterations = 5
+    orch._xml_fallback = False
+    orch._web_search = None
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Reply")
@@ -176,6 +182,8 @@ async def test_process_propagates_orchestrator_error() -> None:
     orch._summarization_enabled = False
     orch._mcp = None
     orch._max_tool_iterations = 5
+    orch._xml_fallback = False
+    orch._web_search = None
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(
@@ -203,6 +211,8 @@ def _make_orch_with_mcp(mock_mcp, mock_provider):
     orch._summarization_enabled = False
     orch._mcp = mock_mcp
     orch._max_tool_iterations = 5
+    orch._xml_fallback = False
+    orch._web_search = None
     orch._provider = mock_provider
     return orch
 

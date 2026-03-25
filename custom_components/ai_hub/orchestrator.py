@@ -1,22 +1,19 @@
 """Orchestrator: the core message-processing engine for AI Hub.
 
-Week 1 scope: receive message → manage in-memory history → call LLM →
-return reply. Context management (summarization) and tool routing ship
-in Weeks 2 and 3.
+Request flow:
+  1.  Determine system prompt (voice / custom / default)
+  2.  add_turn(user)
+  3.  summarize_if_needed (Week 2)
+  4.  get_messages → [system] + trimmed history
+  5.  Collect tool schemas: MCP tools + web_search (if enabled)
+  6a. Native tool loop (OpenAI function calling):
+        LLM → tool calls → execute → repeat → final text
+  6b. XML fallback (opt-in, experimental):
+        Inject XML tool spec into system prompt, parse <tool_call> tags
+  7.  add_turn(assistant)
+  8.  Return reply text
 
-┌─────────────────────────────────────────────────────────────────┐
-│  Orchestrator.process(message, conv_id, language, device_id)    │
-│                                                                 │
-│  1. Determine system prompt (voice mode vs standard)            │
-│  2. Append user message to in-memory history (asyncio.Lock)     │
-│  3. Build message list: [system] + history                      │
-│  4. Call provider.async_complete(messages)                      │
-│  5. Append assistant reply to history                           │
-│  6. Return reply text                                           │
-│                                                                 │
-│  Error: OrchestratorError propagates to conversation.py which   │
-│  catches it and returns a graceful ConversationResult.          │
-└─────────────────────────────────────────────────────────────────┘
+Errors: OrchestratorError propagates to conversation.py → graceful reply.
 """
 
 from __future__ import annotations
@@ -37,11 +34,14 @@ from .const import (
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
     CONF_VOICE_MODE,
+    CONF_WEB_SEARCH_ENABLED,
+    CONF_XML_FALLBACK,
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
+    DEFAULT_XML_FALLBACK,
     DOMAIN,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
@@ -49,6 +49,7 @@ from .const import (
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
 from .providers.openai_compat import OpenAICompatProvider
+from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
 
 if TYPE_CHECKING:
     from .providers.base import AbstractProvider
@@ -91,6 +92,12 @@ class Orchestrator:
         )
         self._max_tool_iterations: int = opts.get(
             CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS
+        )
+        self._xml_fallback: bool = opts.get(CONF_XML_FALLBACK, DEFAULT_XML_FALLBACK)
+
+        # Web search tool (None when disabled in config).
+        self._web_search: WebSearchTool | None = (
+            WebSearchTool(opts) if opts.get(CONF_WEB_SEARCH_ENABLED, False) else None
         )
 
     def _build_provider(self) -> AbstractProvider:
@@ -164,8 +171,10 @@ class Orchestrator:
         # 3. Build the message list (system prompt + trimmed history).
         messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
 
-        # 4. Get available tool schemas (empty list = no tool calling).
+        # 4. Collect tool schemas: MCP tools + web_search (if enabled).
         tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
+        if self._web_search is not None:
+            tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
 
         _LOGGER.debug(
             "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
@@ -176,8 +185,13 @@ class Orchestrator:
             len(tool_schemas),
         )
 
-        # 5. Call LLM (with tool loop if tools are available).
-        if tool_schemas and self._mcp is not None:
+        # 5. Call LLM — three paths based on config and tool availability:
+        #    a) XML fallback (opt-in, experimental) — tool spec injected into prompt
+        #    b) Native tool loop (function calling)
+        #    c) Plain completion (no tools)
+        if tool_schemas and self._xml_fallback:
+            reply = await self._xml_tool_loop(messages, tool_schemas)
+        elif tool_schemas:
             reply = await self._tool_loop(messages, tool_schemas)
         else:
             reply = await self._provider.async_complete(messages)
@@ -192,16 +206,11 @@ class Orchestrator:
         messages: list[dict],
         tool_schemas: list[dict],
     ) -> str:
-        """Run the tool-use loop: call LLM → execute tools → repeat.
+        """Run the native function-calling loop: call LLM → execute tools → repeat.
 
-        Exits when:
-        (a) LLM returns a plain text response (no tool calls), or
-        (b) max_tool_iterations is reached.
-
-        On iteration limit with an unresolved tool call, appends a note so
-        the user knows the response may be incomplete — never silently truncates.
+        Exits when the LLM returns a plain text reply or max_tool_iterations
+        is reached. On limit, appends a note rather than silently truncating.
         """
-        assert self._mcp is not None  # guarded by caller
         last_response = None
 
         for iteration in range(self._max_tool_iterations):
@@ -212,25 +221,100 @@ class Orchestrator:
                 return response.reply_text()
 
             _LOGGER.debug(
-                "Tool loop iteration %d/%d: %d tool call(s): %s",
+                "Tool loop iteration %d/%d: %d call(s): %s",
                 iteration + 1,
                 self._max_tool_iterations,
                 len(response.tool_calls),
                 [tc.name for tc in response.tool_calls],
             )
 
-            # Add assistant's tool-call message to the thread.
             for tc in response.tool_calls:
                 messages.append(tc.to_assistant_message())
 
-            # Execute all tool calls and add results.
             for tc in response.tool_calls:
-                result = await self._mcp.call_tool(tc.name, tc.arguments)
+                result = await self._dispatch_tool(tc.name, tc.arguments)
                 messages.append(tc.to_tool_result_message(result))
 
-        # Hit iteration limit while still getting tool calls.
         suffix = " [Note: reached tool call limit — response may be incomplete.]"
         return (last_response.reply_text() if last_response else "") + suffix
+
+    async def _xml_tool_loop(
+        self,
+        messages: list[dict],
+        tool_schemas: list[dict],
+    ) -> str:
+        """XML fallback tool loop for models without native function calling.
+
+        Experimental — enabled via CONF_XML_FALLBACK.  Injects an XML tool
+        specification into the system message and parses <tool_call> tags
+        in the LLM's text responses.
+
+        ⚠ Not reliable with models that weren't trained on XML tool format.
+        """
+        import json as _json
+        import re as _re
+
+        # Build XML tool spec to append to system prompt.
+        tool_spec_lines = ["<tools>"]
+        for schema in tool_schemas:
+            fn = schema.get("function", {})
+            name = fn.get("name", "")
+            desc = fn.get("description", "")
+            params = _json.dumps(fn.get("parameters", {}))
+            tool_spec_lines.append(
+                f'  <tool name="{name}"><description>{desc}</description>'
+                f"<parameters>{params}</parameters></tool>"
+            )
+        tool_spec_lines.append("</tools>")
+        tool_spec_lines.append(
+            'To call a tool respond with: <tool_call name="tool_name">{"arg": "value"}</tool_call>'
+        )
+        xml_suffix = "\n".join(tool_spec_lines)
+
+        # Patch system message to include XML spec.
+        patched = list(messages)
+        if patched and patched[0]["role"] == "system":
+            patched[0] = {
+                "role": "system",
+                "content": patched[0]["content"] + "\n\n" + xml_suffix,
+            }
+
+        tool_call_re = _re.compile(
+            r'<tool_call\s+name="([^"]+)">(.*?)</tool_call>',
+            _re.DOTALL,
+        )
+
+        for iteration in range(self._max_tool_iterations):
+            reply = await self._provider.async_complete(patched)
+
+            matches = tool_call_re.findall(reply)
+            if not matches:
+                return reply  # Final answer — no tool calls.
+
+            _LOGGER.debug(
+                "XML tool loop iteration %d/%d: %d call(s)",
+                iteration + 1, self._max_tool_iterations, len(matches),
+            )
+
+            patched.append({"role": "assistant", "content": reply})
+            for name, raw_args in matches:
+                try:
+                    args = _json.loads(raw_args.strip())
+                except _json.JSONDecodeError:
+                    args = {}
+                result = await self._dispatch_tool(name, args)
+                patched.append({"role": "user", "content": f"Tool result for {name}: {result}"})
+
+        return reply + " [Note: reached tool call limit — response may be incomplete.]"
+
+    async def _dispatch_tool(self, name: str, arguments: dict) -> str:
+        """Route a tool call to web search or MCP, never raises."""
+        if name == "web_search" and self._web_search is not None:
+            query = arguments.get("query", "")
+            return await self._web_search.async_search(query)
+        if self._mcp is not None:
+            return await self._mcp.call_tool(name, arguments)
+        return f"[Tool {name!r} unavailable — no handler configured]"
 
     async def async_close(self) -> None:
         """Close provider sessions. Called on integration unload."""
