@@ -21,7 +21,6 @@ in Weeks 2 and 3.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -31,15 +30,20 @@ from homeassistant.core import HomeAssistant
 from .const import (
     CONF_API_KEY,
     CONF_BASE_URL,
+    CONF_CONTEXT_WINDOW,
     CONF_MODEL,
     CONF_RESPONSE_TIMEOUT,
+    CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
     CONF_VOICE_MODE,
     DEFAULT_BASE_URL,
+    DEFAULT_CONTEXT_WINDOW,
     DEFAULT_RESPONSE_TIMEOUT,
+    DEFAULT_SUMMARIZATION_ENABLED,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
 )
+from .context_manager import ContextManager
 from .exceptions import OrchestratorError
 from .providers.openai_compat import OpenAICompatProvider
 
@@ -60,10 +64,15 @@ class Orchestrator:
         self._hass = hass
         self._entry = entry
         self._provider: AbstractProvider = self._build_provider()
-        # In-memory history: conv_id → list of message dicts
-        # Week 2: replaced by ContextManager with sliding window + summarization
-        self._history: dict[str, list[dict[str, str]]] = {}
-        self._lock = asyncio.Lock()
+        opts = entry.options
+        self._context_mgr = ContextManager(
+            max_tokens=opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW),
+            # Week 3: MCP client will supply actual schema token count here.
+            tool_token_budget=2000,
+        )
+        self._summarization_enabled: bool = opts.get(
+            CONF_SUMMARIZATION_ENABLED, DEFAULT_SUMMARIZATION_ENABLED
+        )
 
     def _build_provider(self) -> AbstractProvider:
         """Build provider from current entry options."""
@@ -124,29 +133,31 @@ class Orchestrator:
         )
         system_prompt = self._build_system_prompt(voice_mode)
 
-        async with self._lock:
-            history = self._history.setdefault(conversation_id, [])
-            history.append({"role": "user", "content": message})
-            # Snapshot for the LLM call (outside the lock)
-            messages = [{"role": "system", "content": system_prompt}, *history]
+        # 1. Add user turn to history.
+        await self._context_mgr.add_turn(conversation_id, "user", message)
+
+        # 2. Summarize old turns if we're approaching the soft token limit.
+        if self._summarization_enabled:
+            await self._context_mgr.summarize_if_needed(
+                conversation_id, system_prompt, self._provider
+            )
+
+        # 3. Build the message list (system prompt + trimmed history).
+        messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
 
         _LOGGER.debug(
-            "Processing message for conv_id=%s lang=%s voice=%s history_len=%d",
+            "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d",
             conversation_id,
             language,
             voice_mode,
-            len(history),
+            len(messages),
         )
 
+        # 4. Call the LLM.
         reply = await self._provider.async_complete(messages)
 
-        async with self._lock:
-            # Re-fetch in case another coroutine touched history while we awaited
-            conv_history = self._history.setdefault(conversation_id, [])
-            # Only append if our user message is still the last one (guard against
-            # duplicate calls on the same conv_id)
-            if conv_history and conv_history[-1] == {"role": "user", "content": message}:
-                conv_history.append({"role": "assistant", "content": reply})
+        # 5. Append assistant reply to history.
+        await self._context_mgr.add_turn(conversation_id, "assistant", reply)
 
         return reply
 

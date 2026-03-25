@@ -77,13 +77,13 @@ def test_system_prompt_custom_overrides_voice() -> None:
 
 async def test_process_happy_path() -> None:
     """async_process returns the provider reply and stores history."""
+    from custom_components.ai_hub.context_manager import ContextManager
+
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
-    orch._history = {}
-
-    import asyncio
-    orch._lock = asyncio.Lock()
+    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch._summarization_enabled = False  # keep test simple
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Lights are on.")
@@ -96,20 +96,21 @@ async def test_process_happy_path() -> None:
     )
 
     assert reply == "Lights are on."
-    assert len(orch._history["conv-abc"]) == 2
-    assert orch._history["conv-abc"][0] == {"role": "user", "content": "Turn on the lights"}
-    assert orch._history["conv-abc"][1] == {"role": "assistant", "content": "Lights are on."}
+    hist = orch._context_mgr.get_history("conv-abc")
+    assert len(hist) == 2
+    assert hist[0] == {"role": "user", "content": "Turn on the lights"}
+    assert hist[1] == {"role": "assistant", "content": "Lights are on."}
 
 
 async def test_process_multi_turn_maintains_history() -> None:
     """Multi-turn conversation accumulates history correctly."""
+    from custom_components.ai_hub.context_manager import ContextManager
+
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
-    orch._history = {}
-
-    import asyncio
-    orch._lock = asyncio.Lock()
+    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch._summarization_enabled = False
 
     responses = ["Hello!", "The temperature is 72°F."]
     call_count = 0
@@ -127,7 +128,7 @@ async def test_process_multi_turn_maintains_history() -> None:
     await orch.async_process("Hi", "conv-1", "en")
     await orch.async_process("What's the temperature?", "conv-1", "en")
 
-    history = orch._history["conv-1"]
+    history = orch._context_mgr.get_history("conv-1")
     assert len(history) == 4  # 2 user + 2 assistant
     assert history[0]["role"] == "user"
     assert history[1]["role"] == "assistant"
@@ -137,13 +138,13 @@ async def test_process_multi_turn_maintains_history() -> None:
 
 async def test_process_isolates_conversation_ids() -> None:
     """Different conversation_ids maintain separate histories."""
+    from custom_components.ai_hub.context_manager import ContextManager
+
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
-    orch._history = {}
-
-    import asyncio
-    orch._lock = asyncio.Lock()
+    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch._summarization_enabled = False
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Reply")
@@ -152,21 +153,21 @@ async def test_process_isolates_conversation_ids() -> None:
     await orch.async_process("Hello from conv A", "conv-a", "en")
     await orch.async_process("Hello from conv B", "conv-b", "en")
 
-    assert len(orch._history["conv-a"]) == 2
-    assert len(orch._history["conv-b"]) == 2
-    assert orch._history["conv-a"][0]["content"] == "Hello from conv A"
-    assert orch._history["conv-b"][0]["content"] == "Hello from conv B"
+    assert len(orch._context_mgr.get_history("conv-a")) == 2
+    assert len(orch._context_mgr.get_history("conv-b")) == 2
+    assert orch._context_mgr.get_history("conv-a")[0]["content"] == "Hello from conv A"
+    assert orch._context_mgr.get_history("conv-b")[0]["content"] == "Hello from conv B"
 
 
 async def test_process_propagates_orchestrator_error() -> None:
     """OrchestratorError from provider propagates out of async_process."""
+    from custom_components.ai_hub.context_manager import ContextManager
+
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
-    orch._history = {}
-
-    import asyncio
-    orch._lock = asyncio.Lock()
+    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch._summarization_enabled = False
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(
