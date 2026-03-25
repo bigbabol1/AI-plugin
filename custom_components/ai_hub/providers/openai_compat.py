@@ -85,6 +85,7 @@ class OpenAICompatProvider(AbstractProvider):
         }
         if tools:
             payload["tools"] = tools
+            payload["tool_choice"] = "auto"
 
         try:
             async with session.post(

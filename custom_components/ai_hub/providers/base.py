@@ -33,7 +33,6 @@ class AbstractProvider(ABC):
            └── AnthropicProvider     (post-v1)
     """
 
-    @abstractmethod
     async def async_chat(
         self,
         messages: list[dict[str, Any]],
@@ -41,12 +40,19 @@ class AbstractProvider(ABC):
     ) -> ChatResponse:
         """Send messages with optional tool schemas, return a ChatResponse.
 
-        ChatResponse.content holds the text reply (None if LLM made a tool call).
-        ChatResponse.tool_calls holds the calls to execute (empty for text reply).
+        Default implementation delegates to async_complete() and wraps the
+        result in a ChatResponse with no tool calls.  Override in providers
+        that support native tool calling (e.g. OpenAICompatProvider).
+
+        Post-v1 providers (Gemini, Anthropic) inherit this safe fallback
+        until they implement full tool-calling support.
 
         Raises:
-            OrchestratorError: on provider failure (connection, timeout, auth, parse).
+            OrchestratorError: on provider failure.
         """
+        from . import ChatResponse as _ChatResponse
+        text = await self.async_complete(messages)
+        return _ChatResponse(content=text)
 
     @abstractmethod
     async def async_complete(
