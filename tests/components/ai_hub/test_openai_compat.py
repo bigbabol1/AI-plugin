@@ -240,7 +240,6 @@ async def test_async_chat_includes_tools_in_payload() -> None:
     )
 
     captured_kwargs = {}
-    original_post = MagicMock(return_value=mock_resp)
 
     def capturing_post(url, **kwargs):
         captured_kwargs.update(kwargs)
