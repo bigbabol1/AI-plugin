@@ -455,7 +455,7 @@ class AIHubConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ha_url = _get_ha_url(self.hass)
                 mcp_entry: dict[str, Any] = {
                     "transport": "http",
-                    "url": f"{ha_url}/api/mcp_server",
+                    "url": f"{ha_url}/api/mcp",
                 }
                 if ha_mcp_token:
                     mcp_entry["token"] = ha_mcp_token
@@ -778,7 +778,7 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
             ha_url = _get_ha_url(self.hass)
             entry: dict[str, Any] = {
                 "transport": "http",
-                "url": f"{ha_url}/api/mcp_server",
+                "url": f"{ha_url}/api/mcp",
             }
             if token:
                 entry["token"] = token
@@ -795,7 +795,7 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
                     ),
                 }
             ),
-            description_placeholders={"ha_mcp_url": f"{ha_url}/api/mcp_server"},
+            description_placeholders={"ha_mcp_url": f"{ha_url}/api/mcp"},
         )
 
     async def async_step_mcp_add_http(
