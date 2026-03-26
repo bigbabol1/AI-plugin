@@ -1,6 +1,6 @@
 {
   "domain": "ai_hub",
-  "name": "AI Hub",
+  "name": "AI Plugin",
   "codeowners": ["@bigbabol1"],
   "config_flow": true,
   "documentation": "https://github.com/bigbabol1/AI-plugin",

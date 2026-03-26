@@ -173,9 +173,7 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_SYSTEM_PROMPT,
                 default=current.get(CONF_SYSTEM_PROMPT, ""),
-            ): selector.TextSelector(
-                selector.TextSelectorConfig(multiline=True)
-            ),
+            ): selector.TemplateSelector(),
             vol.Optional(
                 CONF_CONTEXT_WINDOW,
                 default=current.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW),

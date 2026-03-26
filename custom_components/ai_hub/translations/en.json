@@ -41,7 +41,7 @@
           "max_results": "Results per search"
         },
         "data_description": {
-          "web_search_enabled": "AI Hub will search the internet to answer questions about current events, weather, and more.",
+          "web_search_enabled": "AI Plugin will search the internet to answer questions about current events, weather, and more.",
           "web_search_backend": "DuckDuckGo is free but unofficial — it may occasionally be unavailable. Brave Search is recommended.",
           "brave_api_key": "Free tier: 2,000 requests/month. Get a key at brave.com/search/api",
           "tavily_api_key": "Free tier: 1,000 requests/month.",
@@ -73,12 +73,12 @@
         "data_description": {
           "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
           "context_window": "Maximum context your model supports. Check your model's documentation.",
-          "summarization_enabled": "When conversations get long, AI Hub summarizes older messages to preserve memory.",
+          "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
           "voice_mode": "Shorter responses optimized for text-to-speech. Enabled by default for voice assistant interactions.",
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
           "max_tool_iterations": "Maximum tool uses per response (default: 5).",
           "response_timeout": "How long to wait for the AI before giving up.",
-          "use_ha_mcp": "Gives AI Hub access to your sensors, devices, and automations via HA's built-in MCP server.",
+          "use_ha_mcp": "Gives AI Plugin access to your sensors, devices, and automations via HA's built-in MCP server.",
           "ha_mcp_token": "Create one in your HA profile → Long-lived access tokens (scroll to the bottom of the page)."
         }
       }
@@ -91,13 +91,13 @@
       "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL."
     },
     "abort": {
-      "already_configured": "AI Hub is already configured."
+      "already_configured": "AI Plugin is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Configure AI Hub",
+        "title": "Configure AI Plugin",
         "menu_options": {
           "provider_settings": "Provider settings",
           "web_search": "Web search",
@@ -135,7 +135,7 @@
           "max_results": "Results per search"
         },
         "data_description": {
-          "web_search_enabled": "AI Hub will search the internet to answer questions about current events, weather, and more.",
+          "web_search_enabled": "AI Plugin will search the internet to answer questions about current events, weather, and more.",
           "web_search_backend": "DuckDuckGo is free but unofficial — it may occasionally be unavailable. Brave Search is recommended.",
           "brave_api_key": "Free tier: 2,000 requests/month. Get a key at brave.com/search/api",
           "tavily_api_key": "Free tier: 1,000 requests/month.",
@@ -165,7 +165,7 @@
         "data_description": {
           "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
           "context_window": "Maximum context your model supports. Check your model's documentation.",
-          "summarization_enabled": "When conversations get long, AI Hub summarizes older messages to preserve memory.",
+          "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
           "voice_mode": "Shorter responses optimized for text-to-speech.",
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
           "max_tool_iterations": "Maximum tool uses per response (default: 5).",
@@ -174,7 +174,7 @@
       },
       "mcp_servers": {
         "title": "MCP Servers",
-        "description": "Connect AI Hub to external tools via the Model Context Protocol (MCP). Add Home Assistant's built-in MCP server to let Buddy read sensors and control devices.\n\nConfigured servers:\n{servers}",
+        "description": "Connect AI Plugin to external tools via the Model Context Protocol (MCP). Add Home Assistant's built-in MCP server to let Buddy read sensors and control devices.\n\nConfigured servers:\n{servers}",
         "data": {
           "mcp_action": "What would you like to do?"
         },
