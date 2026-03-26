@@ -6,8 +6,8 @@ A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — O
 
 - **Any LLM backend** — Ollama, llama.cpp, OpenAI, LM Studio, xAI Grok, and any OpenAI-compatible endpoint
 - **Web search** — DuckDuckGo (zero config), Brave Search, SearXNG, Tavily
-- **MCP extensibility** — connect external MCP servers for additional tools _(coming soon)_
-- **Smart context management** — sliding window + summarization prevents memory loss with local models _(coming soon)_
+- **MCP extensibility** — connect external MCP servers (HTTP and stdio) for additional tools
+- **Smart context management** — sliding window + automatic LLM summarization prevents memory loss with local models
 
 ## Installation
 
