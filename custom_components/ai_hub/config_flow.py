@@ -121,20 +121,20 @@ def _web_search_schema(current: dict[str, Any]) -> vol.Schema:
                 selector.SelectSelectorConfig(
                     options=[
                         {
-                            "value": BACKEND_DUCKDUCKGO,
-                            "label": "DuckDuckGo (free, may be unreliable)",
-                        },
-                        {
                             "value": BACKEND_BRAVE,
                             "label": "Brave Search (recommended, API key required)",
+                        },
+                        {
+                            "value": BACKEND_TAVILY,
+                            "label": "Tavily (API key required)",
                         },
                         {
                             "value": BACKEND_SEARXNG,
                             "label": "SearXNG (self-hosted)",
                         },
                         {
-                            "value": BACKEND_TAVILY,
-                            "label": "Tavily (API key required)",
+                            "value": BACKEND_DUCKDUCKGO,
+                            "label": "DuckDuckGo (free, may be unreliable)",
                         },
                     ],
                 )
