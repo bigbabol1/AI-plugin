@@ -82,12 +82,19 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _get_ha_url(hass: Any) -> str:
-    """Return the HA internal base URL, falling back to homeassistant.local."""
+    """Return the HA base URL for self-connections (MCP client inside HA).
+
+    Always uses localhost — the integration runs inside HA so localhost
+    is more reliable than the external/LAN IP which can fail on hairpin NAT.
+    """
     try:
         from homeassistant.helpers.network import get_url  # noqa: PLC0415
-        return get_url(hass, allow_internal=True, allow_ip=True).rstrip("/")
+        url = get_url(hass, allow_internal=True, allow_ip=True).rstrip("/")
+        parsed = urlparse(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        return f"http://localhost:{port}"
     except Exception:  # noqa: BLE001
-        return "http://homeassistant.local:8123"
+        return "http://localhost:8123"
 
 
 def _is_valid_url(url: str) -> bool:
