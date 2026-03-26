@@ -18,7 +18,9 @@ Errors: OrchestratorError propagates to conversation.py → graceful reply.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
@@ -56,6 +58,10 @@ if TYPE_CHECKING:
     from .tools.mcp_client import MCPToolRegistry
 
 _LOGGER = logging.getLogger(__name__)
+
+# Strips <tool_call name="...">...</tool_call> tags from LLM replies before
+# they are written to canonical history (XML fallback path).
+_XML_TOOL_CALL_RE = re.compile(r"<tool_call[^>]*>.*?</tool_call>", re.DOTALL)
 
 
 class Orchestrator:
@@ -99,6 +105,17 @@ class Orchestrator:
         self._web_search: WebSearchTool | None = (
             WebSearchTool(opts) if opts.get(CONF_WEB_SEARCH_ENABLED, False) else None
         )
+
+        # Per-conversation locks: serialise concurrent requests for the same
+        # conversation_id to prevent interleaved history corruption.
+        self._conv_locks: dict[str, asyncio.Lock] = {}
+
+    def _get_conv_lock(self, conv_id: str) -> asyncio.Lock:
+        if not hasattr(self, "_conv_locks"):
+            self._conv_locks = {}
+        if conv_id not in self._conv_locks:
+            self._conv_locks[conv_id] = asyncio.Lock()
+        return self._conv_locks[conv_id]
 
     def _build_provider(self) -> AbstractProvider:
         """Build provider from current entry options."""
@@ -159,45 +176,56 @@ class Orchestrator:
         )
         system_prompt = self._build_system_prompt(voice_mode)
 
-        # 1. Add user turn to history.
-        await self._context_mgr.add_turn(conversation_id, "user", message)
+        # Serialise concurrent requests for the same conversation to prevent
+        # interleaved history and summarisation races.
+        async with self._get_conv_lock(conversation_id):
+            # 1. Add user turn to history.
+            await self._context_mgr.add_turn(conversation_id, "user", message)
 
-        # 2. Summarize old turns if we're approaching the soft token limit.
-        if self._summarization_enabled:
-            await self._context_mgr.summarize_if_needed(
-                conversation_id, system_prompt, self._provider
+            # 2. Summarize old turns if we're approaching the soft token limit.
+            if self._summarization_enabled:
+                await self._context_mgr.summarize_if_needed(
+                    conversation_id, system_prompt, self._provider
+                )
+
+            # 3. Build the message list (system prompt + trimmed history).
+            messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
+
+            # 4. Collect tool schemas: MCP tools + web_search (if enabled).
+            tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
+            if self._web_search is not None:
+                tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
+
+            _LOGGER.debug(
+                "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
+                conversation_id,
+                language,
+                voice_mode,
+                len(messages),
+                len(tool_schemas),
             )
 
-        # 3. Build the message list (system prompt + trimmed history).
-        messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
+            # 5. Call LLM — three paths based on config and tool availability:
+            #    a) XML fallback (opt-in, experimental) — tool spec injected into prompt
+            #    b) Native tool loop (function calling)
+            #    c) Plain completion (no tools)
+            try:
+                if tool_schemas and self._xml_fallback:
+                    reply = await self._xml_tool_loop(messages, tool_schemas)
+                elif tool_schemas:
+                    reply = await self._tool_loop(messages, tool_schemas)
+                else:
+                    reply = await self._provider.async_complete(messages)
+            except Exception:
+                # Roll back the user turn so history stays consistent.
+                await self._context_mgr.remove_last_turn(conversation_id)
+                raise
 
-        # 4. Collect tool schemas: MCP tools + web_search (if enabled).
-        tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
-        if self._web_search is not None:
-            tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
-
-        _LOGGER.debug(
-            "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
-            conversation_id,
-            language,
-            voice_mode,
-            len(messages),
-            len(tool_schemas),
-        )
-
-        # 5. Call LLM — three paths based on config and tool availability:
-        #    a) XML fallback (opt-in, experimental) — tool spec injected into prompt
-        #    b) Native tool loop (function calling)
-        #    c) Plain completion (no tools)
-        if tool_schemas and self._xml_fallback:
-            reply = await self._xml_tool_loop(messages, tool_schemas)
-        elif tool_schemas:
-            reply = await self._tool_loop(messages, tool_schemas)
-        else:
-            reply = await self._provider.async_complete(messages)
-
-        # 6. Append assistant reply to history.
-        await self._context_mgr.add_turn(conversation_id, "assistant", reply)
+            # 6. Append assistant reply to history.
+            # Strip XML tool-call markup (XML fallback path) before storing —
+            # raw <tool_call> tags in history confuse subsequent LLM turns.
+            stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
+            await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
 
         return reply
 

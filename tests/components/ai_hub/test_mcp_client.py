@@ -193,8 +193,8 @@ async def test_server_connection_call_tool_handles_exception() -> None:
 
     result = await conn.call_tool("get_time", {})
     assert "failed" in result.lower() or "timeout" in result.lower()
-    # Should transition to RECONNECTING
-    assert conn._state == _State.RECONNECTING
+    # State remains CONNECTED — background task owns reconnect lifecycle.
+    assert conn._state == _State.CONNECTED
 
 
 # ══════════════════════════════════════════════════════════════════════════════

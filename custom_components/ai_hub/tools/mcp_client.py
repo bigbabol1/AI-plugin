@@ -131,9 +131,10 @@ class _MCPServerConnection:
             _LOGGER.warning(
                 "AI Hub MCP: tool %r call failed on %r: %s", name, self._name, exc
             )
-            # Mark for reconnection on next call
-            self._state = _State.RECONNECTING
-            self._session = None
+            # Do not set RECONNECTING here — the background task owns the
+            # transport lifecycle and will reconnect when the transport drops.
+            # Forcibly clearing _session would leave the background task in an
+            # inconsistent state (blocking on _shutdown.wait with a dead ref).
             return f"[Tool {name!r} call failed: {exc}]"
 
     # ── private ───────────────────────────────────────────────────────────────
@@ -142,6 +143,7 @@ class _MCPServerConnection:
         backoff = _BACKOFF_INITIAL
         while not self._shutdown.is_set():
             self._state = _State.CONNECTING
+            self._ready.clear()  # Reset readiness for each connection attempt
             try:
                 await self._run_once()
                 backoff = _BACKOFF_INITIAL  # reset on clean exit

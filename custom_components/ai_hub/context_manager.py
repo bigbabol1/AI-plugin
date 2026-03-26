@@ -189,6 +189,17 @@ class ContextManager:
             if len(current) >= len(to_keep):
                 self._history[conv_id] = [summary_msg, *to_keep]
 
+    async def remove_last_turn(self, conv_id: str) -> None:
+        """Remove the last message from history (rollback on provider error).
+
+        Called by Orchestrator when the LLM call fails after a user turn was
+        already appended, to avoid leaving orphaned user turns in history.
+        """
+        async with self._get_lock(conv_id):
+            history = self._history.get(conv_id)
+            if history:
+                history.pop()
+
     async def clear(self, conv_id: str) -> None:
         """Clear all history for a conversation (e.g. user requests reset)."""
         async with self._get_lock(conv_id):
