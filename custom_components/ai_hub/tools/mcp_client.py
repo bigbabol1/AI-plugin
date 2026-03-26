@@ -35,9 +35,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 from enum import Enum
 from typing import Any
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -46,6 +48,16 @@ from ..context_manager import ContextManager
 from ..providers import openai_tool_schema
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _create_ssl_context() -> ssl.SSLContext:
+    """Build an SSL context — must run in an executor (load_verify_locations is blocking I/O)."""
+    try:
+        import certifi  # noqa: PLC0415
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return ssl.create_default_context()
+
 
 # Backoff constants for reconnection
 _BACKOFF_INITIAL = 2.0
@@ -187,7 +199,31 @@ class _MCPServerConnection:
         headers: dict[str, str] = {}
         if token := self._config.get("token"):
             headers["Authorization"] = f"Bearer {token}"
-        async with streamablehttp_client(url, headers=headers or None) as (read, write, _):
+
+        # ssl.create_default_context() calls load_verify_locations which is
+        # blocking file I/O — run it in an executor to keep the event loop free.
+        loop = asyncio.get_running_loop()
+        ssl_ctx = await loop.run_in_executor(None, _create_ssl_context)
+
+        def _client_factory(
+            hdrs: dict[str, str] | None = None,
+            timeout: httpx.Timeout | None = None,
+            auth: httpx.Auth | None = None,
+        ) -> httpx.AsyncClient:
+            kw: dict[str, Any] = {"follow_redirects": True, "verify": ssl_ctx}
+            if timeout is not None:
+                kw["timeout"] = timeout
+            if hdrs is not None:
+                kw["headers"] = hdrs
+            if auth is not None:
+                kw["auth"] = auth
+            return httpx.AsyncClient(**kw)
+
+        async with streamablehttp_client(
+            url,
+            headers=headers or None,
+            httpx_client_factory=_client_factory,
+        ) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 await self._on_connected(session)
