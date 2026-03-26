@@ -1,0 +1,12 @@
+{
+  "domain": "ai_hub",
+  "name": "AI Hub",
+  "codeowners": ["@bigbabol1"],
+  "config_flow": true,
+  "documentation": "https://github.com/bigbabol1/AI-plugin",
+  "homeassistant": "2025.7.0",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "requirements": ["mcp>=1.0.0"],
+  "version": "0.1.0"
+}

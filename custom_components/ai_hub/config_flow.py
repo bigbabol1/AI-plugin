@@ -1,0 +1,652 @@
+"""Config flow and OptionsFlowHandler for AI Hub.
+
+CONFIG FLOW (first-time setup):
+
+  Step 1 ─ provider        Choose provider type (v1: OpenAI-compat only)
+  Step 2a ─ provider_url   Enter provider URL → fetch models → store result
+  Step 2b ─ model          Choose model (dropdown if fetch succeeded, else free-text)
+                            + optional API key
+  Step 3  ─ web_search     Web search toggle + backend choice
+  Step 3b ─ searxng        SearXNG URL (only if SearXNG backend selected)
+  Step 4  ─ advanced       System prompt, context window, voice mode, etc.
+  ─────────────────────────────────────────────────────────────────────────
+  Creates config_entry:
+    data:    {provider}            (immutable — determines provider class)
+    options: {base_url, model, api_key, web_search_*, advanced_*}
+
+OPTIONS FLOW (post-install Configure):
+
+  Menu ─ init             Choose: Provider Settings / Web Search / Advanced / MCP
+  Step  ─ provider_settings  base_url + model + api_key
+  Step  ─ web_search         same as config flow step 3 + 3b if needed
+  Step  ─ searxng            same as config flow step 3b
+  Step  ─ advanced           same as config flow step 4
+  Step  ─ mcp_servers        stub (Week 3)
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+from urllib.parse import urlparse
+
+import voluptuous as vol
+
+from homeassistant import config_entries
+from homeassistant.core import callback
+from homeassistant.helpers import selector
+
+from .const import (
+    BACKEND_BRAVE,
+    BACKEND_DUCKDUCKGO,
+    BACKEND_SEARXNG,
+    BACKEND_TAVILY,
+    CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_BRAVE_API_KEY,
+    CONF_CONTEXT_WINDOW,
+    CONF_MAX_RESULTS,
+    CONF_MAX_TOOL_ITERATIONS,
+    CONF_MODEL,
+    CONF_PROVIDER,
+    CONF_RESPONSE_TIMEOUT,
+    CONF_SEARXNG_URL,
+    CONF_SUMMARIZATION_ENABLED,
+    CONF_SYSTEM_PROMPT,
+    CONF_TAVILY_API_KEY,
+    CONF_VOICE_MODE,
+    CONF_WEB_SEARCH_BACKEND,
+    CONF_WEB_SEARCH_ENABLED,
+    CONF_XML_FALLBACK,
+    DEFAULT_BASE_URL,
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MAX_RESULTS,
+    DEFAULT_MAX_TOOL_ITERATIONS,
+    DEFAULT_RESPONSE_TIMEOUT,
+    DEFAULT_SUMMARIZATION_ENABLED,
+    DEFAULT_VOICE_MODE,
+    DEFAULT_WEB_SEARCH_BACKEND,
+    DEFAULT_XML_FALLBACK,
+    DOMAIN,
+    ERROR_CANNOT_CONNECT,
+    ERROR_INVALID_URL,
+    ERROR_MODEL_REQUIRED,
+    ERROR_SEARXNG_UNREACHABLE,
+    PROVIDER_OPENAI_COMPAT,
+)
+from .exceptions import CannotConnect
+from .providers.openai_compat import async_fetch_models
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _is_valid_url(url: str) -> bool:
+    """Return True if url has a valid http/https scheme and netloc."""
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _web_search_schema(current: dict[str, Any]) -> vol.Schema:
+    """Build the web search vol.Schema with current values as defaults."""
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_WEB_SEARCH_ENABLED,
+                default=current.get(CONF_WEB_SEARCH_ENABLED, False),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_WEB_SEARCH_BACKEND,
+                default=current.get(CONF_WEB_SEARCH_BACKEND, DEFAULT_WEB_SEARCH_BACKEND),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {
+                            "value": BACKEND_DUCKDUCKGO,
+                            "label": "DuckDuckGo (free, may be unreliable)",
+                        },
+                        {
+                            "value": BACKEND_BRAVE,
+                            "label": "Brave Search (recommended, API key required)",
+                        },
+                        {
+                            "value": BACKEND_SEARXNG,
+                            "label": "SearXNG (self-hosted)",
+                        },
+                        {
+                            "value": BACKEND_TAVILY,
+                            "label": "Tavily (API key required)",
+                        },
+                    ],
+                )
+            ),
+            vol.Optional(
+                CONF_BRAVE_API_KEY,
+                default=current.get(CONF_BRAVE_API_KEY, ""),
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(
+                CONF_TAVILY_API_KEY,
+                default=current.get(CONF_TAVILY_API_KEY, ""),
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(
+                CONF_MAX_RESULTS,
+                default=current.get(CONF_MAX_RESULTS, DEFAULT_MAX_RESULTS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=20,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+        }
+    )
+
+
+def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
+    """Build the advanced settings vol.Schema with current values as defaults."""
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_SYSTEM_PROMPT,
+                default=current.get(CONF_SYSTEM_PROMPT, ""),
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(multiline=True)
+            ),
+            vol.Optional(
+                CONF_CONTEXT_WINDOW,
+                default=current.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=512,
+                    max=131072,
+                    step=512,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_SUMMARIZATION_ENABLED,
+                default=current.get(CONF_SUMMARIZATION_ENABLED, DEFAULT_SUMMARIZATION_ENABLED),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_VOICE_MODE,
+                default=current.get(CONF_VOICE_MODE, DEFAULT_VOICE_MODE),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_XML_FALLBACK,
+                default=current.get(CONF_XML_FALLBACK, DEFAULT_XML_FALLBACK),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_MAX_TOOL_ITERATIONS,
+                default=current.get(CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=10,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_RESPONSE_TIMEOUT,
+                default=current.get(CONF_RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5,
+                    max=120,
+                    step=5,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+        }
+    )
+
+
+class AIHubConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle the AI Hub config flow (first-time setup)."""
+
+    VERSION = 1
+
+    def __init__(self) -> None:
+        # data: stored in config_entry.data (immutable — just the provider type)
+        self._data: dict[str, Any] = {}
+        # options: stored in config_entry.options (editable via OptionsFlow)
+        self._options: dict[str, Any] = {}
+        # model list fetched from /v1/models during step 2a; None if unreachable
+        self._models: list[str] | None = None
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        return await self.async_step_provider()
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 1: Choose provider
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def async_step_provider(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 1: Choose the AI provider type."""
+        if user_input is not None:
+            self._data[CONF_PROVIDER] = user_input[CONF_PROVIDER]
+            return await self.async_step_provider_url()
+
+        return self.async_show_form(
+            step_id="provider",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PROVIDER, default=PROVIDER_OPENAI_COMPAT
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                {
+                                    "value": PROVIDER_OPENAI_COMPAT,
+                                    "label": "OpenAI-compatible (Ollama, llama.cpp, OpenAI, LM Studio)",
+                                }
+                            ],
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 2a: Provider URL
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def async_step_provider_url(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 2a: Enter the provider base URL and fetch models."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            base_url = user_input[CONF_BASE_URL].strip().rstrip("/")
+            if not _is_valid_url(base_url):
+                errors[CONF_BASE_URL] = ERROR_INVALID_URL
+            else:
+                self._options[CONF_BASE_URL] = base_url
+                # Attempt model fetch — failure is not an error, just falls
+                # back to free-text in step 2b
+                try:
+                    self._models = await async_fetch_models(base_url)
+                    _LOGGER.debug("Fetched %d models from %s", len(self._models), base_url)
+                except CannotConnect:
+                    _LOGGER.debug("Could not reach %s — model free-text fallback", base_url)
+                    self._models = None
+                return await self.async_step_model()
+
+        return self.async_show_form(
+            step_id="provider_url",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_BASE_URL,
+                        default=self._options.get(CONF_BASE_URL, DEFAULT_BASE_URL),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 2b: Model selection + API key
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def async_step_model(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 2b: Choose model (dropdown or free-text) + optional API key."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            model = str(user_input.get(CONF_MODEL, "")).strip()
+            if not model:
+                errors[CONF_MODEL] = ERROR_MODEL_REQUIRED
+            else:
+                self._options[CONF_MODEL] = model
+                api_key = str(user_input.get(CONF_API_KEY, "")).strip()
+                if api_key:
+                    self._options[CONF_API_KEY] = api_key
+                elif CONF_API_KEY in self._options:
+                    del self._options[CONF_API_KEY]
+                return await self.async_step_web_search()
+
+        # Model field: dropdown if models fetched, free-text if not
+        if self._models:
+            model_field: Any = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=self._models,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        else:
+            model_field = selector.TextSelector()
+
+        # API key: always optional; shown even for local to support
+        # Ollama instances with auth proxy in front
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_MODEL,
+                    default=self._options.get(CONF_MODEL, ""),
+                ): model_field,
+                vol.Optional(
+                    CONF_API_KEY,
+                    default=self._options.get(CONF_API_KEY, ""),
+                ): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+            }
+        )
+
+        description_placeholders: dict[str, str] = {}
+        if self._models is None:
+            description_placeholders["fetch_failed"] = (
+                self._options.get(CONF_BASE_URL, "the provider")
+            )
+
+        return self.async_show_form(
+            step_id="model",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 3: Web search
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def async_step_web_search(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 3: Web search settings."""
+        if user_input is not None:
+            self._options.update(user_input)
+            backend = user_input.get(CONF_WEB_SEARCH_BACKEND, DEFAULT_WEB_SEARCH_BACKEND)
+            enabled = user_input.get(CONF_WEB_SEARCH_ENABLED, False)
+            if enabled and backend == BACKEND_SEARXNG:
+                return await self.async_step_searxng()
+            return await self.async_step_advanced()
+
+        return self.async_show_form(
+            step_id="web_search",
+            data_schema=_web_search_schema(self._options),
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 3b: SearXNG URL (only when SearXNG backend selected)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def async_step_searxng(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 3b: SearXNG instance URL."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            url = user_input[CONF_SEARXNG_URL].strip()
+            if not _is_valid_url(url):
+                errors[CONF_SEARXNG_URL] = ERROR_INVALID_URL
+            else:
+                # Reachability check — failure blocks this step (SearXNG won't work without it)
+                try:
+                    await async_fetch_models(url)  # cheap HEAD-equivalent via CannotConnect
+                except CannotConnect:
+                    # Intentionally allow proceeding even if SearXNG is temporarily down;
+                    # warn but don't block. Validate format only.
+                    _LOGGER.warning("SearXNG at %s may be unreachable at config time", url)
+                self._options[CONF_SEARXNG_URL] = url
+                return await self.async_step_advanced()
+
+        return self.async_show_form(
+            step_id="searxng",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SEARXNG_URL,
+                        default=self._options.get(CONF_SEARXNG_URL, ""),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 4: Advanced settings
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def async_step_advanced(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 4: Advanced settings (all optional with defaults)."""
+        if user_input is not None:
+            # Coerce number selector floats to int
+            for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS):
+                if key in user_input:
+                    user_input[key] = int(user_input[key])
+            self._options.update(user_input)
+            return self._create_entry()
+
+        return self.async_show_form(
+            step_id="advanced",
+            data_schema=_advanced_schema(self._options),
+            last_step=True,
+        )
+
+    def _create_entry(self) -> config_entries.FlowResult:
+        model = self._options.get(CONF_MODEL, "unknown")
+        return self.async_create_entry(
+            title=f"AI Hub ({model})",
+            data={CONF_PROVIDER: self._data.get(CONF_PROVIDER, PROVIDER_OPENAI_COMPAT)},
+            options=self._options,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> AIHubOptionsFlow:
+        return AIHubOptionsFlow(config_entry)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OptionsFlowHandler
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class AIHubOptionsFlow(config_entries.OptionsFlow):
+    """Options flow: edit all non-credential settings post-install.
+
+    Menu:
+      ┌─ Provider settings  (URL + model + API key)
+      ├─ Web search         (toggle, backend, keys)
+      ├─ Advanced           (system prompt, context, voice, etc.)
+      └─ MCP servers        (stub — Week 3)
+    """
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        self._config_entry = config_entry
+        self._options = dict(config_entry.options)
+        self._models: list[str] | None = None
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Show the top-level menu."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["provider_settings", "web_search", "advanced", "mcp_servers"],
+        )
+
+    # ── Provider settings ────────────────────────────────────────────────────
+
+    async def async_step_provider_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Edit provider URL → fetch models → model selection."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            base_url = user_input[CONF_BASE_URL].strip().rstrip("/")
+            if not _is_valid_url(base_url):
+                errors[CONF_BASE_URL] = ERROR_INVALID_URL
+            else:
+                self._options[CONF_BASE_URL] = base_url
+                api_key = str(user_input.get(CONF_API_KEY, "")).strip()
+                if api_key:
+                    self._options[CONF_API_KEY] = api_key
+                elif CONF_API_KEY in self._options:
+                    del self._options[CONF_API_KEY]
+                try:
+                    self._models = await async_fetch_models(
+                        base_url, self._options.get(CONF_API_KEY)
+                    )
+                except CannotConnect:
+                    self._models = None
+                return await self.async_step_provider_model()
+
+        return self.async_show_form(
+            step_id="provider_settings",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_BASE_URL,
+                        default=self._options.get(CONF_BASE_URL, DEFAULT_BASE_URL),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
+                    ),
+                    vol.Optional(
+                        CONF_API_KEY,
+                        default=self._options.get(CONF_API_KEY, ""),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_provider_model(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Edit model selection."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            model = str(user_input.get(CONF_MODEL, "")).strip()
+            if not model:
+                errors[CONF_MODEL] = ERROR_MODEL_REQUIRED
+            else:
+                self._options[CONF_MODEL] = model
+                return self.async_create_entry(title="", data=self._options)
+
+        if self._models:
+            model_field: Any = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=self._models,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        else:
+            model_field = selector.TextSelector()
+
+        return self.async_show_form(
+            step_id="provider_model",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_MODEL,
+                        default=self._options.get(CONF_MODEL, ""),
+                    ): model_field,
+                }
+            ),
+            errors=errors,
+        )
+
+    # ── Web search ───────────────────────────────────────────────────────────
+
+    async def async_step_web_search(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Edit web search settings."""
+        if user_input is not None:
+            self._options.update(user_input)
+            backend = user_input.get(CONF_WEB_SEARCH_BACKEND, DEFAULT_WEB_SEARCH_BACKEND)
+            enabled = user_input.get(CONF_WEB_SEARCH_ENABLED, False)
+            if enabled and backend == BACKEND_SEARXNG:
+                return await self.async_step_searxng()
+            return self.async_create_entry(title="", data=self._options)
+
+        return self.async_show_form(
+            step_id="web_search",
+            data_schema=_web_search_schema(self._options),
+        )
+
+    async def async_step_searxng(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Edit SearXNG URL."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            url = user_input[CONF_SEARXNG_URL].strip()
+            if not _is_valid_url(url):
+                errors[CONF_SEARXNG_URL] = ERROR_INVALID_URL
+            else:
+                self._options[CONF_SEARXNG_URL] = url
+                return self.async_create_entry(title="", data=self._options)
+
+        return self.async_show_form(
+            step_id="searxng",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SEARXNG_URL,
+                        default=self._options.get(CONF_SEARXNG_URL, ""),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    # ── Advanced ─────────────────────────────────────────────────────────────
+
+    async def async_step_advanced(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Edit advanced settings."""
+        if user_input is not None:
+            for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS):
+                if key in user_input:
+                    user_input[key] = int(user_input[key])
+            self._options.update(user_input)
+            return self.async_create_entry(title="", data=self._options)
+
+        return self.async_show_form(
+            step_id="advanced",
+            data_schema=_advanced_schema(self._options),
+        )
+
+    # ── MCP servers (stub) ───────────────────────────────────────────────────
+
+    async def async_step_mcp_servers(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """MCP server management — available in a future update."""
+        return self.async_abort(reason="mcp_coming_soon")

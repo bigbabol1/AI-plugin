@@ -1,0 +1,349 @@
+"""Orchestrator: the core message-processing engine for AI Hub.
+
+Request flow:
+  1.  Determine system prompt (voice / custom / default)
+  2.  add_turn(user)
+  3.  summarize_if_needed (Week 2)
+  4.  get_messages → [system] + trimmed history
+  5.  Collect tool schemas: MCP tools + web_search (if enabled)
+  6a. Native tool loop (OpenAI function calling):
+        LLM → tool calls → execute → repeat → final text
+  6b. XML fallback (opt-in, experimental):
+        Inject XML tool spec into system prompt, parse <tool_call> tags
+  7.  add_turn(assistant)
+  8.  Return reply text
+
+Errors: OrchestratorError propagates to conversation.py → graceful reply.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from typing import TYPE_CHECKING
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+
+from .const import (
+    CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_CONTEXT_WINDOW,
+    CONF_MAX_TOOL_ITERATIONS,
+    CONF_MODEL,
+    CONF_RESPONSE_TIMEOUT,
+    CONF_SUMMARIZATION_ENABLED,
+    CONF_SYSTEM_PROMPT,
+    CONF_VOICE_MODE,
+    CONF_WEB_SEARCH_ENABLED,
+    CONF_XML_FALLBACK,
+    DEFAULT_BASE_URL,
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MAX_TOOL_ITERATIONS,
+    DEFAULT_RESPONSE_TIMEOUT,
+    DEFAULT_SUMMARIZATION_ENABLED,
+    DEFAULT_XML_FALLBACK,
+    DOMAIN,
+    SYSTEM_PROMPT_DEFAULT,
+    SYSTEM_PROMPT_VOICE,
+)
+from .context_manager import ContextManager
+from .exceptions import OrchestratorError
+from .providers.openai_compat import OpenAICompatProvider
+from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
+
+if TYPE_CHECKING:
+    from .providers.base import AbstractProvider
+    from .tools.mcp_client import MCPToolRegistry
+
+_LOGGER = logging.getLogger(__name__)
+
+# Strips <tool_call name="...">...</tool_call> tags from LLM replies before
+# they are written to canonical history (XML fallback path).
+_XML_TOOL_CALL_RE = re.compile(r"<tool_call[^>]*>.*?</tool_call>", re.DOTALL)
+
+
+class Orchestrator:
+    """Processes messages: history → system prompt → LLM → reply.
+
+    One Orchestrator instance per config entry. Created at platform
+    setup; replaced on options change via full entry reload.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._hass = hass
+        self._entry = entry
+        self._provider: AbstractProvider = self._build_provider()
+
+        # Retrieve MCPToolRegistry created by async_setup_entry (may be None
+        # if no MCP servers are configured or during tests).
+        self._mcp: MCPToolRegistry | None = (
+            hass.data.get(DOMAIN, {}).get(entry.entry_id)
+            if hass is not None
+            else None
+        )
+
+        opts = entry.options
+        # Use real schema token budget if MCPToolRegistry is available.
+        tool_budget = (
+            self._mcp.estimate_schema_tokens() if self._mcp else 2000
+        )
+        self._context_mgr = ContextManager(
+            max_tokens=opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW),
+            tool_token_budget=tool_budget,
+        )
+        self._summarization_enabled: bool = opts.get(
+            CONF_SUMMARIZATION_ENABLED, DEFAULT_SUMMARIZATION_ENABLED
+        )
+        self._max_tool_iterations: int = opts.get(
+            CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS
+        )
+        self._xml_fallback: bool = opts.get(CONF_XML_FALLBACK, DEFAULT_XML_FALLBACK)
+
+        # Web search tool (None when disabled in config).
+        self._web_search: WebSearchTool | None = (
+            WebSearchTool(opts) if opts.get(CONF_WEB_SEARCH_ENABLED, False) else None
+        )
+
+        # Per-conversation locks: serialise concurrent requests for the same
+        # conversation_id to prevent interleaved history corruption.
+        self._conv_locks: dict[str, asyncio.Lock] = {}
+
+    def _get_conv_lock(self, conv_id: str) -> asyncio.Lock:
+        if not hasattr(self, "_conv_locks"):
+            self._conv_locks = {}
+        if conv_id not in self._conv_locks:
+            self._conv_locks[conv_id] = asyncio.Lock()
+        return self._conv_locks[conv_id]
+
+    def _build_provider(self) -> AbstractProvider:
+        """Build provider from current entry options."""
+        opts = self._entry.options
+        return OpenAICompatProvider(
+            base_url=opts.get(CONF_BASE_URL, DEFAULT_BASE_URL),
+            model=opts.get(CONF_MODEL, ""),
+            api_key=opts.get(CONF_API_KEY) or None,
+            timeout=opts.get(CONF_RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT),
+        )
+
+    def _build_system_prompt(self, voice_mode: bool) -> str:
+        """Return the system prompt for this request.
+
+        Priority:
+        1. User-configured custom instructions (if non-empty)
+        2. Voice-mode compact prompt (if voice_mode=True)
+        3. Default standard prompt
+        """
+        custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
+        if custom:
+            return custom
+        if voice_mode:
+            return SYSTEM_PROMPT_VOICE
+        return SYSTEM_PROMPT_DEFAULT
+
+    async def async_process(
+        self,
+        message: str,
+        conversation_id: str,
+        language: str,
+        device_id: str | None = None,
+    ) -> str:
+        """Process a user message and return the assistant's reply.
+
+        Args:
+            message: The user's text input.
+            conversation_id: Stable ID for this conversation thread.
+            language: BCP-47 language code (passed through from HA Assist).
+            device_id: Optional device ID (used for voice mode detection
+                       in future; currently unused in Week 1).
+
+        Returns:
+            The assistant's reply text.
+
+        Raises:
+            OrchestratorError: on provider failure.
+        """
+        # Heuristic: if a device_id is present the request came from a voice
+        # assistant pipeline (Assist mic → media player → device).  We also
+        # honour the explicit CONF_VOICE_MODE config toggle as a fallback for
+        # setups where the device_id is unavailable but the user always wants
+        # the compact voice prompt.  Note: HA does not expose a dedicated
+        # is_voice flag on ConversationInput (Context is not a dict), so
+        # device_id presence is the closest reliable signal available.
+        voice_mode: bool = (device_id is not None) or bool(
+            self._entry.options.get(CONF_VOICE_MODE, False)
+        )
+        system_prompt = self._build_system_prompt(voice_mode)
+
+        # Serialise concurrent requests for the same conversation to prevent
+        # interleaved history and summarisation races.
+        async with self._get_conv_lock(conversation_id):
+            # 1. Add user turn to history.
+            await self._context_mgr.add_turn(conversation_id, "user", message)
+
+            # 2. Summarize old turns if we're approaching the soft token limit.
+            if self._summarization_enabled:
+                await self._context_mgr.summarize_if_needed(
+                    conversation_id, system_prompt, self._provider
+                )
+
+            # 3. Build the message list (system prompt + trimmed history).
+            messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
+
+            # 4. Collect tool schemas: MCP tools + web_search (if enabled).
+            tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
+            if self._web_search is not None:
+                tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
+
+            _LOGGER.debug(
+                "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
+                conversation_id,
+                language,
+                voice_mode,
+                len(messages),
+                len(tool_schemas),
+            )
+
+            # 5. Call LLM — three paths based on config and tool availability:
+            #    a) XML fallback (opt-in, experimental) — tool spec injected into prompt
+            #    b) Native tool loop (function calling)
+            #    c) Plain completion (no tools)
+            try:
+                if tool_schemas and self._xml_fallback:
+                    reply = await self._xml_tool_loop(messages, tool_schemas)
+                elif tool_schemas:
+                    reply = await self._tool_loop(messages, tool_schemas)
+                else:
+                    reply = await self._provider.async_complete(messages)
+            except Exception:
+                # Roll back the user turn so history stays consistent.
+                await self._context_mgr.remove_last_turn(conversation_id)
+                raise
+
+            # 6. Append assistant reply to history.
+            # Strip XML tool-call markup (XML fallback path) before storing —
+            # raw <tool_call> tags in history confuse subsequent LLM turns.
+            stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
+            await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
+
+        return reply
+
+    async def _tool_loop(
+        self,
+        messages: list[dict],
+        tool_schemas: list[dict],
+    ) -> str:
+        """Run the native function-calling loop: call LLM → execute tools → repeat.
+
+        Exits when the LLM returns a plain text reply or max_tool_iterations
+        is reached. On limit, appends a note rather than silently truncating.
+        """
+        last_response = None
+
+        for iteration in range(self._max_tool_iterations):
+            response = await self._provider.async_chat(messages, tool_schemas)
+            last_response = response
+
+            if not response.has_tool_calls:
+                return response.reply_text()
+
+            _LOGGER.debug(
+                "Tool loop iteration %d/%d: %d call(s): %s",
+                iteration + 1,
+                self._max_tool_iterations,
+                len(response.tool_calls),
+                [tc.name for tc in response.tool_calls],
+            )
+
+            for tc in response.tool_calls:
+                messages.append(tc.to_assistant_message())
+
+            for tc in response.tool_calls:
+                result = await self._dispatch_tool(tc.name, tc.arguments)
+                messages.append(tc.to_tool_result_message(result))
+
+        suffix = " [Note: reached tool call limit — response may be incomplete.]"
+        return (last_response.reply_text() if last_response else "") + suffix
+
+    async def _xml_tool_loop(
+        self,
+        messages: list[dict],
+        tool_schemas: list[dict],
+    ) -> str:
+        """XML fallback tool loop for models without native function calling.
+
+        Experimental — enabled via CONF_XML_FALLBACK.  Injects an XML tool
+        specification into the system message and parses <tool_call> tags
+        in the LLM's text responses.
+
+        ⚠ Not reliable with models that weren't trained on XML tool format.
+        """
+        import json as _json
+        import re as _re
+
+        # Build XML tool spec to append to system prompt.
+        tool_spec_lines = ["<tools>"]
+        for schema in tool_schemas:
+            fn = schema.get("function", {})
+            name = fn.get("name", "")
+            desc = fn.get("description", "")
+            params = _json.dumps(fn.get("parameters", {}))
+            tool_spec_lines.append(
+                f'  <tool name="{name}"><description>{desc}</description>'
+                f"<parameters>{params}</parameters></tool>"
+            )
+        tool_spec_lines.append("</tools>")
+        tool_spec_lines.append(
+            'To call a tool respond with: <tool_call name="tool_name">{"arg": "value"}</tool_call>'
+        )
+        xml_suffix = "\n".join(tool_spec_lines)
+
+        # Patch system message to include XML spec.
+        patched = list(messages)
+        if patched and patched[0]["role"] == "system":
+            patched[0] = {
+                "role": "system",
+                "content": patched[0]["content"] + "\n\n" + xml_suffix,
+            }
+
+        tool_call_re = _re.compile(
+            r'<tool_call\s+name="([^"]+)">(.*?)</tool_call>',
+            _re.DOTALL,
+        )
+
+        for iteration in range(self._max_tool_iterations):
+            reply = await self._provider.async_complete(patched)
+
+            matches = tool_call_re.findall(reply)
+            if not matches:
+                return reply  # Final answer — no tool calls.
+
+            _LOGGER.debug(
+                "XML tool loop iteration %d/%d: %d call(s)",
+                iteration + 1, self._max_tool_iterations, len(matches),
+            )
+
+            patched.append({"role": "assistant", "content": reply})
+            for name, raw_args in matches:
+                try:
+                    args = _json.loads(raw_args.strip())
+                except _json.JSONDecodeError:
+                    args = {}
+                result = await self._dispatch_tool(name, args)
+                patched.append({"role": "user", "content": f"Tool result for {name}: {result}"})
+
+        return reply + " [Note: reached tool call limit — response may be incomplete.]"
+
+    async def _dispatch_tool(self, name: str, arguments: dict) -> str:
+        """Route a tool call to web search or MCP, never raises."""
+        if name == "web_search" and self._web_search is not None:
+            query = arguments.get("query", "")
+            return await self._web_search.async_search(query)
+        if self._mcp is not None:
+            return await self._mcp.call_tool(name, arguments)
+        return f"[Tool {name!r} unavailable — no handler configured]"
+
+    async def async_close(self) -> None:
+        """Close provider sessions. Called on integration unload."""
+        await self._provider.async_close()

@@ -1,0 +1,183 @@
+{
+  "config": {
+    "step": {
+      "provider": {
+        "title": "Choose provider",
+        "description": "Connect any AI model to your home. Start by choosing your provider.",
+        "data": {
+          "provider": "AI provider"
+        },
+        "data_description": {}
+      },
+      "provider_url": {
+        "title": "Provider URL",
+        "data": {
+          "base_url": "Provider URL"
+        },
+        "data_description": {
+          "base_url": "Address of your AI provider. Default: http://localhost:11434/v1 for Ollama"
+        }
+      },
+      "model": {
+        "title": "Model",
+        "description": "Choose the model to use for conversations.",
+        "description_fetch_failed": "Could not connect to {fetch_failed} — enter your model name manually (e.g. llama3.2:3b).",
+        "data": {
+          "model": "Model",
+          "api_key": "API key"
+        },
+        "data_description": {
+          "model": "e.g. llama3.2:3b, qwen2.5:7b, mistral",
+          "api_key": "Optional for local providers like Ollama and llama.cpp"
+        }
+      },
+      "web_search": {
+        "title": "Web search",
+        "data": {
+          "web_search_enabled": "Let AI search the web",
+          "web_search_backend": "Search provider",
+          "brave_api_key": "Brave Search API key",
+          "tavily_api_key": "Tavily API key",
+          "max_results": "Results per search"
+        },
+        "data_description": {
+          "web_search_enabled": "AI Hub will search the internet to answer questions about current events, weather, and more.",
+          "web_search_backend": "DuckDuckGo is free but unofficial — it may occasionally be unavailable. Brave Search is recommended.",
+          "brave_api_key": "Free tier: 2,000 requests/month. Get a key at brave.com/search/api",
+          "tavily_api_key": "Free tier: 1,000 requests/month.",
+          "max_results": "Maximum number of search results to include in the AI's context."
+        }
+      },
+      "searxng": {
+        "title": "SearXNG",
+        "data": {
+          "searxng_url": "SearXNG URL"
+        },
+        "data_description": {
+          "searxng_url": "URL of your self-hosted SearXNG instance (e.g. https://search.example.com)."
+        }
+      },
+      "advanced": {
+        "title": "Advanced",
+        "data": {
+          "system_prompt": "Custom instructions",
+          "context_window": "Context window (tokens)",
+          "summarization_enabled": "Auto-summarize long conversations",
+          "voice_mode": "Use compact prompts for voice",
+          "xml_fallback": "XML tool calling (experimental)",
+          "max_tool_iterations": "Tool call limit",
+          "response_timeout": "Timeout (seconds)"
+        },
+        "data_description": {
+          "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
+          "context_window": "Maximum context your model supports. Check your model's documentation.",
+          "summarization_enabled": "When conversations get long, AI Hub summarizes older messages to preserve memory.",
+          "voice_mode": "Shorter responses optimized for text-to-speech. Enabled by default for voice assistant interactions.",
+          "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
+          "max_tool_iterations": "Maximum tool uses per response (default: 5).",
+          "response_timeout": "How long to wait for the AI before giving up."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the provider. Check that your AI provider is running.",
+      "invalid_api_key": "Invalid API key. Check your credentials.",
+      "model_required": "Enter a model name.",
+      "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
+      "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL."
+    },
+    "abort": {
+      "already_configured": "AI Hub is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure AI Hub",
+        "menu_options": {
+          "provider_settings": "Provider settings",
+          "web_search": "Web search",
+          "advanced": "Advanced",
+          "mcp_servers": "MCP servers"
+        }
+      },
+      "provider_settings": {
+        "title": "Provider settings",
+        "data": {
+          "base_url": "Provider URL",
+          "api_key": "API key"
+        },
+        "data_description": {
+          "base_url": "Address of your AI provider.",
+          "api_key": "Optional for local providers like Ollama and llama.cpp."
+        }
+      },
+      "provider_model": {
+        "title": "Model",
+        "data": {
+          "model": "Model"
+        },
+        "data_description": {
+          "model": "e.g. llama3.2:3b, qwen2.5:7b, mistral"
+        }
+      },
+      "web_search": {
+        "title": "Web search",
+        "data": {
+          "web_search_enabled": "Let AI search the web",
+          "web_search_backend": "Search provider",
+          "brave_api_key": "Brave Search API key",
+          "tavily_api_key": "Tavily API key",
+          "max_results": "Results per search"
+        },
+        "data_description": {
+          "web_search_enabled": "AI Hub will search the internet to answer questions about current events, weather, and more.",
+          "web_search_backend": "DuckDuckGo is free but unofficial — it may occasionally be unavailable. Brave Search is recommended.",
+          "brave_api_key": "Free tier: 2,000 requests/month. Get a key at brave.com/search/api",
+          "tavily_api_key": "Free tier: 1,000 requests/month.",
+          "max_results": "Maximum number of search results to include in the AI's context."
+        }
+      },
+      "searxng": {
+        "title": "SearXNG",
+        "data": {
+          "searxng_url": "SearXNG URL"
+        },
+        "data_description": {
+          "searxng_url": "URL of your self-hosted SearXNG instance."
+        }
+      },
+      "advanced": {
+        "title": "Advanced",
+        "data": {
+          "system_prompt": "Custom instructions",
+          "context_window": "Context window (tokens)",
+          "summarization_enabled": "Auto-summarize long conversations",
+          "voice_mode": "Use compact prompts for voice",
+          "xml_fallback": "XML tool calling (experimental)",
+          "max_tool_iterations": "Tool call limit",
+          "response_timeout": "Timeout (seconds)"
+        },
+        "data_description": {
+          "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
+          "context_window": "Maximum context your model supports. Check your model's documentation.",
+          "summarization_enabled": "When conversations get long, AI Hub summarizes older messages to preserve memory.",
+          "voice_mode": "Shorter responses optimized for text-to-speech.",
+          "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
+          "max_tool_iterations": "Maximum tool uses per response (default: 5).",
+          "response_timeout": "How long to wait for the AI before giving up."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the provider. Check that your AI provider is running.",
+      "invalid_api_key": "Invalid API key. Check your credentials.",
+      "model_required": "Enter a model name.",
+      "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
+      "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL."
+    },
+    "abort": {
+      "mcp_coming_soon": "MCP server management will be available in a future update."
+    }
+  }
+}
