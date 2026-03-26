@@ -81,6 +81,15 @@ from .providers.openai_compat import async_fetch_models
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_ha_url(hass: Any) -> str:
+    """Return the HA internal base URL, falling back to homeassistant.local."""
+    try:
+        from homeassistant.helpers.network import get_url  # noqa: PLC0415
+        return get_url(hass, allow_internal=True, allow_ip=True).rstrip("/")
+    except Exception:  # noqa: BLE001
+        return "http://homeassistant.local:8123"
+
+
 def _is_valid_url(url: str) -> bool:
     """Return True if url has a valid http/https scheme and netloc."""
     try:
@@ -433,18 +442,41 @@ class AIHubConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_advanced(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 4: Advanced settings (all optional with defaults)."""
+        """Step 4: Advanced settings + optional HA MCP quick-connect."""
         if user_input is not None:
             # Coerce number selector floats to int
             for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS):
                 if key in user_input:
                     user_input[key] = int(user_input[key])
+            # HA MCP quick-connect: build the server entry and append to mcp_servers
+            use_ha_mcp = bool(user_input.pop("use_ha_mcp", False))
+            ha_mcp_token = str(user_input.pop("ha_mcp_token", "")).strip()
+            if use_ha_mcp:
+                ha_url = _get_ha_url(self.hass)
+                mcp_entry: dict[str, Any] = {
+                    "transport": "http",
+                    "url": f"{ha_url}/mcp_server",
+                }
+                if ha_mcp_token:
+                    mcp_entry["token"] = ha_mcp_token
+                self._options.setdefault(CONF_MCP_SERVERS, []).append(mcp_entry)
             self._options.update(user_input)
             return self._create_entry()
 
+        # Merge the standard advanced schema with the HA MCP quick-connect fields.
+        schema = vol.Schema(
+            {
+                **_advanced_schema(self._options).schema,
+                vol.Optional("use_ha_mcp", default=False): selector.BooleanSelector(),
+                vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+            }
+        )
+
         return self.async_show_form(
             step_id="advanced",
-            data_schema=_advanced_schema(self._options),
+            data_schema=schema,
             last_step=True,
         )
 
@@ -679,6 +711,8 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
         """MCP server management — action selector with live server list."""
         if user_input is not None:
             action = user_input["mcp_action"]
+            if action == "add_ha":
+                return await self.async_step_mcp_add_ha()
             if action == "add_http":
                 return await self.async_step_mcp_add_http()
             if action == "add_stdio":
@@ -692,7 +726,8 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=self._options)
 
         action_options: list[dict[str, str]] = [
-            {"value": "add_http", "label": "Add HTTP server"},
+            {"value": "add_ha", "label": "Add Home Assistant built-in MCP server"},
+            {"value": "add_http", "label": "Add other HTTP server"},
             {"value": "add_stdio", "label": "Add stdio server"},
         ]
         if self._pending_mcp:
@@ -733,6 +768,35 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
         )
 
     # ── Add ───────────────────────────────────────────────────────────────────
+
+    async def async_step_mcp_add_ha(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Quick-add HA's built-in MCP server — only asks for the token."""
+        if user_input is not None:
+            token = user_input.get("ha_mcp_token", "").strip()
+            ha_url = self._get_ha_url()
+            entry: dict[str, Any] = {
+                "transport": "http",
+                "url": f"{ha_url}/mcp_server",
+            }
+            if token:
+                entry["token"] = token
+            self._pending_mcp.append(entry)
+            return await self.async_step_mcp_servers()
+
+        ha_url = self._get_ha_url()
+        return self.async_show_form(
+            step_id="mcp_add_ha",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                    ),
+                }
+            ),
+            description_placeholders={"ha_mcp_url": f"{ha_url}/mcp_server"},
+        )
 
     async def async_step_mcp_add_http(
         self, user_input: dict[str, Any] | None = None
