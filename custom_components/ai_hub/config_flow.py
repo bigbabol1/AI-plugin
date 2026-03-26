@@ -775,7 +775,7 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
         """Quick-add HA's built-in MCP server — only asks for the token."""
         if user_input is not None:
             token = user_input.get("ha_mcp_token", "").strip()
-            ha_url = self._get_ha_url()
+            ha_url = _get_ha_url(self.hass)
             entry: dict[str, Any] = {
                 "transport": "http",
                 "url": f"{ha_url}/mcp_server",
@@ -785,7 +785,7 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
             self._pending_mcp.append(entry)
             return await self.async_step_mcp_servers()
 
-        ha_url = self._get_ha_url()
+        ha_url = _get_ha_url(self.hass)
         return self.async_show_form(
             step_id="mcp_add_ha",
             data_schema=vol.Schema(
