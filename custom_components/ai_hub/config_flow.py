@@ -47,6 +47,7 @@ from .const import (
     CONF_CONTEXT_WINDOW,
     CONF_MAX_RESULTS,
     CONF_MAX_TOOL_ITERATIONS,
+    CONF_MCP_SERVERS,
     CONF_MODEL,
     CONF_PROVIDER,
     CONF_RESPONSE_TIMEOUT,
@@ -482,6 +483,10 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
         self._config_entry = config_entry
         self._options = dict(config_entry.options)
         self._models: list[str] | None = None
+        # Working copy of MCP server list — committed on "Save and close"
+        self._pending_mcp: list[dict] = list(
+            config_entry.options.get(CONF_MCP_SERVERS, [])
+        )
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -643,10 +648,156 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
             data_schema=_advanced_schema(self._options),
         )
 
-    # ── MCP servers (stub) ───────────────────────────────────────────────────
+    # ── MCP servers ──────────────────────────────────────────────────────────
+
+    def _mcp_servers_description(self) -> str:
+        """Build a human-readable summary of the pending MCP server list."""
+        if not self._pending_mcp:
+            return "No servers configured yet."
+        lines = []
+        for i, s in enumerate(self._pending_mcp, 1):
+            if s.get("transport") == "stdio":
+                cmd = s.get("command", "")
+                args = " ".join(s.get("args", []))
+                lines.append(f"{i}. stdio: {cmd} {args}".strip())
+            else:
+                lines.append(f"{i}. http: {s.get('url', '')}")
+        return "\n".join(lines)
 
     async def async_step_mcp_servers(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """MCP server management — available in a future update."""
-        return self.async_abort(reason="mcp_coming_soon")
+        """MCP server management — action selector with live server list."""
+        if user_input is not None:
+            action = user_input["mcp_action"]
+            if action == "add_http":
+                return await self.async_step_mcp_add_http()
+            if action == "add_stdio":
+                return await self.async_step_mcp_add_stdio()
+            if action == "remove":
+                return await self.async_step_mcp_remove()
+            # "save" — commit and close
+            self._options[CONF_MCP_SERVERS] = self._pending_mcp
+            return self.async_create_entry(title="", data=self._options)
+
+        action_options: list[dict[str, str]] = [
+            {"value": "add_http", "label": "Add HTTP server"},
+            {"value": "add_stdio", "label": "Add stdio server"},
+        ]
+        if self._pending_mcp:
+            action_options.append({"value": "remove", "label": "Remove a server"})
+        action_options.append({"value": "save", "label": "Save and close"})
+
+        return self.async_show_form(
+            step_id="mcp_servers",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("mcp_action"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=action_options,
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+            description_placeholders={"servers": self._mcp_servers_description()},
+        )
+
+    async def async_step_mcp_add_http(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Add an HTTP MCP server (URL + optional bearer token)."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            url = user_input["mcp_url"].strip()
+            if not _is_valid_url(url):
+                errors["mcp_url"] = ERROR_INVALID_URL
+            else:
+                entry: dict[str, Any] = {"transport": "http", "url": url}
+                token = user_input.get("mcp_token", "").strip()
+                if token:
+                    entry["token"] = token
+                self._pending_mcp.append(entry)
+                return await self.async_step_mcp_servers()
+
+        return self.async_show_form(
+            step_id="mcp_add_http",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("mcp_url"): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
+                    ),
+                    vol.Optional("mcp_token", default=""): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.PASSWORD
+                        )
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_mcp_add_stdio(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Add a stdio MCP server (command + space-separated args)."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            command = user_input.get("mcp_command", "").strip()
+            if not command:
+                errors["mcp_command"] = "command_required"
+            else:
+                raw_args = user_input.get("mcp_args", "").strip()
+                args = raw_args.split() if raw_args else []
+                self._pending_mcp.append(
+                    {"transport": "stdio", "command": command, "args": args}
+                )
+                return await self.async_step_mcp_servers()
+
+        return self.async_show_form(
+            step_id="mcp_add_stdio",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("mcp_command"): selector.TextSelector(),
+                    vol.Optional("mcp_args", default=""): selector.TextSelector(),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_mcp_remove(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Remove one MCP server from the pending list."""
+        if not self._pending_mcp:
+            return await self.async_step_mcp_servers()
+
+        if user_input is not None:
+            idx = int(user_input["mcp_remove_index"])
+            if 0 <= idx < len(self._pending_mcp):
+                self._pending_mcp.pop(idx)
+            return await self.async_step_mcp_servers()
+
+        server_options = []
+        for i, s in enumerate(self._pending_mcp):
+            if s.get("transport") == "stdio":
+                label = f"stdio: {s.get('command', '')} {' '.join(s.get('args', []))}".strip()
+            else:
+                label = f"http: {s.get('url', '')}"
+            server_options.append({"value": str(i), "label": label})
+
+        return self.async_show_form(
+            step_id="mcp_remove",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("mcp_remove_index"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=server_options,
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+        )

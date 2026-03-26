@@ -178,7 +178,10 @@ class _MCPServerConnection:
 
     async def _run_http(self) -> None:
         url = self._config["url"]
-        async with streamablehttp_client(url) as (read, write, _):
+        headers: dict[str, str] = {}
+        if token := self._config.get("token"):
+            headers["Authorization"] = f"Bearer {token}"
+        async with streamablehttp_client(url, headers=headers or None) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 await self._on_connected(session)
