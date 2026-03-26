@@ -206,15 +206,15 @@ class _MCPServerConnection:
         ssl_ctx = await loop.run_in_executor(None, _create_ssl_context)
 
         def _client_factory(
-            hdrs: dict[str, str] | None = None,
+            headers: dict[str, str] | None = None,
             timeout: httpx.Timeout | None = None,
             auth: httpx.Auth | None = None,
         ) -> httpx.AsyncClient:
             kw: dict[str, Any] = {"follow_redirects": True, "verify": ssl_ctx}
             if timeout is not None:
                 kw["timeout"] = timeout
-            if hdrs is not None:
-                kw["headers"] = hdrs
+            if headers is not None:
+                kw["headers"] = headers
             if auth is not None:
                 kw["auth"] = auth
             return httpx.AsyncClient(**kw)
