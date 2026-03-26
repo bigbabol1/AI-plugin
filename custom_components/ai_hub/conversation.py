@@ -55,6 +55,11 @@ class AIHubConversationEntity(conversation.ConversationEntity):
     _attr_name = None
     _attr_supported_languages = "*"
 
+    @property
+    def supported_languages(self) -> list[str] | str:
+        """Return supported languages — '*' means all languages."""
+        return "*"
+
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
         self._entry = entry
