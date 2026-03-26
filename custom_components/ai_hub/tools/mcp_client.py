@@ -153,10 +153,16 @@ class _MCPServerConnection:
                 if self._shutdown.is_set():
                     break
                 self._state = _State.RECONNECTING
+                # Unwrap ExceptionGroup (Python 3.11+ asyncio.TaskGroup) so the
+                # real root cause appears in the log rather than the wrapper message.
+                cause: BaseException = exc
+                if isinstance(exc, BaseExceptionGroup):
+                    cause = exc.exceptions[0]
                 _LOGGER.warning(
-                    "AI Hub MCP: connection to %r failed (%s), retrying in %.0fs",
+                    "AI Hub MCP: connection to %r failed (%s: %s), retrying in %.0fs",
                     self._name,
-                    exc,
+                    type(cause).__name__,
+                    cause,
                     backoff,
                 )
                 try:
