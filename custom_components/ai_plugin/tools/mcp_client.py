@@ -97,8 +97,9 @@ def _resolve_command(command: str) -> str:
 # Backoff constants for reconnection
 _BACKOFF_INITIAL = 2.0
 _BACKOFF_MAX = 30.0
-# Seconds to wait for a server to become CONNECTED on startup
-_CONNECT_TIMEOUT = 15.0
+# Seconds to wait for a server to become CONNECTED on startup.
+# stdio servers (uvx) may need to download packages on first run — allow 120s.
+_CONNECT_TIMEOUT = 120.0
 
 
 class _State(Enum):
