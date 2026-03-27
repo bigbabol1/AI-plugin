@@ -711,13 +711,6 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             "config_label": "Database file path",
             "config_placeholder": "/config/data.db",
         },
-        "filesystem": {
-            "label": "File access — let the AI read and write files in a folder on your Home Assistant device",
-            "command": "uvx",
-            "args_template": ["mcp-server-filesystem", "{value}"],
-            "config_label": "Allowed directory path",
-            "config_placeholder": "/config",
-        },
     }
 
     def _mcp_server_label(self, s: dict) -> str:
