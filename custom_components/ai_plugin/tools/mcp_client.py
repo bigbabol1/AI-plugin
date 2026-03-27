@@ -50,6 +50,19 @@ from ..providers import openai_tool_schema
 _LOGGER = logging.getLogger(__name__)
 
 
+class _StderrToLogger:
+    """File-like writer that routes subprocess stderr into the HA logger."""
+
+    def write(self, text: str) -> int:
+        text = text.rstrip()
+        if text:
+            _LOGGER.warning("AI Plugin MCP (subprocess): %s", text)
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
 def _create_ssl_context() -> ssl.SSLContext:
     """Build an SSL context — must run in an executor (load_verify_locations is blocking I/O)."""
     try:
@@ -272,7 +285,7 @@ class _MCPServerConnection:
             args=self._config.get("args", []),
             env=self._config.get("env"),
         )
-        async with stdio_client(params) as (read, write):
+        async with stdio_client(params, errlog=_StderrToLogger()) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 await self._on_connected(session)
