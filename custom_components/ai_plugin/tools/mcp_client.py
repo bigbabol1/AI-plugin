@@ -59,6 +59,41 @@ def _create_ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context()
 
 
+# Extra directories to search for executables that may not be in HA's restricted PATH.
+# HA runs in Docker; tools like uvx (uv) are installed outside the standard PATH.
+_EXTRA_PATH_DIRS = [
+    "/root/.local/bin",
+    "/root/.cargo/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/home/root/.local/bin",
+]
+
+
+def _resolve_command(command: str) -> str:
+    """Return the full path to *command* if found in known extra directories.
+
+    HA's subprocess environment has a restricted PATH that often omits user-local
+    bin directories where tools like uvx are installed.  Falls back to the bare
+    command name so the OS can still resolve it if it happens to be on PATH.
+    """
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+
+    if os.path.isabs(command):
+        return command
+    # Try the standard PATH first
+    found = shutil.which(command)
+    if found:
+        return found
+    # Then check well-known extra directories
+    for directory in _EXTRA_PATH_DIRS:
+        candidate = os.path.join(directory, command)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return command  # fall back to bare name; subprocess will raise if not found
+
+
 # Backoff constants for reconnection
 _BACKOFF_INITIAL = 2.0
 _BACKOFF_MAX = 30.0
@@ -165,11 +200,11 @@ class _MCPServerConnection:
                 if self._shutdown.is_set():
                     break
                 self._state = _State.RECONNECTING
-                # Unwrap ExceptionGroup (Python 3.11+ asyncio.TaskGroup) so the
-                # real root cause appears in the log rather than the wrapper message.
+                # Recursively unwrap nested ExceptionGroups (anyio/asyncio TaskGroup)
+                # to surface the real root cause in the log.
                 cause: BaseException = exc
-                if isinstance(exc, BaseExceptionGroup):
-                    cause = exc.exceptions[0]
+                while isinstance(cause, BaseExceptionGroup) and cause.exceptions:
+                    cause = cause.exceptions[0]
                 _LOGGER.warning(
                     "AI Plugin MCP: connection to %r failed (%s: %s), retrying in %.0fs",
                     self._name,
@@ -230,8 +265,9 @@ class _MCPServerConnection:
                 await self._shutdown.wait()
 
     async def _run_stdio(self) -> None:
+        command = self._config["command"]
         params = StdioServerParameters(
-            command=self._config["command"],
+            command=_resolve_command(command),
             args=self._config.get("args", []),
             env=self._config.get("env"),
         )
