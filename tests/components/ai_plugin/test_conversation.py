@@ -85,6 +85,7 @@ async def test_process_happy_path() -> None:
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False  # keep test simple
     orch._mcp = None
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = None
@@ -116,6 +117,7 @@ async def test_process_multi_turn_maintains_history() -> None:
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = None
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = None
@@ -154,6 +156,7 @@ async def test_process_isolates_conversation_ids() -> None:
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = None
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = None
@@ -181,6 +184,7 @@ async def test_process_propagates_orchestrator_error() -> None:
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = None
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = None
@@ -210,6 +214,7 @@ def _make_orch_with_mcp(mock_mcp, mock_provider):
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = mock_mcp
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = None
@@ -258,6 +263,7 @@ async def test_process_with_summarization_enabled() -> None:
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = True
     orch._mcp = None
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = None
@@ -284,6 +290,7 @@ async def test_dispatch_tool_no_handler_returns_unavailable_message() -> None:
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
     orch._mcp = None
+    orch._memory = None
     orch._web_search = None
 
     result = await orch._dispatch_tool("unknown_tool", {"arg": "value"})
@@ -328,6 +335,7 @@ async def test_xml_fallback_path_is_used_when_enabled() -> None:
     )
     mock_mcp.call_tool = AsyncMock(return_value="22:00")
     orch._mcp = mock_mcp
+    orch._memory = None
 
     mock_provider = MagicMock()
     # Return a reply with no <tool_call> tags → terminates immediately
@@ -359,6 +367,7 @@ async def test_xml_tool_loop_handles_json_decode_error() -> None:
     )
     mock_mcp.call_tool = AsyncMock(return_value="result")
     orch._mcp = mock_mcp
+    orch._memory = None
 
     # First call returns malformed JSON in tool_call, second returns final answer
     responses = [
@@ -403,6 +412,7 @@ async def test_xml_tool_loop_max_iterations_appends_note() -> None:
     )
     mock_mcp.call_tool = AsyncMock(return_value="ok")
     orch._mcp = mock_mcp
+    orch._memory = None
 
     # Always return a tool call — never a final answer
     mock_provider = MagicMock()

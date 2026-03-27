@@ -7,6 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 from .const import CONF_MCP_SERVERS, DOMAIN
+from .tools.memory import MemoryTool
 from .tools.mcp_client import MCPToolRegistry
 
 PLATFORMS = [Platform.CONVERSATION]
@@ -19,8 +20,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     mcp = MCPToolRegistry(server_configs)
     await mcp.async_setup()
 
+    # Native persistent memory tool (no external dependencies).
+    memory = MemoryTool(hass.config.config_dir)
+
     # Store in hass.data so Orchestrator can retrieve it.
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = mcp
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"mcp": mcp, "memory": memory}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -31,7 +35,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry — tear down MCP connections first."""
-    mcp: MCPToolRegistry | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    entry_data: dict | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    mcp: MCPToolRegistry | None = (entry_data or {}).get("mcp")
     if mcp is not None:
         # Kill stdio subprocesses and close HTTP sessions to prevent zombies.
         await mcp.async_teardown()

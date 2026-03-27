@@ -51,6 +51,7 @@ from .const import (
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
 from .providers.openai_compat import OpenAICompatProvider
+from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
 
 if TYPE_CHECKING:
@@ -76,13 +77,14 @@ class Orchestrator:
         self._entry = entry
         self._provider: AbstractProvider = self._build_provider()
 
-        # Retrieve MCPToolRegistry created by async_setup_entry (may be None
-        # if no MCP servers are configured or during tests).
-        self._mcp: MCPToolRegistry | None = (
-            hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        # Retrieve MCPToolRegistry and MemoryTool created by async_setup_entry.
+        entry_data: dict = (
+            hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}
             if hass is not None
-            else None
+            else {}
         )
+        self._mcp: MCPToolRegistry | None = entry_data.get("mcp")
+        self._memory: MemoryTool | None = entry_data.get("memory")
 
         opts = entry.options
         # Use real schema token budget if MCPToolRegistry is available.
@@ -191,10 +193,12 @@ class Orchestrator:
             # 3. Build the message list (system prompt + trimmed history).
             messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
 
-            # 4. Collect tool schemas: MCP tools + web_search (if enabled).
+            # 4. Collect tool schemas: memory + web_search + MCP tools.
             tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
             if self._web_search is not None:
                 tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
+            if self._memory is not None:
+                tool_schemas = [*MEMORY_TOOL_SCHEMAS, *tool_schemas]
 
             _LOGGER.debug(
                 "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
@@ -336,7 +340,9 @@ class Orchestrator:
         return reply + " [Note: reached tool call limit — response may be incomplete.]"
 
     async def _dispatch_tool(self, name: str, arguments: dict) -> str:
-        """Route a tool call to web search or MCP, never raises."""
+        """Route a tool call to memory, web search, or MCP, never raises."""
+        if name in MEMORY_TOOL_NAMES and self._memory is not None:
+            return await self._memory.call_tool(name, arguments)
         if name == "web_search" and self._web_search is not None:
             query = arguments.get("query", "")
             return await self._web_search.async_search(query)

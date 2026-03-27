@@ -704,13 +704,6 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             "command": "uvx",
             "args": ["mcp-server-fetch"],
         },
-        "sqlite": {
-            "label": "SQLite database — let the AI query a local .db file you maintain (e.g. energy logs, custom records)",
-            "command": "uvx",
-            "args_template": ["mcp-server-sqlite", "--db-path", "{value}"],
-            "config_label": "Database file path",
-            "config_placeholder": "/config/data.db",
-        },
     }
 
     def _mcp_server_label(self, s: dict) -> str:

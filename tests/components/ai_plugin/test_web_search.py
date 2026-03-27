@@ -320,6 +320,7 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = mock_mcp
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = mock_web
