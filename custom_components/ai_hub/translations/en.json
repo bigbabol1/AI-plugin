@@ -182,6 +182,23 @@
           "mcp_action": "Changes are only saved when you choose Save and close."
         }
       },
+      "mcp_add_preset": {
+        "title": "Add a popular MCP server",
+        "description": "These run locally via uvx (no install needed). Select one to add it instantly.",
+        "data": {
+          "preset_key": "Server"
+        }
+      },
+      "mcp_preset_config": {
+        "title": "{preset_label}",
+        "description": "Enter the {config_label} for this server.",
+        "data": {
+          "preset_value": "{config_label}"
+        },
+        "data_description": {
+          "preset_value": "Must be an absolute path accessible to Home Assistant."
+        }
+      },
       "mcp_add_ha": {
         "title": "Add Home Assistant MCP Server",
         "description": "Detected HA URL: {ha_mcp_url}\n\nCreate a Long-lived access token in your HA profile (Settings → scroll to the bottom of your profile page).",

@@ -526,6 +526,8 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
         )
         # Index of server currently being edited (None when not editing)
         self._editing_idx: int | None = None
+        # Key of the preset currently being configured (None when not in preset flow)
+        self._preset_key: str | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -689,6 +691,40 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
 
     # ── MCP servers ──────────────────────────────────────────────────────────
 
+    # Preset stdio servers — "args_template" entries containing "{value}" will
+    # have the placeholder replaced by a user-supplied config value.
+    _STDIO_PRESETS: dict[str, dict[str, Any]] = {
+        "time": {
+            "label": "Time & timezone — current time in any timezone",
+            "command": "uvx",
+            "args": ["mcp-server-time"],
+        },
+        "fetch": {
+            "label": "Web fetch — read any public URL",
+            "command": "uvx",
+            "args": ["mcp-server-fetch"],
+        },
+        "memory": {
+            "label": "Persistent memory — remember facts across sessions",
+            "command": "uvx",
+            "args": ["mcp-server-memory"],
+        },
+        "sqlite": {
+            "label": "SQLite — query a local database file",
+            "command": "uvx",
+            "args_template": ["mcp-server-sqlite", "--db-path", "{value}"],
+            "config_label": "Database file path",
+            "config_placeholder": "/config/data.db",
+        },
+        "filesystem": {
+            "label": "Filesystem — read/write files in a directory",
+            "command": "uvx",
+            "args_template": ["mcp-server-filesystem", "{value}"],
+            "config_label": "Allowed directory path",
+            "config_placeholder": "/config",
+        },
+    }
+
     def _mcp_server_label(self, s: dict) -> str:
         """Return a short human-readable label for an MCP server dict."""
         if s.get("transport") == "stdio":
@@ -718,6 +754,8 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
             action = user_input["mcp_action"]
             if action == "add_ha":
                 return await self.async_step_mcp_add_ha()
+            if action == "add_preset":
+                return await self.async_step_mcp_add_preset()
             if action == "add_http":
                 return await self.async_step_mcp_add_http()
             if action == "add_stdio":
@@ -732,8 +770,9 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
 
         action_options: list[dict[str, str]] = [
             {"value": "add_ha", "label": "Add Home Assistant built-in MCP server"},
+            {"value": "add_preset", "label": "Add a popular MCP server"},
             {"value": "add_http", "label": "Add other HTTP server"},
-            {"value": "add_stdio", "label": "Add stdio server"},
+            {"value": "add_stdio", "label": "Add custom stdio server"},
         ]
         if self._pending_mcp:
             action_options.append({"value": "edit", "label": "Edit a server"})
@@ -801,6 +840,83 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
                 }
             ),
             description_placeholders={"ha_mcp_url": f"{ha_url}/api/mcp"},
+        )
+
+    async def async_step_mcp_add_preset(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Pick a popular preset MCP server to add."""
+        if user_input is not None:
+            key = user_input["preset_key"]
+            preset = self._STDIO_PRESETS[key]
+            if "args_template" in preset:
+                # Needs extra config — store key and show config form
+                self._preset_key = key
+                return await self.async_step_mcp_preset_config()
+            # No extra config — add immediately
+            self._pending_mcp.append({
+                "transport": "stdio",
+                "command": preset["command"],
+                "args": preset["args"],
+            })
+            return await self.async_step_mcp_servers()
+
+        preset_options = [
+            {"value": k, "label": v["label"]}
+            for k, v in self._STDIO_PRESETS.items()
+        ]
+        return self.async_show_form(
+            step_id="mcp_add_preset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("preset_key"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=preset_options,
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_mcp_preset_config(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Collect a single path/value for presets that need it (sqlite, filesystem)."""
+        preset = self._STDIO_PRESETS[self._preset_key]  # type: ignore[index]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            value = user_input.get("preset_value", "").strip()
+            if not value:
+                errors["preset_value"] = "required"
+            else:
+                args = [
+                    a.replace("{value}", value) for a in preset["args_template"]
+                ]
+                self._pending_mcp.append({
+                    "transport": "stdio",
+                    "command": preset["command"],
+                    "args": args,
+                })
+                self._preset_key = None
+                return await self.async_step_mcp_servers()
+
+        return self.async_show_form(
+            step_id="mcp_preset_config",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("preset_value"): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            placeholder=preset.get("config_placeholder", "")
+                        )
+                    ),
+                }
+            ),
+            description_placeholders={
+                "preset_label": preset["label"],
+                "config_label": preset.get("config_label", "Value"),
+            },
+            errors=errors,
         )
 
     async def async_step_mcp_add_http(

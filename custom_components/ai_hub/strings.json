@@ -192,6 +192,23 @@
           "ha_mcp_token": "Required. Paste the token from your HA profile here."
         }
       },
+      "mcp_add_preset": {
+        "title": "Add a popular MCP server",
+        "description": "These run locally via uvx (no install needed). Select one to add it instantly.",
+        "data": {
+          "preset_key": "Server"
+        }
+      },
+      "mcp_preset_config": {
+        "title": "{preset_label}",
+        "description": "Enter the {config_label} for this server.",
+        "data": {
+          "preset_value": "{config_label}"
+        },
+        "data_description": {
+          "preset_value": "Must be an absolute path accessible to Home Assistant."
+        }
+      },
       "mcp_add_http": {
         "title": "Add HTTP MCP Server",
         "description": "For Home Assistant's built-in MCP endpoint:\n  URL: http://YOUR-HA-IP:8123/api/mcp\n  Token: create a Long-lived access token in your HA profile (bottom of the page).",
