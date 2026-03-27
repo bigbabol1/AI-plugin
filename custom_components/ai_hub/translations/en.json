@@ -76,7 +76,7 @@
           "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
           "voice_mode": "Shorter responses optimized for text-to-speech. Enabled by default for voice assistant interactions.",
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
-          "max_tool_iterations": "Maximum tool uses per response (default: 5).",
+          "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "response_timeout": "How long to wait for the AI before giving up.",
           "use_ha_mcp": "Gives AI Plugin access to your sensors, devices, and automations via HA's built-in MCP server.",
           "ha_mcp_token": "Create one in your HA profile → Long-lived access tokens (scroll to the bottom of the page)."
@@ -168,7 +168,7 @@
           "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
           "voice_mode": "Shorter responses optimized for text-to-speech.",
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
-          "max_tool_iterations": "Maximum tool uses per response (default: 5).",
+          "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "response_timeout": "How long to wait for the AI before giving up."
         }
       },
