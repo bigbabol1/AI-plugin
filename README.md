@@ -1,4 +1,4 @@
-# AI Hub for Home Assistant
+# AI Plugin for Home Assistant
 
 A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — Ollama, llama.cpp, OpenAI, LM Studio, and more — with web search, MCP tool extensibility, and smart context management.
 
@@ -15,9 +15,9 @@ A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — O
 
 1. Go to HACS → Integrations → ⋮ → Custom repositories
 2. Add `https://github.com/bigbabol1/AI-plugin` with category **Integration**
-3. Install **AI Hub** from HACS
+3. Install **AI Plugin** from HACS
 4. Restart Home Assistant
-5. Go to **Settings → Devices & Services → Add Integration → AI Hub**
+5. Go to **Settings → Devices & Services → Add Integration → AI Plugin**
 
 ## Requirements
 
@@ -32,7 +32,7 @@ The setup wizard walks through:
 3. **Web search** — optional, choose backend and API keys
 4. **Advanced** — system prompt, context window, voice mode, MCP servers, timeout
 
-All settings are editable post-install via **Settings → Devices & Services → AI Hub → Configure**.
+All settings are editable post-install via **Settings → Devices & Services → AI Plugin → Configure**.
 
 ## Web Search Backends
 
