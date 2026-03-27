@@ -695,29 +695,29 @@ class AIHubOptionsFlow(config_entries.OptionsFlow):
     # have the placeholder replaced by a user-supplied config value.
     _STDIO_PRESETS: dict[str, dict[str, Any]] = {
         "time": {
-            "label": "Time & timezone — current time in any timezone",
+            "label": "Clock & timezones — ask 'what time is it in Tokyo?' or 'how many hours until midnight?'",
             "command": "uvx",
             "args": ["mcp-server-time"],
         },
         "fetch": {
-            "label": "Web fetch — read any public URL",
+            "label": "Web reader — ask the AI to read any webpage, news article, or online document",
             "command": "uvx",
             "args": ["mcp-server-fetch"],
         },
         "memory": {
-            "label": "Persistent memory — remember facts across sessions",
+            "label": "Memory — tell the AI things to remember between conversations ('I prefer Celsius', 'my car needs service in March')",
             "command": "uvx",
             "args": ["mcp-server-memory"],
         },
         "sqlite": {
-            "label": "SQLite — query a local database file",
+            "label": "SQLite database — let the AI query a local .db file you maintain (e.g. energy logs, custom records)",
             "command": "uvx",
             "args_template": ["mcp-server-sqlite", "--db-path", "{value}"],
             "config_label": "Database file path",
             "config_placeholder": "/config/data.db",
         },
         "filesystem": {
-            "label": "Filesystem — read/write files in a directory",
+            "label": "File access — let the AI read and write files in a folder on your Home Assistant device",
             "command": "uvx",
             "args_template": ["mcp-server-filesystem", "{value}"],
             "config_label": "Allowed directory path",
