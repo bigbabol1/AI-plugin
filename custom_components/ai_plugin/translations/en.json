@@ -184,7 +184,7 @@
       },
       "mcp_add_preset": {
         "title": "Add a popular MCP server",
-        "description": "Select a server to add. The first three work instantly with no setup. SQLite and Filesystem will ask for a file path.",
+        "description": "Select a server to add. Clock and Web reader work instantly with no setup. SQLite and Filesystem will ask for a file path.",
         "data": {
           "preset_key": "Server"
         }

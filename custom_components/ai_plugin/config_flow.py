@@ -704,11 +704,6 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             "command": "uvx",
             "args": ["mcp-server-fetch"],
         },
-        "memory": {
-            "label": "Memory — tell the AI things to remember between conversations ('I prefer Celsius', 'my car needs service in March')",
-            "command": "uvx",
-            "args": ["mcp-server-memory"],
-        },
         "sqlite": {
             "label": "SQLite database — let the AI query a local .db file you maintain (e.g. energy logs, custom records)",
             "command": "uvx",
