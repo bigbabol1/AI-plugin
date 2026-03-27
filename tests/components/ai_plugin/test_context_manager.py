@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.ai_hub.context_manager import ContextManager
+from custom_components.ai_plugin.context_manager import ContextManager
 
 
 # ══════════════════════════════════════════════════════════════════════════════

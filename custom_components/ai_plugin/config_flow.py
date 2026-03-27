@@ -1,4 +1,4 @@
-"""Config flow and OptionsFlowHandler for AI Hub.
+"""Config flow and OptionsFlowHandler for AI Plugin.
 
 CONFIG FLOW (first-time setup):
 
@@ -223,8 +223,8 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
     )
 
 
-class AIHubConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle the AI Hub config flow (first-time setup)."""
+class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle the AI Plugin config flow (first-time setup)."""
 
     VERSION = 1
 
@@ -488,7 +488,7 @@ class AIHubConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _create_entry(self) -> config_entries.FlowResult:
         model = self._options.get(CONF_MODEL, "unknown")
         return self.async_create_entry(
-            title=f"AI Hub ({model})",
+            title=f"AI Plugin ({model})",
             data={CONF_PROVIDER: self._data.get(CONF_PROVIDER, PROVIDER_OPENAI_COMPAT)},
             options=self._options,
         )
@@ -497,8 +497,8 @@ class AIHubConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
-    ) -> AIHubOptionsFlow:
-        return AIHubOptionsFlow(config_entry)
+    ) -> AIPluginOptionsFlow:
+        return AIPluginOptionsFlow(config_entry)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -506,7 +506,7 @@ class AIHubConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class AIHubOptionsFlow(config_entries.OptionsFlow):
+class AIPluginOptionsFlow(config_entries.OptionsFlow):
     """Options flow: edit all non-credential settings post-install.
 
     Menu:

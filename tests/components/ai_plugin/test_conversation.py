@@ -8,15 +8,15 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.ai_hub.const import (
+from custom_components.ai_plugin.const import (
     CONF_BASE_URL,
     CONF_MODEL,
     CONF_VOICE_MODE,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
 )
-from custom_components.ai_hub.exceptions import OrchestratorError
-from custom_components.ai_hub.orchestrator import Orchestrator
+from custom_components.ai_plugin.exceptions import OrchestratorError
+from custom_components.ai_plugin.orchestrator import Orchestrator
 
 
 def _make_mock_entry(options: dict | None = None) -> MagicMock:
@@ -77,7 +77,7 @@ def test_system_prompt_custom_overrides_voice() -> None:
 
 async def test_process_happy_path() -> None:
     """async_process returns the provider reply and stores history."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -108,7 +108,7 @@ async def test_process_happy_path() -> None:
 
 async def test_process_multi_turn_maintains_history() -> None:
     """Multi-turn conversation accumulates history correctly."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -146,7 +146,7 @@ async def test_process_multi_turn_maintains_history() -> None:
 
 async def test_process_isolates_conversation_ids() -> None:
     """Different conversation_ids maintain separate histories."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -173,7 +173,7 @@ async def test_process_isolates_conversation_ids() -> None:
 
 async def test_process_propagates_orchestrator_error() -> None:
     """OrchestratorError from provider propagates out of async_process."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -202,7 +202,7 @@ async def test_process_propagates_orchestrator_error() -> None:
 
 def _make_orch_with_mcp(mock_mcp, mock_provider):
     """Helper: build a minimal Orchestrator with MCP and provider pre-wired."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -219,7 +219,7 @@ def _make_orch_with_mcp(mock_mcp, mock_provider):
 
 async def test_tool_loop_single_tool_call() -> None:
     """Tool loop executes one tool call and returns the final text reply."""
-    from custom_components.ai_hub.providers import ChatResponse, ToolCall
+    from custom_components.ai_plugin.providers import ChatResponse, ToolCall
 
     tool_call = ToolCall(id="c1", name="get_time", arguments={})
     responses = [
@@ -250,7 +250,7 @@ async def test_tool_loop_single_tool_call() -> None:
 
 async def test_process_with_summarization_enabled() -> None:
     """When summarization is enabled, summarize_if_needed is called."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -278,7 +278,7 @@ async def test_process_with_summarization_enabled() -> None:
 
 async def test_dispatch_tool_no_handler_returns_unavailable_message() -> None:
     """_dispatch_tool returns unavailable message when no MCP and no web_search."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -294,7 +294,7 @@ async def test_dispatch_tool_no_handler_returns_unavailable_message() -> None:
 
 async def test_async_close_delegates_to_provider() -> None:
     """async_close calls provider.async_close."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -311,7 +311,7 @@ async def test_async_close_delegates_to_provider() -> None:
 
 async def test_xml_fallback_path_is_used_when_enabled() -> None:
     """When xml_fallback=True and tools exist, _xml_tool_loop is called."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -342,7 +342,7 @@ async def test_xml_fallback_path_is_used_when_enabled() -> None:
 
 async def test_xml_tool_loop_handles_json_decode_error() -> None:
     """_xml_tool_loop falls back to empty args on malformed JSON in tool call."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -386,7 +386,7 @@ async def test_xml_tool_loop_handles_json_decode_error() -> None:
 
 async def test_xml_tool_loop_max_iterations_appends_note() -> None:
     """XML tool loop appends note when max iterations reached."""
-    from custom_components.ai_hub.context_manager import ContextManager
+    from custom_components.ai_plugin.context_manager import ContextManager
 
     entry = _make_mock_entry()
     orch = Orchestrator.__new__(Orchestrator)
@@ -418,7 +418,7 @@ async def test_xml_tool_loop_max_iterations_appends_note() -> None:
 
 async def test_tool_loop_max_iterations_appends_note() -> None:
     """When max_tool_iterations is reached, a note is appended to the reply."""
-    from custom_components.ai_hub.providers import ChatResponse, ToolCall
+    from custom_components.ai_plugin.providers import ChatResponse, ToolCall
 
     async def always_tool_call(messages, tools=None):
         return ChatResponse(
@@ -465,10 +465,10 @@ async def test_conversation_entity_returns_graceful_reply_on_error(
     hass: HomeAssistant,
 ) -> None:
     """OrchestratorError is caught and a graceful string reply is returned."""
-    from custom_components.ai_hub.conversation import AIHubConversationEntity
+    from custom_components.ai_plugin.conversation import AIPluginConversationEntity
 
     entry = _make_mock_entry()
-    entity = AIHubConversationEntity.__new__(AIHubConversationEntity)
+    entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
     entity.hass = hass
     entity._entry = entry
     entity._attr_unique_id = "test"
@@ -501,10 +501,10 @@ async def test_conversation_entity_will_remove_closes_orchestrator(
     hass: HomeAssistant,
 ) -> None:
     """async_will_remove_from_hass delegates to orchestrator.async_close."""
-    from custom_components.ai_hub.conversation import AIHubConversationEntity
+    from custom_components.ai_plugin.conversation import AIPluginConversationEntity
 
     entry = _make_mock_entry()
-    entity = AIHubConversationEntity.__new__(AIHubConversationEntity)
+    entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
     entity.hass = hass
     entity._entry = entry
     entity._attr_unique_id = "test"

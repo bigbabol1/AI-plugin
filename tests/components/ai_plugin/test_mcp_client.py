@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.ai_hub.tools.mcp_client import (
+from custom_components.ai_plugin.tools.mcp_client import (
     MCPToolRegistry,
     _MCPServerConnection,
     _State,
@@ -42,7 +42,7 @@ def _mock_call_result(text: str) -> MagicMock:
 
 def test_openai_tool_schema_converts_correctly() -> None:
     """openai_tool_schema() produces well-formed OpenAI function schema."""
-    from custom_components.ai_hub.providers import openai_tool_schema
+    from custom_components.ai_plugin.providers import openai_tool_schema
 
     tool = _mock_tool(
         "get_time",
@@ -60,7 +60,7 @@ def test_normalize_tool_calls_happy_path() -> None:
     """normalize_tool_calls() parses a standard OpenAI tool-call message."""
     import json
 
-    from custom_components.ai_hub.providers import normalize_tool_calls
+    from custom_components.ai_plugin.providers import normalize_tool_calls
 
     message = {
         "tool_calls": [
@@ -80,14 +80,14 @@ def test_normalize_tool_calls_happy_path() -> None:
 
 def test_normalize_tool_calls_empty() -> None:
     """normalize_tool_calls() returns [] when no tool_calls key."""
-    from custom_components.ai_hub.providers import normalize_tool_calls
+    from custom_components.ai_plugin.providers import normalize_tool_calls
 
     assert normalize_tool_calls({"content": "hello"}) == []
 
 
 def test_normalize_tool_calls_skips_malformed() -> None:
     """Malformed tool call entries are skipped without raising."""
-    from custom_components.ai_hub.providers import normalize_tool_calls
+    from custom_components.ai_plugin.providers import normalize_tool_calls
 
     message = {"tool_calls": [{"bad": "data"}]}
     calls = normalize_tool_calls(message)
@@ -103,7 +103,7 @@ def test_tool_call_to_assistant_message() -> None:
     """ToolCall.to_assistant_message() formats correctly for OpenAI API."""
     import json
 
-    from custom_components.ai_hub.providers import ToolCall
+    from custom_components.ai_plugin.providers import ToolCall
 
     tc = ToolCall(id="call_abc", name="search", arguments={"q": "HA"})
     msg = tc.to_assistant_message()
@@ -116,7 +116,7 @@ def test_tool_call_to_assistant_message() -> None:
 
 def test_tool_call_to_tool_result_message() -> None:
     """ToolCall.to_tool_result_message() formats correctly."""
-    from custom_components.ai_hub.providers import ToolCall
+    from custom_components.ai_plugin.providers import ToolCall
 
     tc = ToolCall(id="call_abc", name="search", arguments={})
     msg = tc.to_tool_result_message("Found 3 results.")
@@ -146,8 +146,8 @@ async def test_server_connection_connects_and_lists_tools() -> None:
     conn = _MCPServerConnection({"transport": "http", "url": "http://localhost:8123/mcp"})
 
     with (
-        patch("custom_components.ai_hub.tools.mcp_client.streamablehttp_client", return_value=mock_transport),
-        patch("custom_components.ai_hub.tools.mcp_client.ClientSession", return_value=mock_session),
+        patch("custom_components.ai_plugin.tools.mcp_client.streamablehttp_client", return_value=mock_transport),
+        patch("custom_components.ai_plugin.tools.mcp_client.ClientSession", return_value=mock_session),
     ):
         # Start connection; it will block waiting for shutdown, so we use a task
         task = asyncio.ensure_future(conn.async_start())
@@ -412,8 +412,8 @@ async def test_run_stdio_connects_and_lists_tools() -> None:
     })
 
     with (
-        patch("custom_components.ai_hub.tools.mcp_client.stdio_client", return_value=mock_transport),
-        patch("custom_components.ai_hub.tools.mcp_client.ClientSession", return_value=mock_session),
+        patch("custom_components.ai_plugin.tools.mcp_client.stdio_client", return_value=mock_transport),
+        patch("custom_components.ai_plugin.tools.mcp_client.ClientSession", return_value=mock_session),
     ):
         task = asyncio.ensure_future(conn.async_start())
         await asyncio.sleep(0.05)

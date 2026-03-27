@@ -1,4 +1,4 @@
-"""AI Hub — provider-agnostic AI orchestration for Home Assistant."""
+"""AI Plugin — provider-agnostic AI orchestration for Home Assistant."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ PLATFORMS = [Platform.CONVERSATION]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up AI Hub from a config entry."""
+    """Set up AI Plugin from a config entry."""
     # Build and start the MCP tool registry (may be empty if no servers configured).
     server_configs: list[dict] = entry.options.get(CONF_MCP_SERVERS, [])
     mcp = MCPToolRegistry(server_configs)

@@ -166,7 +166,7 @@ class ContextManager:
         to_keep = history[-keep_count:]
 
         _LOGGER.info(
-            "AI Hub: summarizing %d messages for conv_id=%s "
+            "AI Plugin: summarizing %d messages for conv_id=%s "
             "(history_tokens=%d > soft_limit=%d)",
             len(to_summarize),
             conv_id,
@@ -235,7 +235,7 @@ class ContextManager:
             return await provider.async_complete(prompt)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
-                "AI Hub: summarization failed for conversation, continuing without: %s",
+                "AI Plugin: summarization failed for conversation, continuing without: %s",
                 exc,
             )
             return None

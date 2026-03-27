@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from custom_components.ai_hub.exceptions import CannotConnect, OrchestratorError
-from custom_components.ai_hub.providers.openai_compat import (
+from custom_components.ai_plugin.exceptions import CannotConnect, OrchestratorError
+from custom_components.ai_plugin.providers.openai_compat import (
     OpenAICompatProvider,
     async_fetch_models,
 )
@@ -256,7 +256,7 @@ async def test_async_chat_includes_tools_in_payload() -> None:
 
 async def test_async_complete_raises_when_content_is_none() -> None:
     """async_complete raises OrchestratorError when response content is None."""
-    from custom_components.ai_hub.providers import ChatResponse
+    from custom_components.ai_plugin.providers import ChatResponse
 
     provider = _make_provider()
     with patch.object(
@@ -336,8 +336,8 @@ async def test_async_fetch_models_raises_cannot_connect_on_malformed_response() 
 
 async def test_abstract_provider_default_async_chat_wraps_complete() -> None:
     """AbstractProvider.async_chat default wraps async_complete in a ChatResponse."""
-    from custom_components.ai_hub.providers import ChatResponse
-    from custom_components.ai_hub.providers.base import AbstractProvider
+    from custom_components.ai_plugin.providers import ChatResponse
+    from custom_components.ai_plugin.providers.base import AbstractProvider
 
     class ConcreteProvider(AbstractProvider):
         async def async_complete(self, messages):

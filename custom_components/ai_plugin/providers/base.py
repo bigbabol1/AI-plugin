@@ -1,4 +1,4 @@
-"""Abstract provider base class for AI Hub."""
+"""Abstract provider base class for AI Plugin."""
 
 from __future__ import annotations
 

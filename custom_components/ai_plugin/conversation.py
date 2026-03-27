@@ -1,14 +1,14 @@
-"""AI Hub conversation entity — integrates with HA Assist pipeline.
+"""AI Plugin conversation entity — integrates with HA Assist pipeline.
 
 This is the platform file for Platform.CONVERSATION. HA calls
 async_setup_entry with async_add_entities, and we register one
-AIHubConversationEntity per config entry.
+AIPluginConversationEntity per config entry.
 
 ┌──────────────────────────────────────────────────────────────┐
 │  HA Assist Pipeline                                           │
 │       │ ConversationInput (text, conv_id, language, ...)     │
 │       ▼                                                      │
-│  AIHubConversationEntity.async_process()                     │
+│  AIPluginConversationEntity.async_process()                     │
 │       │ delegates to Orchestrator.async_process()            │
 │       ▼                                                      │
 │  ConversationResult (IntentResponse with speech)             │
@@ -43,13 +43,13 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the AI Hub conversation entity from a config entry."""
-    entity = AIHubConversationEntity(hass, config_entry)
+    """Set up the AI Plugin conversation entity from a config entry."""
+    entity = AIPluginConversationEntity(hass, config_entry)
     async_add_entities([entity])
 
 
-class AIHubConversationEntity(conversation.ConversationEntity):
-    """Conversation entity that routes HA Assist through AI Hub."""
+class AIPluginConversationEntity(conversation.ConversationEntity):
+    """Conversation entity that routes HA Assist through AI Plugin."""
 
     _attr_has_entity_name = True
     _attr_name = None
@@ -84,7 +84,7 @@ class AIHubConversationEntity(conversation.ConversationEntity):
                 device_id=user_input.device_id,
             )
         except OrchestratorError as exc:
-            _LOGGER.error("AI Hub error processing message: %s", exc)
+            _LOGGER.error("AI Plugin error processing message: %s", exc)
             reply = f"Sorry, I couldn't process that. ({exc})"
 
         intent_response = intent.IntentResponse(language=user_input.language)

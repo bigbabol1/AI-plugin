@@ -1,6 +1,6 @@
-"""Constants for AI Hub."""
+"""Constants for AI Plugin."""
 
-DOMAIN = "ai_hub"
+DOMAIN = "ai_plugin"
 
 # Provider types (v1: OpenAI-compatible only; Gemini/Anthropic post-v1)
 PROVIDER_OPENAI_COMPAT = "openai_compat"

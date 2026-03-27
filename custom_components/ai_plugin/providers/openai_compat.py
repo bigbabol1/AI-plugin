@@ -1,4 +1,4 @@
-"""OpenAI-compatible provider for AI Hub.
+"""OpenAI-compatible provider for AI Plugin.
 
 Covers: Ollama, llama.cpp, OpenAI, LM Studio, xAI Grok, and any
 endpoint that speaks the OpenAI chat completions API.

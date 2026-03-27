@@ -1,4 +1,4 @@
-"""MCP Tool Registry for AI Hub.
+"""MCP Tool Registry for AI Plugin.
 
 Manages persistent connections to one or more MCP servers, fetches their
 tool schemas on startup, and routes tool calls to the correct server.
@@ -104,7 +104,7 @@ class _MCPServerConnection:
             await asyncio.wait_for(self._ready.wait(), timeout=_CONNECT_TIMEOUT)
         except TimeoutError:
             _LOGGER.warning(
-                "AI Hub MCP: server %r did not connect within %ss — "
+                "AI Plugin MCP: server %r did not connect within %ss — "
                 "tools from this server will be unavailable",
                 self._name,
                 _CONNECT_TIMEOUT,
@@ -141,7 +141,7 @@ class _MCPServerConnection:
             return "\n".join(parts) or "(empty result)"
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
-                "AI Hub MCP: tool %r call failed on %r: %s", name, self._name, exc
+                "AI Plugin MCP: tool %r call failed on %r: %s", name, self._name, exc
             )
             # Do not set RECONNECTING here — the background task owns the
             # transport lifecycle and will reconnect when the transport drops.
@@ -171,7 +171,7 @@ class _MCPServerConnection:
                 if isinstance(exc, BaseExceptionGroup):
                     cause = exc.exceptions[0]
                 _LOGGER.warning(
-                    "AI Hub MCP: connection to %r failed (%s: %s), retrying in %.0fs",
+                    "AI Plugin MCP: connection to %r failed (%s: %s), retrying in %.0fs",
                     self._name,
                     type(cause).__name__,
                     cause,
@@ -249,7 +249,7 @@ class _MCPServerConnection:
         self._state = _State.CONNECTED
         self._ready.set()
         _LOGGER.debug(
-            "AI Hub MCP: connected to %r — %d tools available: %s",
+            "AI Plugin MCP: connected to %r — %d tools available: %s",
             self._name,
             len(self._tools),
             [t.name for t in self._tools],

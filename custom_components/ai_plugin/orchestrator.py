@@ -1,4 +1,4 @@
-"""Orchestrator: the core message-processing engine for AI Hub.
+"""Orchestrator: the core message-processing engine for AI Plugin.
 
 Request flow:
   1.  Determine system prompt (voice / custom / default)

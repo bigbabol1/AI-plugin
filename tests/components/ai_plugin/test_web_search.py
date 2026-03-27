@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from custom_components.ai_hub.const import (
+from custom_components.ai_plugin.const import (
     BACKEND_BRAVE,
     BACKEND_DUCKDUCKGO,
     BACKEND_SEARXNG,
@@ -18,7 +18,7 @@ from custom_components.ai_hub.const import (
     CONF_TAVILY_API_KEY,
     CONF_WEB_SEARCH_BACKEND,
 )
-from custom_components.ai_hub.tools.web_search import (
+from custom_components.ai_plugin.tools.web_search import (
     WebSearchTool,
     _format_results,
     _parse_ddg_lite,
@@ -284,9 +284,9 @@ async def test_tavily_429_returns_quota_message() -> None:
 
 async def test_orchestrator_dispatches_web_search_tool() -> None:
     """web_search tool calls go to WebSearchTool, not MCPToolRegistry."""
-    from custom_components.ai_hub.context_manager import ContextManager
-    from custom_components.ai_hub.orchestrator import Orchestrator
-    from custom_components.ai_hub.providers import ChatResponse, ToolCall
+    from custom_components.ai_plugin.context_manager import ContextManager
+    from custom_components.ai_plugin.orchestrator import Orchestrator
+    from custom_components.ai_plugin.providers import ChatResponse, ToolCall
 
     tool_call = ToolCall(id="ws1", name="web_search", arguments={"query": "HA news"})
     responses = [
@@ -334,9 +334,9 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
 
 async def test_orchestrator_xml_fallback_parses_tool_call() -> None:
     """XML fallback mode parses <tool_call> tags and dispatches the tool."""
-    from custom_components.ai_hub.context_manager import ContextManager
-    from custom_components.ai_hub.orchestrator import Orchestrator
-    from custom_components.ai_hub.tools.web_search import TOOL_SCHEMA
+    from custom_components.ai_plugin.context_manager import ContextManager
+    from custom_components.ai_plugin.orchestrator import Orchestrator
+    from custom_components.ai_plugin.tools.web_search import TOOL_SCHEMA
 
     responses = [
         '<tool_call name="web_search">{"query": "news"}</tool_call>',

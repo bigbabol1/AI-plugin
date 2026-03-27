@@ -30,7 +30,7 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.ai_hub.const import (
+from custom_components.ai_plugin.const import (
     BACKEND_SEARXNG,
     CONF_BASE_URL,
     CONF_MODEL,
@@ -43,7 +43,7 @@ from custom_components.ai_hub.const import (
     DOMAIN,
     PROVIDER_OPENAI_COMPAT,
 )
-from custom_components.ai_hub.exceptions import CannotConnect
+from custom_components.ai_plugin.exceptions import CannotConnect
 
 from .conftest import MOCK_MODELS
 
@@ -228,7 +228,7 @@ async def test_searxng_substep_reached_when_searxng_selected(
 
     # Submit valid SearXNG URL → proceeds to advanced
     with patch(
-        "custom_components.ai_hub.config_flow.async_fetch_models",
+        "custom_components.ai_plugin.config_flow.async_fetch_models",
         AsyncMock(side_effect=CannotConnect),
     ):
         result = await hass.config_entries.flow.async_configure(

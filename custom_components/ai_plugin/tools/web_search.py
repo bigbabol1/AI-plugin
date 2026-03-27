@@ -1,4 +1,4 @@
-"""Web search tool for AI Hub.
+"""Web search tool for AI Plugin.
 
 Exposes a single `web_search` function-calling tool to the LLM across
 four backends, selectable in the Advanced config step.
@@ -66,7 +66,7 @@ TOOL_SCHEMA: dict[str, Any] = {
 }
 
 _FALLBACK_MSG = (
-    "Web search temporarily unavailable — try a different backend in AI Hub settings."
+    "Web search temporarily unavailable — try a different backend in AI Plugin settings."
 )
 _REQUEST_TIMEOUT = 10  # seconds
 
@@ -111,7 +111,7 @@ class WebSearchTool:
         """
         url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; AIHub/0.1; +https://github.com/bigbabol1/AI-plugin)",
+            "User-Agent": "Mozilla/5.0 (compatible; AIPlugin/0.1; +https://github.com/bigbabol1/AI-plugin)",
             "Accept-Language": "en-US,en;q=0.9",
         }
         async with aiohttp.ClientSession() as session:
@@ -136,7 +136,7 @@ class WebSearchTool:
 
     async def _search_brave(self, query: str) -> str:
         if not self._brave_key:
-            return "Brave Search API key not configured — add it in AI Hub settings."
+            return "Brave Search API key not configured — add it in AI Plugin settings."
         url = "https://api.search.brave.com/res/v1/web/search"
         headers = {
             "Accept": "application/json",
@@ -152,7 +152,7 @@ class WebSearchTool:
                 timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
             ) as resp:
                 if resp.status == 401:
-                    return "Brave Search: invalid API key — check AI Hub settings."
+                    return "Brave Search: invalid API key — check AI Plugin settings."
                 if resp.status == 429:
                     return "Brave Search quota exceeded for today. Try again tomorrow."
                 resp.raise_for_status()
@@ -169,7 +169,7 @@ class WebSearchTool:
 
     async def _search_searxng(self, query: str) -> str:
         if not self._searxng_url:
-            return "SearXNG URL not configured — add it in AI Hub settings."
+            return "SearXNG URL not configured — add it in AI Plugin settings."
         base = self._searxng_url.rstrip("/")
         url = f"{base}/search"
         params = {
@@ -199,7 +199,7 @@ class WebSearchTool:
 
     async def _search_tavily(self, query: str) -> str:
         if not self._tavily_key:
-            return "Tavily API key not configured — add it in AI Hub settings."
+            return "Tavily API key not configured — add it in AI Plugin settings."
         url = "https://api.tavily.com/search"
         payload = {
             "api_key": self._tavily_key,
@@ -213,7 +213,7 @@ class WebSearchTool:
                 timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
             ) as resp:
                 if resp.status == 401:
-                    return "Tavily: invalid API key — check AI Hub settings."
+                    return "Tavily: invalid API key — check AI Plugin settings."
                 if resp.status == 429:
                     return "Tavily quota exceeded. Try again tomorrow."
                 resp.raise_for_status()

@@ -1,4 +1,4 @@
-"""Shared types and utilities for AI Hub provider adapters.
+"""Shared types and utilities for AI Plugin provider adapters.
 
 Keeps provider-specific adapters (openai_compat.py, future Gemini/Anthropic)
 DRY by centralising the data structures and schema conversion helpers.
