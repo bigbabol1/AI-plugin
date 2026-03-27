@@ -69,6 +69,7 @@ from .const import (
     DEFAULT_WEB_SEARCH_BACKEND,
     DEFAULT_XML_FALLBACK,
     DOMAIN,
+    SYSTEM_PROMPT_DEFAULT,
     ERROR_CANNOT_CONNECT,
     ERROR_INVALID_URL,
     ERROR_MODEL_REQUIRED,
@@ -172,7 +173,7 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
         {
             vol.Optional(
                 CONF_SYSTEM_PROMPT,
-                default=current.get(CONF_SYSTEM_PROMPT, ""),
+                default=current.get(CONF_SYSTEM_PROMPT, SYSTEM_PROMPT_DEFAULT),
             ): selector.TemplateSelector(),
             vol.Optional(
                 CONF_CONTEXT_WINDOW,
