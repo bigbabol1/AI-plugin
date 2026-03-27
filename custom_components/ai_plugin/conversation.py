@@ -75,6 +75,9 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
     ) -> ConversationResult:
         """Process a user message from HA Assist and return a reply."""
         conversation_id = user_input.conversation_id or ulid_now()
+        user_id: str | None = (
+            getattr(user_input.context, "user_id", None) if user_input.context else None
+        )
 
         try:
             reply = await self._orchestrator.async_process(
@@ -82,6 +85,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 conversation_id=conversation_id,
                 language=user_input.language,
                 device_id=user_input.device_id,
+                user_id=user_id,
             )
         except OrchestratorError as exc:
             _LOGGER.error("AI Plugin error processing message: %s", exc)

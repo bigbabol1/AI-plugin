@@ -150,6 +150,7 @@ class Orchestrator:
         conversation_id: str,
         language: str,
         device_id: str | None = None,
+        user_id: str | None = None,
     ) -> str:
         """Process a user message and return the assistant's reply.
 
@@ -215,9 +216,9 @@ class Orchestrator:
             #    c) Plain completion (no tools)
             try:
                 if tool_schemas and self._xml_fallback:
-                    reply = await self._xml_tool_loop(messages, tool_schemas)
+                    reply = await self._xml_tool_loop(messages, tool_schemas, user_id)
                 elif tool_schemas:
-                    reply = await self._tool_loop(messages, tool_schemas)
+                    reply = await self._tool_loop(messages, tool_schemas, user_id)
                 else:
                     reply = await self._provider.async_complete(messages)
             except Exception:
@@ -237,6 +238,7 @@ class Orchestrator:
         self,
         messages: list[dict],
         tool_schemas: list[dict],
+        user_id: str | None = None,
     ) -> str:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
@@ -264,7 +266,7 @@ class Orchestrator:
                 messages.append(tc.to_assistant_message())
 
             for tc in response.tool_calls:
-                result = await self._dispatch_tool(tc.name, tc.arguments)
+                result = await self._dispatch_tool(tc.name, tc.arguments, user_id)
                 messages.append(tc.to_tool_result_message(result))
 
         suffix = " [Note: reached tool call limit — response may be incomplete.]"
@@ -274,6 +276,7 @@ class Orchestrator:
         self,
         messages: list[dict],
         tool_schemas: list[dict],
+        user_id: str | None = None,
     ) -> str:
         """XML fallback tool loop for models without native function calling.
 
@@ -334,15 +337,15 @@ class Orchestrator:
                     args = _json.loads(raw_args.strip())
                 except _json.JSONDecodeError:
                     args = {}
-                result = await self._dispatch_tool(name, args)
+                result = await self._dispatch_tool(name, args, user_id)
                 patched.append({"role": "user", "content": f"Tool result for {name}: {result}"})
 
         return reply + " [Note: reached tool call limit — response may be incomplete.]"
 
-    async def _dispatch_tool(self, name: str, arguments: dict) -> str:
+    async def _dispatch_tool(self, name: str, arguments: dict, user_id: str | None = None) -> str:
         """Route a tool call to memory, web search, or MCP, never raises."""
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
-            return await self._memory.call_tool(name, arguments)
+            return await self._memory.call_tool(name, arguments, user_id=user_id)
         if name == "web_search" and self._web_search is not None:
             query = arguments.get("query", "")
             return await self._web_search.async_search(query)
