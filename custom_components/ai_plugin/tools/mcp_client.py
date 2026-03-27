@@ -135,17 +135,12 @@ class _MCPServerConnection:
         return list(self._tools)
 
     async def async_start(self) -> None:
-        """Start the background connection task and wait until CONNECTED."""
+        """Start the background connection task and return immediately.
+
+        Connection happens asynchronously — tools become available once the
+        server reaches CONNECTED state.  async_setup_entry is not blocked.
+        """
         self._task = asyncio.ensure_future(self._run_with_retry())
-        try:
-            await asyncio.wait_for(self._ready.wait(), timeout=_CONNECT_TIMEOUT)
-        except TimeoutError:
-            _LOGGER.warning(
-                "AI Plugin MCP: server %r did not connect within %ss — "
-                "tools from this server will be unavailable",
-                self._name,
-                _CONNECT_TIMEOUT,
-            )
 
     async def async_stop(self) -> None:
         """Signal shutdown and wait for the background task to finish."""
@@ -330,13 +325,14 @@ class MCPToolRegistry:
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     async def async_setup(self) -> None:
-        """Connect all configured MCP servers.  Called from async_setup_entry."""
-        if not self._servers:
-            return
-        await asyncio.gather(
-            *(s.async_start() for s in self._servers), return_exceptions=True
-        )
-        self._rebuild_tool_index()
+        """Kick off background connections for all configured MCP servers.
+
+        Returns immediately — connections happen in the background so
+        async_setup_entry (and HA startup) are not blocked.  Tools become
+        available as each server reaches CONNECTED state.
+        """
+        for server in self._servers:
+            await server.async_start()
 
     async def async_teardown(self) -> None:
         """Disconnect all servers and kill stdio subprocesses.
