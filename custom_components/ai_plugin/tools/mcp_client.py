@@ -50,18 +50,6 @@ from ..providers import openai_tool_schema
 _LOGGER = logging.getLogger(__name__)
 
 
-class _StderrToLogger:
-    """File-like writer that routes subprocess stderr into the HA logger."""
-
-    def write(self, text: str) -> int:
-        text = text.rstrip()
-        if text:
-            _LOGGER.warning("AI Plugin MCP (subprocess): %s", text)
-        return len(text)
-
-    def flush(self) -> None:
-        pass
-
 
 def _create_ssl_context() -> ssl.SSLContext:
     """Build an SSL context — must run in an executor (load_verify_locations is blocking I/O)."""
@@ -279,17 +267,31 @@ class _MCPServerConnection:
                 await self._shutdown.wait()
 
     async def _run_stdio(self) -> None:
-        command = self._config["command"]
+        import tempfile  # noqa: PLC0415
+
         params = StdioServerParameters(
-            command=_resolve_command(command),
+            command=_resolve_command(self._config["command"]),
             args=self._config.get("args", []),
             env=self._config.get("env"),
         )
-        async with stdio_client(params, errlog=_StderrToLogger()) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                await self._on_connected(session)
-                await self._shutdown.wait()
+        # Use a real temp file so anyio gets a valid file descriptor for stderr.
+        # We read and log its contents after the session ends (or fails).
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errfile:
+            try:
+                async with stdio_client(params, errlog=errfile) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        await self._on_connected(session)
+                        await self._shutdown.wait()
+            finally:
+                errfile.seek(0)
+                stderr_out = errfile.read().strip()
+                if stderr_out:
+                    _LOGGER.warning(
+                        "AI Plugin MCP subprocess stderr for %r:\n%s",
+                        self._name,
+                        stderr_out,
+                    )
 
     async def _on_connected(self, session: ClientSession) -> None:
         """Cache tool list and signal readiness after successful connection."""
