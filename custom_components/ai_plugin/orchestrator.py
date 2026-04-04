@@ -30,11 +30,14 @@ from .const import (
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_CONTEXT_WINDOW,
+    CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_MODEL,
     CONF_RESPONSE_TIMEOUT,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
+    CONF_TEMPERATURE,
+    CONF_TOP_P,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_ENABLED,
     CONF_XML_FALLBACK,
@@ -122,11 +125,17 @@ class Orchestrator:
     def _build_provider(self) -> AbstractProvider:
         """Build provider from current entry options."""
         opts = self._entry.options
+        raw_temp = opts.get(CONF_TEMPERATURE)
+        raw_top_p = opts.get(CONF_TOP_P)
+        raw_max_tokens = opts.get(CONF_MAX_TOKENS, 0)
         return OpenAICompatProvider(
             base_url=opts.get(CONF_BASE_URL, DEFAULT_BASE_URL),
             model=opts.get(CONF_MODEL, ""),
             api_key=opts.get(CONF_API_KEY) or None,
             timeout=opts.get(CONF_RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT),
+            temperature=float(raw_temp) if raw_temp is not None else None,
+            top_p=float(raw_top_p) if raw_top_p is not None else None,
+            max_tokens=int(raw_max_tokens) if raw_max_tokens else None,
         )
 
     def _build_system_prompt(self, voice_mode: bool) -> str:

@@ -67,6 +67,9 @@
           "xml_fallback": "XML tool calling (experimental)",
           "max_tool_iterations": "Tool call limit",
           "response_timeout": "Timeout (seconds)",
+          "temperature": "Temperature",
+          "top_p": "Top P",
+          "max_tokens": "Max tokens (output)",
           "use_ha_mcp": "Connect to Home Assistant's built-in MCP server",
           "ha_mcp_token": "Long-lived access token"
         },
@@ -78,6 +81,9 @@
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "response_timeout": "How long to wait for the AI before giving up.",
+          "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
+          "top_p": "Nucleus sampling threshold. Leave blank to use the model's default.",
+          "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit.",
           "use_ha_mcp": "Gives AI Plugin access to your sensors, devices, and automations via HA's built-in MCP server.",
           "ha_mcp_token": "Create one in your HA profile → Long-lived access tokens (scroll to the bottom of the page)."
         }
@@ -160,7 +166,10 @@
           "voice_mode": "Use compact prompts for voice",
           "xml_fallback": "XML tool calling (experimental)",
           "max_tool_iterations": "Tool call limit",
-          "response_timeout": "Timeout (seconds)"
+          "response_timeout": "Timeout (seconds)",
+          "temperature": "Temperature",
+          "top_p": "Top P",
+          "max_tokens": "Max tokens (output)"
         },
         "data_description": {
           "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
@@ -169,7 +178,10 @@
           "voice_mode": "Shorter responses optimized for text-to-speech.",
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
-          "response_timeout": "How long to wait for the AI before giving up."
+          "response_timeout": "How long to wait for the AI before giving up.",
+          "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
+          "top_p": "Nucleus sampling threshold. Leave blank to use the model's default.",
+          "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit."
         }
       },
       "mcp_servers": {

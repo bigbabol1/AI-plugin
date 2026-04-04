@@ -30,6 +30,11 @@ CONF_XML_FALLBACK = "xml_fallback"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
 
+# Sampling parameters (None = omit from request, let the provider use its default)
+CONF_TEMPERATURE = "temperature"
+CONF_TOP_P = "top_p"
+CONF_MAX_TOKENS = "max_tokens"  # 0 = omit (unlimited)
+
 # MCP server list (list of dicts: {transport, url|command, args, env})
 CONF_MCP_SERVERS = "mcp_servers"
 

@@ -46,6 +46,7 @@ from .const import (
     CONF_BRAVE_API_KEY,
     CONF_CONTEXT_WINDOW,
     CONF_MAX_RESULTS,
+    CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_MCP_SERVERS,
     CONF_MODEL,
@@ -55,6 +56,8 @@ from .const import (
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
     CONF_TAVILY_API_KEY,
+    CONF_TEMPERATURE,
+    CONF_TOP_P,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
@@ -217,6 +220,39 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
                     min=5,
                     max=120,
                     step=5,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_TEMPERATURE,
+                description={"suggested_value": current.get(CONF_TEMPERATURE)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.0,
+                    max=2.0,
+                    step=0.05,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_TOP_P,
+                description={"suggested_value": current.get(CONF_TOP_P)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.0,
+                    max=1.0,
+                    step=0.05,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_MAX_TOKENS,
+                description={"suggested_value": current.get(CONF_MAX_TOKENS)},
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=32768,
+                    step=1,
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
@@ -450,10 +486,13 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.FlowResult:
         """Step 4: Advanced settings + optional HA MCP quick-connect."""
         if user_input is not None:
-            # Coerce number selector floats to int
-            for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS):
+            # Coerce number selector outputs to their correct types
+            for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS, CONF_MAX_TOKENS):
                 if key in user_input:
                     user_input[key] = int(user_input[key])
+            for key in (CONF_TEMPERATURE, CONF_TOP_P):
+                if key in user_input:
+                    user_input[key] = float(user_input[key])
             # HA MCP quick-connect: build the server entry and append to mcp_servers
             use_ha_mcp = bool(user_input.pop("use_ha_mcp", False))
             ha_mcp_token = str(user_input.pop("ha_mcp_token", "")).strip()
@@ -679,9 +718,12 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Edit advanced settings."""
         if user_input is not None:
-            for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS):
+            for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS, CONF_MAX_TOKENS):
                 if key in user_input:
                     user_input[key] = int(user_input[key])
+            for key in (CONF_TEMPERATURE, CONF_TOP_P):
+                if key in user_input:
+                    user_input[key] = float(user_input[key])
             self._options.update(user_input)
             return self.async_create_entry(title="", data=self._options)
 

@@ -10,6 +10,7 @@ pip dependencies").
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -22,6 +23,10 @@ _LOGGER = logging.getLogger(__name__)
 
 # Config flow model-fetch timeout (separate from completion timeout)
 _MODEL_FETCH_TIMEOUT = 10
+
+# Strips <think>...</think> blocks produced by reasoning models (DeepSeek R1,
+# QwQ, etc.) before returning content to the user or storing in history.
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 class OpenAICompatProvider(AbstractProvider):
@@ -46,11 +51,17 @@ class OpenAICompatProvider(AbstractProvider):
         model: str,
         api_key: str | None,
         timeout: int,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
         self._timeout = timeout
+        self._temperature = temperature
+        self._top_p = top_p
+        self._max_tokens = max_tokens
         self._session: aiohttp.ClientSession | None = None
 
     def _build_headers(self) -> dict[str, str]:
@@ -86,6 +97,12 @@ class OpenAICompatProvider(AbstractProvider):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        if self._temperature is not None:
+            payload["temperature"] = self._temperature
+        if self._top_p is not None:
+            payload["top_p"] = self._top_p
+        if self._max_tokens:
+            payload["max_tokens"] = self._max_tokens
 
         try:
             async with session.post(
@@ -105,8 +122,20 @@ class OpenAICompatProvider(AbstractProvider):
                     raise OrchestratorError(
                         f"Unexpected response format: {exc}"
                     ) from exc
+                content = message.get("content")
+                # Strip <think>...</think> reasoning blocks produced by models
+                # like DeepSeek R1 and QwQ. Log at DEBUG so they're still visible
+                # in HA logs when troubleshooting, but never shown to the user.
+                if content:
+                    stripped = _THINK_RE.sub("", content).strip()
+                    if stripped != content:
+                        _LOGGER.debug(
+                            "AI Plugin: stripped thinking tokens (%d chars) from response",
+                            len(content) - len(stripped),
+                        )
+                        content = stripped
                 return ChatResponse(
-                    content=message.get("content"),
+                    content=content,
                     tool_calls=normalize_tool_calls(message),
                 )
 
