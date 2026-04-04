@@ -230,8 +230,8 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
                 selector.NumberSelectorConfig(
                     min=0.0,
                     max=2.0,
-                    step=0.05,
-                    mode=selector.NumberSelectorMode.BOX,
+                    step=0.1,
+                    mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
             vol.Optional(
@@ -242,7 +242,7 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
                     min=0.0,
                     max=1.0,
                     step=0.05,
-                    mode=selector.NumberSelectorMode.BOX,
+                    mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
             vol.Optional(
@@ -251,9 +251,9 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0,
-                    max=32768,
-                    step=1,
-                    mode=selector.NumberSelectorMode.BOX,
+                    max=8192,
+                    step=256,
+                    mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
         }
