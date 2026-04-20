@@ -1,22 +1,4 @@
-"""AI Plugin conversation entity — integrates with HA Assist pipeline.
-
-This is the platform file for Platform.CONVERSATION. HA calls
-async_setup_entry with async_add_entities, and we register one
-AIPluginConversationEntity per config entry.
-
-┌──────────────────────────────────────────────────────────────┐
-│  HA Assist Pipeline                                           │
-│       │ ConversationInput (text, conv_id, language, ...)     │
-│       ▼                                                      │
-│  AIPluginConversationEntity.async_process()                     │
-│       │ delegates to Orchestrator.async_process()            │
-│       ▼                                                      │
-│  ConversationResult (IntentResponse with speech)             │
-│                                                              │
-│  Error path:                                                 │
-│  OrchestratorError → caught here → graceful error speech    │
-└──────────────────────────────────────────────────────────────┘
-"""
+"""AI Plugin conversation entity — integrates with HA Assist pipeline."""
 
 from __future__ import annotations
 
@@ -29,7 +11,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.util.ulid import ulid_now
 
 from .const import DOMAIN
 from .exceptions import OrchestratorError
@@ -57,7 +38,6 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
 
     @property
     def supported_languages(self) -> list[str] | str:
-        """Return supported languages — '*' means all languages."""
         return "*"
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -77,14 +57,18 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         user_id: str | None = (
             getattr(user_input.context, "user_id", None) if user_input.context else None
         )
-        # Prefer HA's session conversation_id. Fall back to a stable per-user ID
-        # so context survives Assist panel close/reopen between commands.
-        if user_input.conversation_id:
-            conversation_id = user_input.conversation_id
-        elif user_id:
-            conversation_id = f"ai_plugin_user_{user_id}"
-        else:
-            conversation_id = f"ai_plugin_{self._entry.entry_id}"
+        # Always use a stable per-user conversation ID so context persists
+        # across Assist panel reopen, HA restarts, and session boundaries.
+        # HA's ephemeral session conversation_id is intentionally ignored —
+        # it resets every time the Assist panel is opened.
+        conversation_id = (
+            f"ai_plugin_user_{user_id}" if user_id
+            else f"ai_plugin_{self._entry.entry_id}"
+        )
+        _LOGGER.info(
+            "AI Plugin: conv_id=%s user_id=%s input=%r",
+            conversation_id, user_id, user_input.text[:80],
+        )
 
         try:
             reply = await self._orchestrator.async_process(
