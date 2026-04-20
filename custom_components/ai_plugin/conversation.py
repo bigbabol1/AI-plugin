@@ -74,10 +74,17 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         self, user_input: ConversationInput
     ) -> ConversationResult:
         """Process a user message from HA Assist and return a reply."""
-        conversation_id = user_input.conversation_id or ulid_now()
         user_id: str | None = (
             getattr(user_input.context, "user_id", None) if user_input.context else None
         )
+        # Prefer HA's session conversation_id. Fall back to a stable per-user ID
+        # so context survives Assist panel close/reopen between commands.
+        if user_input.conversation_id:
+            conversation_id = user_input.conversation_id
+        elif user_id:
+            conversation_id = f"ai_plugin_user_{user_id}"
+        else:
+            conversation_id = f"ai_plugin_{self._entry.entry_id}"
 
         try:
             reply = await self._orchestrator.async_process(
