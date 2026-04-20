@@ -225,25 +225,24 @@ class Orchestrator:
             #    c) Plain completion (no tools)
             try:
                 if tool_schemas and self._xml_fallback:
-                    reply, tool_context = await self._xml_tool_loop(messages, tool_schemas, user_id)
+                    reply, tool_msgs = await self._xml_tool_loop(messages, tool_schemas, user_id)
                 elif tool_schemas:
-                    reply, tool_context = await self._tool_loop(messages, tool_schemas, user_id)
+                    reply, tool_msgs = await self._tool_loop(messages, tool_schemas, user_id)
                 else:
                     reply = await self._provider.async_complete(messages)
-                    tool_context = ""
+                    tool_msgs = []
             except Exception:
                 # Roll back the user turn so history stays consistent.
                 await self._context_mgr.remove_last_turn(conversation_id)
                 raise
 
-            # 6. Append assistant reply to history.
-            # Strip XML tool-call markup (XML fallback path) before storing —
-            # raw <tool_call> tags in history confuse subsequent LLM turns.
-            # Prepend tool_context so subsequent turns know which entities were
-            # touched (e.g. "light.dora"), preserving pronoun/reference resolution.
+            # 6. Append tool call/result messages then the assistant reply to history.
+            # Storing tool messages in native OpenAI format gives the LLM full
+            # structured context on the next turn (entity IDs, call results) so
+            # it can resolve references like "turn it on again" correctly.
+            for msg in tool_msgs:
+                await self._context_mgr.add_raw_message(conversation_id, msg)
             stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
-            if tool_context:
-                stored_reply = f"{tool_context}\n\n{stored_reply}"
             await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
 
         return reply
@@ -253,23 +252,24 @@ class Orchestrator:
         messages: list[dict],
         tool_schemas: list[dict],
         user_id: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, list[dict]]:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
-        Returns (reply_text, tool_context) where tool_context is a compact
-        record of every tool call and its result, stored in history so that
-        subsequent turns can resolve entity references ("turn it on again").
-        tool_context is empty string when no tool calls occurred.
+        Returns (reply_text, history_messages) where history_messages is the
+        list of tool-call assistant messages and tool-result messages in native
+        OpenAI format.  Storing these in history gives the LLM full structured
+        context on subsequent turns (entity IDs, results, etc.) — far more
+        reliable than a text summary for pronoun/reference resolution.
         """
         last_response = None
-        tool_log: list[str] = []
+        history_messages: list[dict] = []
 
         for iteration in range(self._max_tool_iterations):
             response = await self._provider.async_chat(messages, tool_schemas)
             last_response = response
 
             if not response.has_tool_calls:
-                return response.reply_text(), "\n".join(tool_log)
+                return response.reply_text(), history_messages
 
             _LOGGER.debug(
                 "Tool loop iteration %d/%d: %d call(s): %s",
@@ -280,27 +280,29 @@ class Orchestrator:
             )
 
             for tc in response.tool_calls:
-                messages.append(tc.to_assistant_message())
+                msg = tc.to_assistant_message()
+                messages.append(msg)
+                history_messages.append(msg)
 
             for tc in response.tool_calls:
                 result = await self._dispatch_tool(tc.name, tc.arguments, user_id)
-                messages.append(tc.to_tool_result_message(result))
-                # Trim long results to avoid bloating history token count.
-                short = result[:300] + "…" if len(result) > 300 else result
-                tool_log.append(f"[{tc.name}({tc.arguments}) → {short}]")
+                msg = tc.to_tool_result_message(result)
+                messages.append(msg)
+                history_messages.append(msg)
 
         suffix = " [Note: reached tool call limit — response may be incomplete.]"
-        return (last_response.reply_text() if last_response else "") + suffix, "\n".join(tool_log)
+        return (last_response.reply_text() if last_response else "") + suffix, history_messages
 
     async def _xml_tool_loop(
         self,
         messages: list[dict],
         tool_schemas: list[dict],
         user_id: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, list[dict]]:
         """XML fallback tool loop for models without native function calling.
 
-        Returns (reply_text, tool_context) — same contract as _tool_loop.
+        Returns (reply_text, []) — XML path doesn't produce structured tool
+        messages, so history_messages is always empty.
         """
         import json as _json
         import re as _re
@@ -335,14 +337,12 @@ class Orchestrator:
             _re.DOTALL,
         )
 
-        tool_log: list[str] = []
-
         for iteration in range(self._max_tool_iterations):
             reply = await self._provider.async_complete(patched)
 
             matches = tool_call_re.findall(reply)
             if not matches:
-                return reply, "\n".join(tool_log)
+                return reply, []
 
             _LOGGER.debug(
                 "XML tool loop iteration %d/%d: %d call(s)",
@@ -357,10 +357,8 @@ class Orchestrator:
                     args = {}
                 result = await self._dispatch_tool(name, args, user_id)
                 patched.append({"role": "user", "content": f"Tool result for {name}: {result}"})
-                short = result[:300] + "…" if len(result) > 300 else result
-                tool_log.append(f"[{name}({args}) → {short}]")
 
-        return reply + " [Note: reached tool call limit — response may be incomplete.]", "\n".join(tool_log)
+        return reply + " [Note: reached tool call limit — response may be incomplete.]", []
 
     async def _dispatch_tool(self, name: str, arguments: dict, user_id: str | None = None) -> str:
         """Route a tool call to memory, web search, or MCP, never raises."""

@@ -93,8 +93,17 @@ class ContextManager:
 
     # ── private token math ────────────────────────────────────────────────────
 
-    def _estimate_messages_tokens(self, messages: list[dict[str, str]]) -> int:
-        return sum(self.estimate_tokens(m.get("content", "")) for m in messages)
+    def _estimate_messages_tokens(self, messages: list[dict]) -> int:
+        total = 0
+        for m in messages:
+            content = m.get("content")
+            if content:
+                total += self.estimate_tokens(str(content))
+            elif "tool_calls" in m:
+                total += self.estimate_tokens(str(m["tool_calls"]))
+            else:
+                total += 1
+        return total
 
     def _budget(self, system_prompt: str) -> tuple[int, int]:
         """Return (soft_limit, hard_limit) for history tokens."""
@@ -105,11 +114,16 @@ class ContextManager:
     # ── public API ────────────────────────────────────────────────────────────
 
     async def add_turn(self, conv_id: str, role: str, content: str) -> None:
-        """Append a single message to the conversation history."""
+        """Append a single text message to the conversation history."""
         async with self._get_lock(conv_id):
             self._history.setdefault(conv_id, []).append(
                 {"role": role, "content": content}
             )
+
+    async def add_raw_message(self, conv_id: str, message: dict) -> None:
+        """Append a pre-formatted message dict (e.g. tool call or tool result)."""
+        async with self._get_lock(conv_id):
+            self._history.setdefault(conv_id, []).append(message)
 
     async def get_messages(
         self,
@@ -126,10 +140,13 @@ class ContextManager:
         async with self._get_lock(conv_id):
             history = list(self._history.get(conv_id, []))
 
-        # Hard limit: drop oldest pairs until we fit.
+        # Hard limit: drop oldest messages until we fit.
+        # Drop from the front until the first user message so we never start
+        # with an orphaned tool or assistant message.
         while history and self._estimate_messages_tokens(history) > hard_limit:
-            # Drop in pairs (user + assistant) to keep history coherent.
-            history = history[2:]
+            history = history[1:]
+        while history and history[0].get("role") != "user":
+            history = history[1:]
 
         return [{"role": "system", "content": system_prompt}, *history]
 
@@ -162,8 +179,13 @@ class ContextManager:
         if len(history) <= keep_count:
             return  # Not enough history to split; hard limit will handle it.
 
-        to_summarize = history[:-keep_count]
+        to_summarize_raw = history[:-keep_count]
         to_keep = history[-keep_count:]
+        # Summarizer uses async_complete (no tool support) — filter to text-only.
+        to_summarize = [
+            m for m in to_summarize_raw
+            if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)
+        ]
 
         _LOGGER.info(
             "AI Plugin: summarizing %d messages for conv_id=%s "
