@@ -33,7 +33,7 @@ class ToolCall:
         """
         return {
             "role": "assistant",
-            "content": None,
+            "content": "",  # empty string instead of null — Ollama rejects null
             "tool_calls": [
                 {
                     "id": self.id,
