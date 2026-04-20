@@ -225,11 +225,12 @@ class Orchestrator:
             #    c) Plain completion (no tools)
             try:
                 if tool_schemas and self._xml_fallback:
-                    reply = await self._xml_tool_loop(messages, tool_schemas, user_id)
+                    reply, tool_context = await self._xml_tool_loop(messages, tool_schemas, user_id)
                 elif tool_schemas:
-                    reply = await self._tool_loop(messages, tool_schemas, user_id)
+                    reply, tool_context = await self._tool_loop(messages, tool_schemas, user_id)
                 else:
                     reply = await self._provider.async_complete(messages)
+                    tool_context = ""
             except Exception:
                 # Roll back the user turn so history stays consistent.
                 await self._context_mgr.remove_last_turn(conversation_id)
@@ -238,7 +239,11 @@ class Orchestrator:
             # 6. Append assistant reply to history.
             # Strip XML tool-call markup (XML fallback path) before storing —
             # raw <tool_call> tags in history confuse subsequent LLM turns.
+            # Prepend tool_context so subsequent turns know which entities were
+            # touched (e.g. "light.dora"), preserving pronoun/reference resolution.
             stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
+            if tool_context:
+                stored_reply = f"{tool_context}\n\n{stored_reply}"
             await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
 
         return reply
@@ -248,20 +253,23 @@ class Orchestrator:
         messages: list[dict],
         tool_schemas: list[dict],
         user_id: str | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
-        Exits when the LLM returns a plain text reply or max_tool_iterations
-        is reached. On limit, appends a note rather than silently truncating.
+        Returns (reply_text, tool_context) where tool_context is a compact
+        record of every tool call and its result, stored in history so that
+        subsequent turns can resolve entity references ("turn it on again").
+        tool_context is empty string when no tool calls occurred.
         """
         last_response = None
+        tool_log: list[str] = []
 
         for iteration in range(self._max_tool_iterations):
             response = await self._provider.async_chat(messages, tool_schemas)
             last_response = response
 
             if not response.has_tool_calls:
-                return response.reply_text()
+                return response.reply_text(), "\n".join(tool_log)
 
             _LOGGER.debug(
                 "Tool loop iteration %d/%d: %d call(s): %s",
@@ -277,23 +285,22 @@ class Orchestrator:
             for tc in response.tool_calls:
                 result = await self._dispatch_tool(tc.name, tc.arguments, user_id)
                 messages.append(tc.to_tool_result_message(result))
+                # Trim long results to avoid bloating history token count.
+                short = result[:300] + "…" if len(result) > 300 else result
+                tool_log.append(f"[{tc.name}({tc.arguments}) → {short}]")
 
         suffix = " [Note: reached tool call limit — response may be incomplete.]"
-        return (last_response.reply_text() if last_response else "") + suffix
+        return (last_response.reply_text() if last_response else "") + suffix, "\n".join(tool_log)
 
     async def _xml_tool_loop(
         self,
         messages: list[dict],
         tool_schemas: list[dict],
         user_id: str | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         """XML fallback tool loop for models without native function calling.
 
-        Experimental — enabled via CONF_XML_FALLBACK.  Injects an XML tool
-        specification into the system message and parses <tool_call> tags
-        in the LLM's text responses.
-
-        ⚠ Not reliable with models that weren't trained on XML tool format.
+        Returns (reply_text, tool_context) — same contract as _tool_loop.
         """
         import json as _json
         import re as _re
@@ -328,12 +335,14 @@ class Orchestrator:
             _re.DOTALL,
         )
 
+        tool_log: list[str] = []
+
         for iteration in range(self._max_tool_iterations):
             reply = await self._provider.async_complete(patched)
 
             matches = tool_call_re.findall(reply)
             if not matches:
-                return reply  # Final answer — no tool calls.
+                return reply, "\n".join(tool_log)
 
             _LOGGER.debug(
                 "XML tool loop iteration %d/%d: %d call(s)",
@@ -348,8 +357,10 @@ class Orchestrator:
                     args = {}
                 result = await self._dispatch_tool(name, args, user_id)
                 patched.append({"role": "user", "content": f"Tool result for {name}: {result}"})
+                short = result[:300] + "…" if len(result) > 300 else result
+                tool_log.append(f"[{name}({args}) → {short}]")
 
-        return reply + " [Note: reached tool call limit — response may be incomplete.]"
+        return reply + " [Note: reached tool call limit — response may be incomplete.]", "\n".join(tool_log)
 
     async def _dispatch_tool(self, name: str, arguments: dict, user_id: str | None = None) -> str:
         """Route a tool call to memory, web search, or MCP, never raises."""

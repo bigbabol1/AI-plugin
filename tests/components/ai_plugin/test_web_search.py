@@ -366,12 +366,13 @@ async def test_orchestrator_xml_fallback_parses_tool_call() -> None:
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = None
+    orch._memory = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = True
     orch._web_search = mock_web
     orch._provider = mock_provider
 
-    reply = await orch._xml_tool_loop(
+    reply, _tool_ctx = await orch._xml_tool_loop(
         [{"role": "system", "content": "sys"}, {"role": "user", "content": "news?"}],
         [TOOL_SCHEMA],
     )
