@@ -115,6 +115,11 @@ class Orchestrator:
         # conversation_id to prevent interleaved history corruption.
         self._conv_locks: dict[str, asyncio.Lock] = {}
 
+        # Tracks most recently controlled HA entities per conversation.
+        # Injected into system prompt so models resolve 'it'/'that' even
+        # if message history is unavailable.
+        self._last_entities: dict[str, str] = {}
+
     def _get_conv_lock(self, conv_id: str) -> asyncio.Lock:
         if not hasattr(self, "_conv_locks"):
             self._conv_locks = {}
@@ -147,11 +152,7 @@ class Orchestrator:
         3. Default standard prompt
         """
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
-        if custom:
-            return custom
-        if voice_mode:
-            return SYSTEM_PROMPT_VOICE
-        return SYSTEM_PROMPT_DEFAULT
+        return custom or (SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT)
 
     async def async_process(
         self,
@@ -186,7 +187,12 @@ class Orchestrator:
         voice_mode: bool = (device_id is not None) or bool(
             self._entry.options.get(CONF_VOICE_MODE, False)
         )
-        system_prompt = self._build_system_prompt(voice_mode)
+        base_prompt = self._build_system_prompt(voice_mode)
+        last = self._last_entities.get(conversation_id)
+        system_prompt = (
+            base_prompt + f"\n\n[LAST ACTION]\n{last}"
+            if last else base_prompt
+        )
 
         # Serialise concurrent requests for the same conversation to prevent
         # interleaved history and summarisation races.
@@ -237,13 +243,20 @@ class Orchestrator:
                 raise
 
             # 6. Append tool call/result messages then the assistant reply to history.
-            # Storing tool messages in native OpenAI format gives the LLM full
-            # structured context on the next turn (entity IDs, call results) so
-            # it can resolve references like "turn it on again" correctly.
             for msg in tool_msgs:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
             stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
             await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
+
+            # Track last-controlled entities for explicit context injection.
+            entity_ctx = self._extract_entity_context(tool_msgs)
+            if entity_ctx:
+                self._last_entities[conversation_id] = entity_ctx
+            history_depth = len(self._context_mgr.get_history(conversation_id))
+            _LOGGER.info(
+                "AI Plugin: conv_id=%s history_depth=%d last_entity=%s",
+                conversation_id, history_depth, self._last_entities.get(conversation_id),
+            )
 
         return reply
 
@@ -370,6 +383,29 @@ class Orchestrator:
         if self._mcp is not None:
             return await self._mcp.call_tool(name, arguments)
         return f"[Tool {name!r} unavailable — no handler configured]"
+
+    def _extract_entity_context(self, tool_msgs: list[dict]) -> str | None:
+        """Extract entity IDs from tool call arguments for context injection."""
+        import json as _json
+        parts: list[str] = []
+        for msg in tool_msgs:
+            if msg.get("role") == "assistant" and "tool_calls" in msg:
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    args_raw = fn.get("arguments", "{}")
+                    try:
+                        args = _json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                        entity = (
+                            args.get("entity_id")
+                            or args.get("name")
+                            or args.get("entity")
+                        )
+                        if entity:
+                            parts.append(f"{name}({entity})")
+                    except Exception:  # noqa: BLE001
+                        pass
+        return "; ".join(parts) if parts else None
 
     async def async_close(self) -> None:
         """Close provider sessions. Called on integration unload."""
