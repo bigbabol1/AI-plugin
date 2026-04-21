@@ -5,10 +5,18 @@ endpoint that speaks the OpenAI chat completions API.
 
 Uses raw aiohttp — no openai SDK dependency per CEO plan ("zero new
 pip dependencies").
+
+Ollama note: the OpenAI-compat shim at /v1/chat/completions silently
+drops unknown body fields, so per-request `options.num_ctx` has no
+effect. When we detect Ollama (via /api/version), we switch to the
+native /api/chat endpoint which honours `options.num_ctx` and reloads
+the runner at the requested context size. Non-Ollama backends keep
+using the OpenAI endpoint.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -21,28 +29,27 @@ from .base import AbstractProvider
 
 _LOGGER = logging.getLogger(__name__)
 
-# Config flow model-fetch timeout (separate from completion timeout)
 _MODEL_FETCH_TIMEOUT = 10
+_PROBE_TIMEOUT = 3
 
-# Strips <think>...</think> blocks produced by reasoning models (DeepSeek R1,
-# QwQ, etc.) before returning content to the user or storing in history.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_v1(base_url: str) -> str:
+    """Return the server root with any trailing /v1 segment removed."""
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    return root
 
 
 class OpenAICompatProvider(AbstractProvider):
     """Provider adapter for OpenAI-compatible endpoints.
 
-    ┌────────────────────────────────────────────────────────┐
-    │  OpenAICompatProvider                                   │
-    │                                                        │
-    │  base_url ──► POST /chat/completions ──► str reply     │
-    │                                                        │
-    │  Error paths:                                          │
-    │  • 401/403       → InvalidAuth (re-raised as Orc.Err.) │
-    │  • ConnectorError → CannotConnect (→ Orc.Err.)         │
-    │  • Timeout        → OrchestratorError                  │
-    │  • Bad JSON       → OrchestratorError                  │
-    └────────────────────────────────────────────────────────┘
+    Two code paths:
+    • OpenAI spec (/v1/chat/completions) — default.
+    • Ollama native (/api/chat) — used when server identifies as Ollama.
+      Needed so options.num_ctx actually reaches the runtime.
     """
 
     def __init__(
@@ -57,6 +64,7 @@ class OpenAICompatProvider(AbstractProvider):
         context_window: int | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._server_root = _strip_v1(self._base_url)
         self._model = model
         self._api_key = api_key
         self._timeout = timeout
@@ -65,6 +73,8 @@ class OpenAICompatProvider(AbstractProvider):
         self._max_tokens = max_tokens
         self._context_window = context_window
         self._session: aiohttp.ClientSession | None = None
+        self._is_ollama: bool | None = None
+        self._probe_lock = asyncio.Lock()
 
     def _build_headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -77,19 +87,65 @@ class OpenAICompatProvider(AbstractProvider):
             self._session = aiohttp.ClientSession(headers=self._build_headers())
         return self._session
 
+    async def _detect_ollama(self) -> bool:
+        """Probe /api/version once; cache the result.
+
+        Ollama returns {"version":"X.Y.Z"} at /api/version. OpenAI, xAI,
+        LM Studio, llama.cpp all return 404. On any probe failure we
+        assume non-Ollama so behaviour falls back to the OpenAI path.
+        """
+        if self._is_ollama is not None:
+            return self._is_ollama
+        async with self._probe_lock:
+            if self._is_ollama is not None:
+                return self._is_ollama
+            url = f"{self._server_root}/api/version"
+            session = self._get_session()
+            try:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=_PROBE_TIMEOUT)
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        self._is_ollama = isinstance(data, dict) and "version" in data
+                        if self._is_ollama:
+                            _LOGGER.info(
+                                "AI Plugin: Ollama %s detected — using native /api/chat",
+                                data.get("version"),
+                            )
+                    else:
+                        self._is_ollama = False
+            except (aiohttp.ClientError, TimeoutError, ValueError):
+                self._is_ollama = False
+            return self._is_ollama
+
+    def _strip_think(self, content: str | None) -> str | None:
+        if not content:
+            return content
+        stripped = _THINK_RE.sub("", content).strip()
+        if stripped != content:
+            _LOGGER.debug(
+                "AI Plugin: stripped thinking tokens (%d chars) from response",
+                len(content) - len(stripped),
+            )
+            return stripped
+        return content
+
     async def async_chat(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
-        """Send messages (optionally with tool schemas) and return a ChatResponse.
+        """Dispatch to Ollama native or OpenAI-spec path based on server."""
+        if await self._detect_ollama():
+            return await self._chat_ollama(messages, tools)
+        return await self._chat_openai(messages, tools)
 
-        ChatResponse contains:
-        - content: the assistant's text reply (None when the LLM made a tool call)
-        - tool_calls: list of ToolCall objects to execute (empty for a text reply)
-
-        Raises OrchestratorError on any provider failure.
-        """
+    async def _chat_openai(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> ChatResponse:
         session = self._get_session()
         url = f"{self._base_url}/chat/completions"
         payload: dict[str, Any] = {
@@ -105,12 +161,6 @@ class OpenAICompatProvider(AbstractProvider):
             payload["top_p"] = self._top_p
         if self._max_tokens:
             payload["max_tokens"] = self._max_tokens
-        # Ollama-specific: its OpenAI-compat endpoint defaults num_ctx to 2048,
-        # truncating tool schemas + history server-side regardless of our
-        # client-side context budget. Pass it through as an "options" extension;
-        # non-Ollama backends ignore unknown fields.
-        if self._context_window:
-            payload["options"] = {"num_ctx": self._context_window}
 
         try:
             async with session.post(
@@ -130,23 +180,10 @@ class OpenAICompatProvider(AbstractProvider):
                     raise OrchestratorError(
                         f"Unexpected response format: {exc}"
                     ) from exc
-                content = message.get("content")
-                # Strip <think>...</think> reasoning blocks produced by models
-                # like DeepSeek R1 and QwQ. Log at DEBUG so they're still visible
-                # in HA logs when troubleshooting, but never shown to the user.
-                if content:
-                    stripped = _THINK_RE.sub("", content).strip()
-                    if stripped != content:
-                        _LOGGER.debug(
-                            "AI Plugin: stripped thinking tokens (%d chars) from response",
-                            len(content) - len(stripped),
-                        )
-                        content = stripped
                 return ChatResponse(
-                    content=content,
+                    content=self._strip_think(message.get("content")),
                     tool_calls=normalize_tool_calls(message),
                 )
-
         except OrchestratorError:
             raise
         except aiohttp.ClientConnectorError as exc:
@@ -160,15 +197,72 @@ class OpenAICompatProvider(AbstractProvider):
         except aiohttp.ClientError as exc:
             raise OrchestratorError(f"HTTP error: {exc}") from exc
 
+    async def _chat_ollama(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> ChatResponse:
+        """Call Ollama's native /api/chat so options.num_ctx actually takes effect."""
+        session = self._get_session()
+        url = f"{self._server_root}/api/chat"
+        options: dict[str, Any] = {}
+        if self._temperature is not None:
+            options["temperature"] = self._temperature
+        if self._top_p is not None:
+            options["top_p"] = self._top_p
+        if self._max_tokens:
+            options["num_predict"] = self._max_tokens
+        if self._context_window:
+            options["num_ctx"] = self._context_window
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+        if options:
+            payload["options"] = options
+
+        try:
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=self._timeout),
+            ) as resp:
+                if resp.status in (401, 403):
+                    raise OrchestratorError(
+                        f"Invalid API key (HTTP {resp.status})"
+                    ) from None
+                resp.raise_for_status()
+                data = await resp.json(content_type=None)
+                message = data.get("message")
+                if not isinstance(message, dict):
+                    raise OrchestratorError(
+                        f"Unexpected Ollama response: missing 'message' ({list(data.keys())})"
+                    )
+                return ChatResponse(
+                    content=self._strip_think(message.get("content")),
+                    tool_calls=normalize_tool_calls(message),
+                )
+        except OrchestratorError:
+            raise
+        except aiohttp.ClientConnectorError as exc:
+            raise OrchestratorError(
+                f"Cannot connect to {self._server_root}: {exc}"
+            ) from exc
+        except TimeoutError as exc:
+            raise OrchestratorError(
+                f"Request timed out after {self._timeout}s"
+            ) from exc
+        except aiohttp.ClientError as exc:
+            raise OrchestratorError(f"HTTP error: {exc}") from exc
+
     async def async_complete(
         self,
         messages: list[dict[str, Any]],
     ) -> str:
-        """Backward-compatible wrapper: send messages, return reply text only.
-
-        Used by ContextManager.summarize_if_needed() and no-tools paths.
-        Delegates to async_chat().
-        """
+        """Send messages, return reply text only. Used for no-tools paths."""
         response = await self.async_chat(messages)
         if response.content is None:
             raise OrchestratorError("Unexpected response format: content is None")
@@ -202,11 +296,7 @@ async def async_fetch_models(
     base_url: str,
     api_key: str | None = None,
 ) -> list[str]:
-    """Standalone model fetch for use in the config flow.
-
-    Returns a list of model IDs, or raises CannotConnect on failure.
-    Creates and closes its own session (config flow runs once).
-    """
+    """Standalone model fetch for use in the config flow."""
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
