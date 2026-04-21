@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from .const import CONF_MCP_SERVERS, DOMAIN
 from .tools.memory import MemoryTool
 from .tools.mcp_client import MCPToolRegistry
+from .tools.ha_local import HALocalToolRegistry
 
 PLATFORMS = [Platform.CONVERSATION]
 
@@ -23,8 +24,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Native persistent memory tool (no external dependencies).
     memory = MemoryTool(hass.config.config_dir)
 
+    # Local discovery tools (list_areas / list_entities / get_entity /
+    # search_entities) hit HA registries directly — no MCP round-trip.
+    ha_local = HALocalToolRegistry(hass)
+
     # Store in hass.data so Orchestrator can retrieve it.
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"mcp": mcp, "memory": memory}
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "mcp": mcp,
+        "memory": memory,
+        "ha_local": ha_local,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

@@ -59,6 +59,7 @@ from .const import (
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
 from .providers.openai_compat import OpenAICompatProvider
+from .tools.ha_local import HALocalToolRegistry
 from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
 
@@ -93,6 +94,7 @@ class Orchestrator:
         )
         self._mcp: MCPToolRegistry | None = entry_data.get("mcp")
         self._memory: MemoryTool | None = entry_data.get("memory")
+        self._ha_local: HALocalToolRegistry | None = entry_data.get("ha_local")
 
         opts = entry.options
         # Use real schema token budget if MCPToolRegistry is available.
@@ -195,12 +197,11 @@ class Orchestrator:
         )
         base_prompt = self._build_system_prompt(voice_mode)
 
-        # Inject per-server static context (e.g. HA Assist device inventory).
-        # Must precede [LAST ACTION] so the inventory is established first.
+        # v0.5.15: no more [HOME CONTEXT] YAML dump. Small LLMs drown in it and
+        # hallucinate their way through inventory questions. The model instead
+        # calls discovery tools (list_areas / list_entities / get_entity /
+        # search_entities) on demand.
         sections: list[str] = [base_prompt]
-        if self._mcp is not None:
-            for ctx in self._mcp.get_static_contexts():
-                sections.append(f"[HOME CONTEXT]\n{ctx}")
         last = self._last_entities.get(conversation_id)
         if last:
             sections.append(f"[LAST ACTION]\n{last}")
@@ -221,12 +222,14 @@ class Orchestrator:
             # 3. Build the message list (system prompt + trimmed history).
             messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
 
-            # 4. Collect tool schemas: memory + web_search + MCP tools.
+            # 4. Collect tool schemas: ha_local + memory + web_search + MCP tools.
             tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
             if self._web_search is not None:
                 tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
             if self._memory is not None:
                 tool_schemas = [*MEMORY_TOOL_SCHEMAS, *tool_schemas]
+            if self._ha_local is not None:
+                tool_schemas = [*self._ha_local.get_schemas(), *tool_schemas]
 
             _LOGGER.debug(
                 "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
@@ -394,7 +397,9 @@ class Orchestrator:
         return reply + " [Note: reached tool call limit — response may be incomplete.]", []
 
     async def _dispatch_tool(self, name: str, arguments: dict, user_id: str | None = None) -> str:
-        """Route a tool call to memory, web search, or MCP, never raises."""
+        """Route a tool call to ha_local, memory, web search, or MCP. Never raises."""
+        if self._ha_local is not None and name in self._ha_local.tool_names:
+            return await self._ha_local.call_tool(name, arguments)
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             return await self._memory.call_tool(name, arguments, user_id=user_id)
         if name == "web_search" and self._web_search is not None:
