@@ -120,6 +120,7 @@ class _MCPServerConnection:
         self._state = _State.DISCONNECTED
         self._session: ClientSession | None = None
         self._tools: list[Any] = []          # list[mcp.types.Tool]
+        self._static_context: str = ""       # server prompt text (e.g. HA Assist device map)
         self._task: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
         self._shutdown = asyncio.Event()
@@ -134,6 +135,10 @@ class _MCPServerConnection:
     @property
     def tools(self) -> list[Any]:
         return list(self._tools)
+
+    @property
+    def static_context(self) -> str:
+        return self._static_context
 
     async def async_start(self) -> None:
         """Start the background connection task and return immediately.
@@ -330,18 +335,52 @@ class _MCPServerConnection:
                     )
 
     async def _on_connected(self, session: ClientSession) -> None:
-        """Cache tool list and signal readiness after successful connection."""
+        """Cache tool list + server prompts and signal readiness."""
         result = await session.list_tools()
         self._tools = result.tools
+        self._static_context = await self._fetch_static_context(session)
         self._session = session
         self._state = _State.CONNECTED
         self._ready.set()
-        _LOGGER.debug(
-            "AI Plugin MCP: connected to %r — %d tools available: %s",
+        _LOGGER.info(
+            "AI Plugin MCP: connected to %r — %d tools, static_context=%d chars",
             self._name,
             len(self._tools),
-            [t.name for t in self._tools],
+            len(self._static_context),
         )
+
+    async def _fetch_static_context(self, session: ClientSession) -> str:
+        """Fetch every prompt the server exposes and concatenate the text.
+
+        HA's built-in mcp_server exposes an 'Assist' prompt containing the
+        exposed-entity inventory. Injecting that into the system prompt lets
+        the model answer 'what is in the hobby room' without a tool call
+        and avoids the name-synonym confusion that occurs when comma-separated
+        voice aliases are parsed as separate devices.
+
+        Never raises — servers without prompt support return empty string.
+        """
+        try:
+            listing = await session.list_prompts()
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin MCP: %r has no prompts (%s)", self._name, exc)
+            return ""
+
+        parts: list[str] = []
+        for prompt in listing.prompts:
+            try:
+                result = await session.get_prompt(prompt.name)
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.debug(
+                    "AI Plugin MCP: get_prompt(%r) on %r failed: %s",
+                    prompt.name, self._name, exc,
+                )
+                continue
+            for msg in result.messages:
+                text = getattr(msg.content, "text", None)
+                if text:
+                    parts.append(text)
+        return "\n\n".join(parts).strip()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -396,6 +435,19 @@ class MCPToolRegistry:
             if server.state == _State.CONNECTED:
                 schemas.extend(openai_tool_schema(t) for t in server.tools)
         return schemas
+
+    def get_static_contexts(self) -> list[str]:
+        """Return per-server prompt text from currently connected MCP servers.
+
+        Used by the orchestrator to inject the HA Assist device inventory
+        into the system prompt so the model has a stable view of what
+        entities exist and in which areas.
+        """
+        return [
+            s.static_context
+            for s in self._servers
+            if s.state == _State.CONNECTED and s.static_context
+        ]
 
     def estimate_schema_tokens(self) -> int:
         """Estimate the token cost of all current tool schemas.

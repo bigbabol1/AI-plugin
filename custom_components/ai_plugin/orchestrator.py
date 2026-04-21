@@ -189,11 +189,17 @@ class Orchestrator:
             self._entry.options.get(CONF_VOICE_MODE, False)
         )
         base_prompt = self._build_system_prompt(voice_mode)
+
+        # Inject per-server static context (e.g. HA Assist device inventory).
+        # Must precede [LAST ACTION] so the inventory is established first.
+        sections: list[str] = [base_prompt]
+        if self._mcp is not None:
+            for ctx in self._mcp.get_static_contexts():
+                sections.append(f"[HOME CONTEXT]\n{ctx}")
         last = self._last_entities.get(conversation_id)
-        system_prompt = (
-            base_prompt + f"\n\n[LAST ACTION]\n{last}"
-            if last else base_prompt
-        )
+        if last:
+            sections.append(f"[LAST ACTION]\n{last}")
+        system_prompt = "\n\n".join(sections)
 
         # Serialise concurrent requests for the same conversation to prevent
         # interleaved history and summarisation races.
