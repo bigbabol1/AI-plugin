@@ -141,6 +141,7 @@ class Orchestrator:
             temperature=float(raw_temp) if raw_temp is not None else None,
             top_p=float(raw_top_p) if raw_top_p is not None else None,
             max_tokens=int(raw_max_tokens) if raw_max_tokens else None,
+            context_window=int(opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW)),
         )
 
     def _build_system_prompt(self, voice_mode: bool) -> str:

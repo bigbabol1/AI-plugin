@@ -54,6 +54,7 @@ class OpenAICompatProvider(AbstractProvider):
         temperature: float | None = None,
         top_p: float | None = None,
         max_tokens: int | None = None,
+        context_window: int | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -62,6 +63,7 @@ class OpenAICompatProvider(AbstractProvider):
         self._temperature = temperature
         self._top_p = top_p
         self._max_tokens = max_tokens
+        self._context_window = context_window
         self._session: aiohttp.ClientSession | None = None
 
     def _build_headers(self) -> dict[str, str]:
@@ -103,6 +105,12 @@ class OpenAICompatProvider(AbstractProvider):
             payload["top_p"] = self._top_p
         if self._max_tokens:
             payload["max_tokens"] = self._max_tokens
+        # Ollama-specific: its OpenAI-compat endpoint defaults num_ctx to 2048,
+        # truncating tool schemas + history server-side regardless of our
+        # client-side context budget. Pass it through as an "options" extension;
+        # non-Ollama backends ignore unknown fields.
+        if self._context_window:
+            payload["options"] = {"num_ctx": self._context_window}
 
         try:
             async with session.post(

@@ -239,7 +239,29 @@ class _MCPServerConnection:
         if token := self._config.get("token"):
             headers["Authorization"] = f"Bearer {token}"
 
-        async with sse_client(url, headers=headers or None) as (read, write):
+        # Same SSL blocking-I/O concern as _run_http — precompute in executor.
+        loop = asyncio.get_running_loop()
+        ssl_ctx = await loop.run_in_executor(None, _create_ssl_context)
+
+        def _client_factory(
+            headers: dict[str, str] | None = None,
+            timeout: httpx.Timeout | None = None,
+            auth: httpx.Auth | None = None,
+        ) -> httpx.AsyncClient:
+            kw: dict[str, Any] = {"follow_redirects": True, "verify": ssl_ctx}
+            if timeout is not None:
+                kw["timeout"] = timeout
+            if headers is not None:
+                kw["headers"] = headers
+            if auth is not None:
+                kw["auth"] = auth
+            return httpx.AsyncClient(**kw)
+
+        async with sse_client(
+            url,
+            headers=headers or None,
+            httpx_client_factory=_client_factory,
+        ) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 await self._on_connected(session)
