@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components import conversation
-from homeassistant.components.conversation import ConversationInput, ConversationResult
+from homeassistant.components.conversation import (
+    ConversationEntityFeature,
+    ConversationInput,
+    ConversationResult,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
@@ -35,6 +39,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
     _attr_has_entity_name = True
     _attr_name = None
     _attr_supported_languages = "*"
+    _attr_supported_features = ConversationEntityFeature.CONTROL
 
     @property
     def supported_languages(self) -> list[str] | str:
