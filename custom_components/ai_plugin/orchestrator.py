@@ -261,7 +261,15 @@ class Orchestrator:
             await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
 
             # Track last-controlled entities for explicit context injection.
-            entity_ctx = self._extract_entity_context(tool_msgs)
+            # Defensive: registry quirks (e.g. ComputedNameType) must never
+            # propagate up and kill the user-facing reply.
+            try:
+                entity_ctx = self._extract_entity_context(tool_msgs)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "AI Plugin: _extract_entity_context failed — skipping [LAST ACTION] update"
+                )
+                entity_ctx = None
             if entity_ctx:
                 self._last_entities[conversation_id] = entity_ctx
             history_depth = len(self._context_mgr.get_history(conversation_id))
@@ -428,15 +436,23 @@ class Orchestrator:
             if entry:
                 return (name_or_id, _area_for(entry))
 
-        # Name / alias / friendly_name match — case-insensitive exact
+        # Name / alias / friendly_name match — case-insensitive exact.
+        # HA's newer registries return ComputedNameType (lazy-evaluated) for
+        # some .name fields, which is not a plain str and has no .strip().
+        # Coerce via str() so the comparison never blows up on registry quirks.
+        def _s(val: object) -> str:
+            if val is None:
+                return ""
+            return val if isinstance(val, str) else str(val)
+
         needle = name_or_id.strip().lower()
         for entity_id, entry in ent_reg.entities.items():
-            candidates = [entry.name or "", entry.original_name or ""]
-            candidates.extend(entry.aliases or [])
+            candidates = [_s(entry.name), _s(entry.original_name)]
+            candidates.extend(_s(a) for a in (entry.aliases or ()))
             state = hass.states.get(entity_id)
             if state:
-                candidates.append(state.attributes.get("friendly_name") or "")
-            if any(c.strip().lower() == needle for c in candidates if c):
+                candidates.append(_s(state.attributes.get("friendly_name")))
+            if any(c and c.strip().lower() == needle for c in candidates):
                 return (entity_id, _area_for(entry))
         return (None, None)
 
