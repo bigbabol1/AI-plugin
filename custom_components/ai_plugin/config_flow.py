@@ -499,8 +499,8 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if use_ha_mcp:
                 ha_url = _get_ha_url(self.hass)
                 mcp_entry: dict[str, Any] = {
-                    "transport": "http",
-                    "url": f"{ha_url}/api/mcp",
+                    "transport": "sse",
+                    "url": f"{ha_url}/mcp_server/sse",
                 }
                 if ha_mcp_token:
                     mcp_entry["token"] = ha_mcp_token
@@ -845,8 +845,8 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             token = user_input.get("ha_mcp_token", "").strip()
             ha_url = _get_ha_url(self.hass)
             entry: dict[str, Any] = {
-                "transport": "http",
-                "url": f"{ha_url}/api/mcp",
+                "transport": "sse",
+                "url": f"{ha_url}/mcp_server/sse",
             }
             if token:
                 entry["token"] = token
@@ -863,7 +863,7 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
                     ),
                 }
             ),
-            description_placeholders={"ha_mcp_url": f"{ha_url}/api/mcp"},
+            description_placeholders={"ha_mcp_url": f"{ha_url}/mcp_server/sse"},
         )
 
     async def async_step_mcp_add_preset(

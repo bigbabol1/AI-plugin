@@ -41,6 +41,7 @@ from typing import Any
 
 import httpx
 from mcp import ClientSession, StdioServerParameters
+from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -220,11 +221,29 @@ class _MCPServerConnection:
 
     async def _run_once(self) -> None:
         """Open transport, initialise session, then wait for shutdown signal."""
-        transport = self._config.get("transport", "http")
+        transport = self._config.get("transport")
+        # Auto-detect SSE when transport is omitted and URL looks like an SSE endpoint.
+        if transport is None:
+            url = self._config.get("url", "")
+            transport = "sse" if url.endswith("/sse") else "http"
         if transport == "stdio":
             await self._run_stdio()
+        elif transport == "sse":
+            await self._run_sse()
         else:
             await self._run_http()
+
+    async def _run_sse(self) -> None:
+        url = self._config["url"]
+        headers: dict[str, str] = {}
+        if token := self._config.get("token"):
+            headers["Authorization"] = f"Bearer {token}"
+
+        async with sse_client(url, headers=headers or None) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                await self._on_connected(session)
+                await self._shutdown.wait()
 
     async def _run_http(self) -> None:
         url = self._config["url"]
