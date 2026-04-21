@@ -17,6 +17,7 @@ using the OpenAI endpoint.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any
@@ -197,6 +198,36 @@ class OpenAICompatProvider(AbstractProvider):
         except aiohttp.ClientError as exc:
             raise OrchestratorError(f"HTTP error: {exc}") from exc
 
+    @staticmethod
+    def _messages_for_ollama(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Adapt OpenAI-shape history to Ollama's native /api/chat shape.
+
+        OpenAI stores `function.arguments` as a JSON-encoded string; Ollama
+        native expects it as an object and returns HTTP 400 ("Value looks
+        like object, but can't find closing '}' symbol") on a string.
+        """
+        adapted: list[dict[str, Any]] = []
+        for msg in messages:
+            tcs = msg.get("tool_calls")
+            if not tcs:
+                adapted.append(msg)
+                continue
+            new_tcs = []
+            for tc in tcs:
+                fn = tc.get("function", {})
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        parsed = json.loads(args) if args else {}
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    fn = {**fn, "arguments": parsed}
+                new_tcs.append({**tc, "function": fn})
+            adapted.append({**msg, "tool_calls": new_tcs})
+        return adapted
+
     async def _chat_ollama(
         self,
         messages: list[dict[str, Any]],
@@ -205,6 +236,7 @@ class OpenAICompatProvider(AbstractProvider):
         """Call Ollama's native /api/chat so options.num_ctx actually takes effect."""
         session = self._get_session()
         url = f"{self._server_root}/api/chat"
+        messages = self._messages_for_ollama(messages)
         options: dict[str, Any] = {}
         if self._temperature is not None:
             options["temperature"] = self._temperature
