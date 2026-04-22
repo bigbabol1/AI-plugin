@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.23] - 2026-04-22
+
+### Fixed
+
+- **Small LLMs stop parroting `[MEMORY]` instructions as text** (`const.py`). The v0.5.22 memory block used caps-imperative phrasing like `CALL recall FIRST`, which small instruction-tuned LLMs echoed back verbatim ("CALL recall first to see if I remember…") instead of invoking the tool. Rewrote both default and voice memory blocks in descriptive prose and explicitly told the model to invoke tools silently rather than narrate them.
+
 ## [0.5.22] - 2026-04-22
 
 ### Fixed
