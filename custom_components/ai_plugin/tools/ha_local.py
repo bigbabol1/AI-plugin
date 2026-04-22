@@ -1,21 +1,21 @@
-"""Local HA discovery tools for AI Plugin (mcp-assist-style).
+"""Local HA discovery and area-action tools for AI Plugin (mcp-assist-style).
 
 Small LLMs drown in a dumped YAML inventory of all exposed devices. This
-module replaces the dump with four on-demand discovery tools that execute
-inside the HA process against entity/area/device registries directly:
+module provides five on-demand tools that execute inside the HA process
+against entity/area/device registries directly:
 
-    list_areas()                        → every area name
-    list_entities(area?, domain?)       → entities, optionally filtered
-    get_entity(name_or_id)              → one entity: id, name, area, state, attrs
-    search_entities(query)              → substring match across names/aliases
+    list_areas()                          → every area name
+    list_entities(area?, domain?)         → entities, optionally filtered
+    get_entity(name_or_id)                → one entity: id, name, area, state, attrs
+    search_entities(query)                → substring match across names/aliases
+    set_area_state(area, domain, action)  → bulk action on all entities in an area
 
-Responses are capped at ~1500 characters so they fit comfortably in the
-model's context; overflow reports a truncation count so the model can
+Discovery responses are capped at ~1500 characters so they fit comfortably in
+the model's context; overflow reports a truncation count so the model can
 narrow the filter and retry.
 
-Actions (turn on/off, set brightness, etc.) are NOT handled here — those
-still flow through HA's built-in MCP server tools (HassTurnOn, HassTurnOff,
-HassLightSet, etc.). This module is pure discovery.
+Single-device actions (set brightness, set temperature, etc.) still flow
+through HA's built-in MCP server tools (HassTurnOn, HassLightSet, etc.).
 """
 
 from __future__ import annotations

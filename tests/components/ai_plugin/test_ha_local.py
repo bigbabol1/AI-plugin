@@ -48,13 +48,11 @@ def _make_hass(
     areas: list[SimpleNamespace],
     entities: list[SimpleNamespace],
     devices: list[SimpleNamespace] | None = None,
-    exposed: set[str] | None = None,
     service_side_effect=None,
-) -> MagicMock:
+) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
     """Build a hass mock with area/entity/device registries and a services layer.
 
-    `exposed` is the set of entity_ids treated as exposed to the conversation
-    assistant; if None, all entities are exposed.
+    Returns a 4-tuple of (hass, area_reg, ent_reg, dev_reg) mocks.
     """
     hass = MagicMock()
 
