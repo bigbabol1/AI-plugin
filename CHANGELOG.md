@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.20] - 2026-04-22
+
+### Fixed
+
+- **Voice replies no longer read URLs aloud** (`const.py`, `orchestrator.py`, `tools/web_search.py`). Web-search results over a voice pipeline used to surface raw `https://…` addresses into the LLM's context; small LLMs then read them back and TTS narrated every slash. Two-pronged fix: the voice system prompt now forbids reading URLs, domain names, or file paths aloud; and the `web_search` tool result is stripped of URL lines (and inline `http(s)://` tokens) before it reaches the model whenever the orchestrator is in voice mode. Typed Assist is unchanged and still gets the source URLs.
+
 ## [0.5.19] - 2026-04-22
 
 ### Fixed

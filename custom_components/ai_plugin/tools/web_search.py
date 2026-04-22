@@ -81,24 +81,33 @@ class WebSearchTool:
         self._tavily_key: str | None = options.get(CONF_TAVILY_API_KEY) or None
         self._max_results: int = int(options.get(CONF_MAX_RESULTS, DEFAULT_MAX_RESULTS))
 
-    async def async_search(self, query: str) -> str:
+    async def async_search(self, query: str, strip_urls: bool = False) -> str:
         """Run a web search and return a formatted result string.
 
-        Never raises — returns a graceful error string on backend failure.
+        ``strip_urls`` omits URL lines from the formatted output. Set to
+        ``True`` for voice/TTS callers so spoken responses don't include
+        raw web addresses. Never raises — returns a graceful error string
+        on backend failure.
         """
-        _LOGGER.debug("WebSearchTool: backend=%s query=%r", self._backend, query)
+        _LOGGER.debug(
+            "WebSearchTool: backend=%s query=%r strip_urls=%s",
+            self._backend, query, strip_urls,
+        )
         try:
             if self._backend == BACKEND_BRAVE:
-                return await self._search_brave(query)
-            if self._backend == BACKEND_SEARXNG:
-                return await self._search_searxng(query)
-            if self._backend == BACKEND_TAVILY:
-                return await self._search_tavily(query)
-            # Default: DuckDuckGo
-            return await self._search_duckduckgo(query)
+                result = await self._search_brave(query)
+            elif self._backend == BACKEND_SEARXNG:
+                result = await self._search_searxng(query)
+            elif self._backend == BACKEND_TAVILY:
+                result = await self._search_tavily(query)
+            else:
+                result = await self._search_duckduckgo(query)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("WebSearchTool: search failed (%s): %s", self._backend, exc)
             return _FALLBACK_MSG
+        if strip_urls:
+            result = _strip_url_lines(result)
+        return result
 
     # ── DuckDuckGo ─────────────────────────────────────────────────────────────
 
@@ -256,6 +265,25 @@ def _parse_ddg_lite(html: str, max_results: int) -> list[dict[str, str]]:
         results.append({"title": title.strip(), "url": url, "snippet": snippet.strip()})
 
     return results
+
+
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _strip_url_lines(text: str) -> str:
+    """Remove URL-only lines and inline URLs from a formatted result string.
+
+    Used for voice/TTS callers. Drops any line whose only non-whitespace
+    content is an http(s) URL (the ``   {url}`` lines emitted by
+    ``_format_results``) and scrubs stray URLs inside snippet lines.
+    """
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and _URL_RE.fullmatch(stripped):
+            continue
+        kept.append(_URL_RE.sub("", line).rstrip())
+    return "\n".join(kept)
 
 
 def _format_results(query: str, results: list[dict[str, str]]) -> str:

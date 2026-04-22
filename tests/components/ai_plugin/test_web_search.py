@@ -22,6 +22,7 @@ from custom_components.ai_plugin.tools.web_search import (
     WebSearchTool,
     _format_results,
     _parse_ddg_lite,
+    _strip_url_lines,
 )
 
 
@@ -329,7 +330,7 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
     reply = await orch.async_process("What's new in HA?", "c", "en")
 
     assert reply == "Here are the results."
-    mock_web.async_search.assert_awaited_once_with("HA news")
+    mock_web.async_search.assert_awaited_once_with("HA news", strip_urls=False)
     mock_mcp.call_tool.assert_not_awaited()
 
 
@@ -378,4 +379,36 @@ async def test_orchestrator_xml_fallback_parses_tool_call() -> None:
     )
 
     assert reply == "Final answer."
-    mock_web.async_search.assert_awaited_once_with("news")
+    mock_web.async_search.assert_awaited_once_with("news", strip_urls=False)
+
+
+
+def test_strip_url_lines_removes_url_only_lines_and_inline_urls():
+    """Voice path must not expose URLs to the LLM/TTS."""
+    formatted = _format_results("weather berlin", [
+        {"title": "Berlin weather", "url": "https://example.com/berlin", "snippet": "Sunny 18C. See https://foo.com for details."},
+        {"title": "Climate data", "url": "http://ex.org", "snippet": "Mild"},
+    ])
+    stripped = _strip_url_lines(formatted)
+    assert "https://" not in stripped
+    assert "http://" not in stripped
+    assert "Berlin weather" in stripped
+    assert "Sunny 18C" in stripped
+    assert "Mild" in stripped
+
+
+async def test_async_search_strip_urls_forwarded_to_output(monkeypatch):
+    """When strip_urls=True, async_search scrubs URLs before returning."""
+    tool = WebSearchTool({CONF_WEB_SEARCH_BACKEND: BACKEND_DUCKDUCKGO})
+
+    async def fake(_query):
+        return _format_results("q", [
+            {"title": "T", "url": "https://a.example", "snippet": "snip https://b.example end"},
+        ])
+
+    monkeypatch.setattr(tool, "_search_duckduckgo", fake)
+    out = await tool.async_search("q", strip_urls=True)
+    assert "https://" not in out
+    assert "T" in out
+    assert "snip" in out
+
