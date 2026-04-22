@@ -5,6 +5,8 @@ A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — O
 ## Features
 
 - **Any LLM backend** — Ollama, llama.cpp, OpenAI, LM Studio, xAI Grok, and any OpenAI-compatible endpoint
+- **On-demand entity discovery** — `list_areas`, `list_entities`, `get_entity`, `search_entities` tools hit HA registries in-process; no YAML dump into the prompt
+- **Assist exposure aware** — discovery tools default to entities you've marked as exposed to conversation; diagnostic sensors stay hidden unless explicitly requested
 - **Web search** — DuckDuckGo (zero config), Brave Search, SearXNG (self-hosted), Tavily
 - **MCP extensibility** — connect external MCP servers (HTTP and stdio) for additional tools
 - **Smart context management** — sliding window + automatic LLM summarization prevents memory loss with local models
@@ -15,7 +17,20 @@ A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — O
 
 The most critical factor for reliable entity control is **tool calling quality**. Models that hedge or ask unnecessary clarifying questions instead of executing commands are a poor fit, regardless of their general benchmark scores.
 
-### Local models (Ollama)
+### 8 GB VRAM (e.g. RTX 3060 Ti, RTX 3070)
+
+| Model | Ollama tag | Weights | Tool calling | Notes |
+|-------|-----------|---------|-------------|-------|
+| **homeassistant:latest** | `homeassistant:latest` | ~4.7 GB | ⭐⭐⭐⭐ | Confirmed working. Qwen2.5-7B Q4_K_M tuned for HA. Recommended starting point. |
+| Qwen2.5 7B | `qwen2.5:7b` | ~4.7 GB | ⭐⭐⭐⭐ | Same base as above, standard Ollama build. Slightly more headroom for KV cache. |
+| Mistral 7B | `mistral:7b` | ~4.1 GB | ⭐⭐⭐⭐ | Lighter weight, decisive tool calls, leaves ~3.5 GB for KV cache. |
+
+> **VRAM budget at 8 GB:** model weights + KV cache must stay under ~7.5 GB (leave 0.5 GB for overhead).
+> A 7B Q4_K_M model uses ~4.7 GB weights + ~1 GB per 4 K context tokens.
+> At `num_ctx=8192` total ≈ 6.7 GB — fits comfortably.
+> Avoid `num_ctx` above 12 K on an 8 GB card with 7B models.
+
+### 24 GB VRAM (e.g. RTX 3090, RTX 4090)
 
 | Model | Size | Tool calling | Notes |
 |-------|------|-------------|-------|
@@ -23,11 +38,6 @@ The most critical factor for reliable entity control is **tool calling quality**
 | devstral-small-2:latest | ~15 GB | ⭐⭐⭐⭐⭐ | Excellent, coding-focused, slightly larger |
 | qwen2.5:32b | ~20 GB | ⭐⭐⭐⭐ | Very capable, requires more VRAM |
 | gemma4:27b | ~18 GB | ⭐⭐⭐ | Natural language quality is high, tool calling less reliable |
-| gemma4:e4b | ~10 GB | ⭐⭐ | Too small for reliable entity resolution — hedges instead of executing |
-
-> **Tip:** Set a low temperature (0.1–0.3) for more decisive tool call execution. Higher temperatures cause models to ask clarifying questions instead of acting.
-
-> **VRAM note:** With a 24 GB GPU, `ministral-3:14b` leaves ~13 GB for KV cache (≈ 40K+ token context), making it the best balance of capability and headroom for a home assistant workload.
 
 ### Cloud models
 
@@ -37,6 +47,61 @@ The most critical factor for reliable entity control is **tool calling quality**
 | GPT-4o mini | ⭐⭐⭐⭐ | Good balance of cost and reliability |
 | Claude Sonnet | ⭐⭐⭐⭐⭐ | Excellent tool use, natural responses |
 | Grok 2 | ⭐⭐⭐⭐ | Good tool calling, fast |
+
+## Ollama Configuration
+
+Getting Ollama configured correctly is as important as choosing the right model.
+
+### num_ctx — match plugin and model
+
+**The most common misconfiguration.** Ollama's default `num_ctx` for most models is **2048** (set in the model's Modelfile), regardless of the model's theoretical maximum. The plugin's **Context Window** setting must match the actual `num_ctx` Ollama uses, or the token budget math breaks:
+
+- Plugin thinks it has 16 384 tokens → barely triggers summarisation.
+- Model actually runs at 2 048 tokens → context overflows silently, model hallucinates or forgets.
+
+**Fix — create a custom Modelfile:**
+
+```
+FROM homeassistant:latest
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.1
+```
+
+```bash
+ollama create ha-assistant -f Modelfile
+```
+
+Then point the plugin at `ha-assistant` and set **Context Window = 8192** in the integration settings.
+
+**Alternatively**, verify what `num_ctx` your current model is actually using:
+
+```bash
+curl http://localhost:11434/api/show -d '{"name":"homeassistant:latest"}' | python3 -m json.tool | grep num_ctx
+```
+
+Set the plugin's **Context Window** to match that value exactly.
+
+### Recommended Ollama settings for 8 GB VRAM
+
+```
+PARAMETER num_ctx 8192        # matches plugin Context Window setting
+PARAMETER temperature 0.1     # decisive tool calls; higher values cause hedging
+PARAMETER num_predict 512     # cap response length; saves KV cache budget
+```
+
+> **Temperature:** Keep it at 0.1–0.3 for home control. Higher temperatures cause models to ask clarifying questions instead of calling tools and acting.
+
+### Keep-alive (optional)
+
+Ollama unloads models from VRAM after 5 minutes of inactivity by default. If you share the GPU with other workloads, this is fine. If you want instant response for HA queries:
+
+```bash
+# Keep model loaded indefinitely
+OLLAMA_KEEP_ALIVE=-1 ollama serve
+
+# Or per-request via API
+curl http://localhost:11434/api/generate -d '{"model":"homeassistant:latest","keep_alive":-1}'
+```
 
 ## Installation
 
@@ -60,6 +125,8 @@ The setup wizard walks through:
 4. **Advanced** — system prompt, context window, voice mode, MCP servers, timeout
 
 All settings are editable post-install via **Settings → Devices & Services → AI Plugin → Configure**.
+
+> **Context Window setting** must match the `num_ctx` your Ollama model actually uses. See [Ollama Configuration](#ollama-configuration) above.
 
 ## Web Search Backends
 
