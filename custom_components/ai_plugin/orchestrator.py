@@ -215,13 +215,13 @@ class Orchestrator:
     def _build_system_prompt(self, voice_mode: bool) -> str:
         """Return the system prompt for this request.
 
-        Priority:
-        1. User-configured custom instructions (if non-empty)
-        2. Voice-mode compact prompt (if voice_mode=True)
-        3. Default standard prompt
+        Base prompt (voice-compact or default) is always sent so the plugin's
+        entity-discovery, grounding, and speech rules apply. User's custom
+        instructions are appended on top — persona, location, etc.
         """
+        base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
-        return custom or (SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT)
+        return f"{base}\n\n{custom}" if custom else base
 
     async def async_process(
         self,

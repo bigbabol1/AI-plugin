@@ -54,8 +54,8 @@ def test_system_prompt_voice() -> None:
     assert prompt == SYSTEM_PROMPT_VOICE
 
 
-def test_system_prompt_custom_overrides_voice() -> None:
-    """Custom instructions take priority over voice mode."""
+def test_system_prompt_custom_appended_to_voice() -> None:
+    """Custom instructions are appended after the voice base prompt."""
     entry = _make_mock_entry(
         options={
             CONF_BASE_URL: "http://localhost:11434/v1",
@@ -67,7 +67,22 @@ def test_system_prompt_custom_overrides_voice() -> None:
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
     prompt = orch._build_system_prompt(voice_mode=True)
-    assert prompt == "You are a pirate."
+    assert prompt == f"{SYSTEM_PROMPT_VOICE}\n\nYou are a pirate."
+
+
+def test_system_prompt_custom_appended_to_default() -> None:
+    """Custom instructions are appended after the default base prompt."""
+    entry = _make_mock_entry(
+        options={
+            CONF_BASE_URL: "http://localhost:11434/v1",
+            CONF_MODEL: "llama3.2:3b",
+            "system_prompt": "You are a pirate.",
+        }
+    )
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._entry = entry
+    prompt = orch._build_system_prompt(voice_mode=False)
+    assert prompt == f"{SYSTEM_PROMPT_DEFAULT}\n\nYou are a pirate."
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.21] - 2026-04-22
+
+### Changed
+
+- **Custom system prompt now appends instead of replacing** (`orchestrator.py`). Previously, setting a custom prompt in Advanced options fully replaced both `SYSTEM_PROMPT_DEFAULT` and `SYSTEM_PROMPT_VOICE`, silently dropping the plugin's entity-discovery, grounding, context, and voice-speech rules — users writing persona/location prompts lost tool-use discipline and small LLMs started fabricating entity_ids. The custom prompt is now appended to the base (voice-compact or default) prompt with a blank line separator. Empty custom prompt behaves as before (base only). Users who intentionally stripped defaults can clear their custom prompt and re-add only the overrides they want.
+
 ## [0.5.20] - 2026-04-22
 
 ### Fixed
