@@ -137,3 +137,48 @@ def test_set_area_state_schema_registered() -> None:
     assert set(params["properties"]["action"]["enum"]) == {
         "turn_on", "turn_off", "toggle",
     }
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_bad_domain(patched_registries) -> None:
+    """Unknown domain returns a friendly error without touching services."""
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[_area("a1", "Kitchen")], entities=[])
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "kitchen", "domain": "heater", "action": "turn_on"},
+    )
+    assert out.startswith("Domain 'heater' not supported")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_bad_action_for_climate(patched_registries) -> None:
+    """climate + toggle returns the domain/action-mismatch error."""
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[_area("a1", "Kitchen")], entities=[])
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "kitchen", "domain": "climate", "action": "toggle"},
+    )
+    assert "climate does not support toggle" in out
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_unknown_area(patched_registries) -> None:
+    """Unknown area returns 'Unknown area ...'."""
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[_area("a1", "Kitchen")], entities=[])
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "garden", "domain": "light", "action": "turn_off"},
+    )
+    assert out.startswith("Unknown area 'garden'")
+    hass.services.async_call.assert_not_called()

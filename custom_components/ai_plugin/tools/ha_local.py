@@ -295,6 +295,13 @@ class HALocalToolRegistry:
                     limit=max(1, min(50, limit)),
                     exposed_only=exposed_only,
                 )
+            if name == "set_area_state":
+                return await self._set_area_state(
+                    area=_s(arguments.get("area")).strip(),
+                    domain=_s(arguments.get("domain")).strip(),
+                    action=_s(arguments.get("action")).strip(),
+                    exposed_only=exposed_only,
+                )
             return f"[Unknown local tool: {name!r}]"
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("AI Plugin local tool %r failed", name)
@@ -481,3 +488,41 @@ class HALocalToolRegistry:
             return f"No match for {query!r}."
         lines = [f"- {eid} — {fn} @ {a}" for eid, fn, a in hits]
         return _cap(lines, header=f"{len(hits)} match(es) for {query!r}:\n")
+
+    async def _set_area_state(
+        self,
+        area: str,
+        domain: str,
+        action: str,
+        exposed_only: bool = True,
+    ) -> str:
+        """Turn devices in an area on/off/toggle via a single service call."""
+        domain = domain.lower().strip(".")
+        action = action.lower()
+
+        if domain not in _ACTION_DOMAINS:
+            allowed = ", ".join(sorted(_ACTION_DOMAINS))
+            return f"Domain {domain!r} not supported. Allowed: {allowed}."
+
+        svc_map = _DOMAIN_SERVICE_MAP[domain]
+        if action not in svc_map:
+            allowed = " or ".join(svc_map)
+            return f"{domain} does not support {action}. Use {allowed}."
+
+        # resolve area (name or alias, case-insensitive)
+        area_reg = ar.async_get(self._hass)
+        target_area = None
+        needle = area.lower()
+        for a in area_reg.async_list_areas():
+            if _s(a.name).lower() == needle:
+                target_area = a
+                break
+            aliases = getattr(a, "aliases", None) or ()
+            if any(_s(al).lower() == needle for al in aliases):
+                target_area = a
+                break
+        if target_area is None:
+            return f"Unknown area {area!r}. Try list_areas."
+
+        # remainder of implementation added in Task 4
+        return "[set_area_state: not yet implemented past area resolution]"

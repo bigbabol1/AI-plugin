@@ -113,7 +113,7 @@ class _DeviceInfo:
     def __init__(self, **kw): pass
 
 
-_dev_reg_mod = _make_module("homeassistant.helpers.device_registry", DeviceInfo=_DeviceInfo)
+_dev_reg_mod = _make_module("homeassistant.helpers.device_registry", DeviceInfo=_DeviceInfo, async_get=MagicMock())
 
 # ── homeassistant.helpers.area_registry ──────────────────────────────────────
 
