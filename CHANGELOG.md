@@ -4,6 +4,16 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.17] - 2026-04-22
+
+### Fixed
+
+- **Conversation history now resets per session** (`conversation.py`) — previously the entity overrode HA's ephemeral `conversation_id` with a stable per-user id, causing history to accumulate across every Assist session until summarisation fired. Now honours the id HA Assist provides (minting a fresh ulid when none is supplied). Long-term user facts continue to live in the `remember`/`recall` tool (`.ai_plugin_memory_<user_id>.json`), which is unchanged.
+
+### Changed
+
+- **README setup clarity** — added HACS prerequisite, provider URL examples per backend, Assist pipeline assignment step, and a Troubleshooting section. Documented the actual default Context Window (16384) alongside the 8 GB sweet-spot of 8192. Reordered web-search backends to put the default (Brave) first and added an API-key column with sign-up links.
+
 ## [0.1.0] - 2026-03-26
 
 ### Added
