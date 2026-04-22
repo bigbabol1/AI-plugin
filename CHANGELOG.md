@@ -4,6 +4,16 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.19] - 2026-04-22
+
+### Fixed
+
+- **Voice Assist now reads long-term memory** (`conversation.py`, `config_flow.py`). Previously, voice pipelines (Wyoming satellites, wake-word, TTS-initiated flows) ran without an authenticated HA user, so `context.user_id` was `None` and the `remember`/`recall` tool routed to `.ai_plugin_memory_anonymous.json` — a different file from the `.ai_plugin_memory_<user_id>.json` written by typed Assist. Facts saved from the Assist panel never surfaced over voice. The Advanced settings now include a **Voice fallback user** dropdown; when set, voice requests reuse that user's memory file. Leave empty to keep the previous anonymous behaviour.
+
+### Notes
+
+- Existing `.ai_plugin_memory_anonymous.json` is not auto-migrated. If you pick a fallback user and want voice to see previously saved facts, rename that file to `.ai_plugin_memory_<user_id>.json` in your HA config directory (or copy its `facts` into the user's file).
+
 ## [0.5.17] - 2026-04-22
 
 ### Fixed
