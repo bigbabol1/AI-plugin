@@ -66,6 +66,17 @@ _INTERESTING_ATTRS = (
     "unit_of_measurement",
 )
 
+_ACTION_DOMAINS = {"light", "switch", "fan", "media_player", "cover", "climate"}
+
+_DOMAIN_SERVICE_MAP: dict[str, dict[str, str]] = {
+    "light":        {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+    "switch":       {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+    "fan":          {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
+    "media_player": {"turn_on": "turn_on", "turn_off": "turn_off"},
+    "cover":        {"turn_on": "open_cover", "turn_off": "close_cover", "toggle": "toggle"},
+    "climate":      {"turn_on": "turn_on", "turn_off": "turn_off"},
+}
+
 _EXPOSED_ONLY_PROP = {
     "exposed_only": {
         "type": "boolean",
@@ -170,9 +181,39 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_area_state",
+            "description": (
+                "Turn devices in an area on/off/toggle. Use for commands like "
+                "'lights in kitchen off', 'fans in bedroom on'. For a single "
+                "named device use HassTurnOn/HassTurnOff instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "area": {
+                        "type": "string",
+                        "description": "Area name (e.g. 'kitchen'). Call list_areas if unsure.",
+                    },
+                    "domain": {
+                        "type": "string",
+                        "enum": sorted(_ACTION_DOMAINS),
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["turn_on", "turn_off", "toggle"],
+                    },
+                    **_EXPOSED_ONLY_PROP,
+                },
+                "required": ["area", "domain", "action"],
+            },
+        },
+    },
 ]
 
-TOOL_NAMES = {"list_areas", "list_entities", "get_entity", "search_entities"}
+TOOL_NAMES = {"list_areas", "list_entities", "get_entity", "search_entities", "set_area_state"}
 
 
 def _s(val: object) -> str:

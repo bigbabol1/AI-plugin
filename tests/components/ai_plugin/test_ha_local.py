@@ -119,3 +119,21 @@ def patched_registries():
     yield start
     for p in started:
         p.stop()
+
+
+def test_set_area_state_schema_registered() -> None:
+    """set_area_state must be exposed in TOOL_NAMES and TOOL_SCHEMAS."""
+    assert "set_area_state" in TOOL_NAMES
+    schema = next(
+        (s for s in TOOL_SCHEMAS if s["function"]["name"] == "set_area_state"),
+        None,
+    )
+    assert schema is not None, "set_area_state schema missing"
+    params = schema["function"]["parameters"]
+    assert set(params["required"]) == {"area", "domain", "action"}
+    assert set(params["properties"]["domain"]["enum"]) == {
+        "light", "switch", "fan", "media_player", "cover", "climate",
+    }
+    assert set(params["properties"]["action"]["enum"]) == {
+        "turn_on", "turn_off", "toggle",
+    }
