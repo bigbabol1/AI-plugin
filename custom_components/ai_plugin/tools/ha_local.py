@@ -30,6 +30,15 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
+try:
+    from homeassistant.components.homeassistant.exposed_entities import (
+        async_should_expose as _ha_should_expose,
+    )
+    _EXPOSURE_API_AVAILABLE = True
+except ImportError:
+    _ha_should_expose = None  # type: ignore[assignment]
+    _EXPOSURE_API_AVAILABLE = False
+
 _LOGGER = logging.getLogger(__name__)
 
 _MAX_RESPONSE_CHARS = 1500
@@ -57,6 +66,15 @@ _INTERESTING_ATTRS = (
     "unit_of_measurement",
 )
 
+_EXPOSED_ONLY_PROP = {
+    "exposed_only": {
+        "type": "boolean",
+        "description": (
+            "Only include entities exposed to the conversation assistant. "
+            "Set to false to inspect hidden or diagnostic entities. Default true."
+        ),
+    },
+}
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -96,6 +114,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "sensor, climate, media_player, cover, etc.)."
                         ),
                     },
+                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": [],
             },
@@ -118,7 +137,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "name_or_id": {
                         "type": "string",
                         "description": "Entity id, friendly name, or alias.",
-                    }
+                    },
+                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["name_or_id"],
             },
@@ -144,6 +164,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "Max results to return (default 10).",
                     },
+                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["query"],
             },
@@ -180,6 +201,11 @@ class HALocalToolRegistry:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
+        if not _EXPOSURE_API_AVAILABLE:
+            _LOGGER.warning(
+                "AI Plugin: exposed_entities API unavailable on this HA version — "
+                "exposed_only filter disabled, all registry entities will be shown"
+            )
 
     @property
     def tool_names(self) -> set[str]:
@@ -188,18 +214,35 @@ class HALocalToolRegistry:
     def get_schemas(self) -> list[dict[str, Any]]:
         return TOOL_SCHEMAS
 
+    def _is_exposed(self, entity_id: str) -> bool:
+        """Return True if entity is exposed to the conversation assistant."""
+        if not _EXPOSURE_API_AVAILABLE:
+            return True  # Fallback: treat all as exposed on older HA.
+        try:
+            return _ha_should_expose(self._hass, "conversation", entity_id)
+        except Exception:  # noqa: BLE001
+            return True  # Fail open — never silently hide entities on error.
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Dispatch one tool call. Never raises; errors become string replies."""
         try:
+            exposed_only = arguments.get("exposed_only", True)
+            if not isinstance(exposed_only, bool):
+                exposed_only = True
+
             if name == "list_areas":
                 return self._list_areas()
             if name == "list_entities":
                 return self._list_entities(
                     area=_s(arguments.get("area")).strip() or None,
                     domain=_s(arguments.get("domain")).strip() or None,
+                    exposed_only=exposed_only,
                 )
             if name == "get_entity":
-                return self._get_entity(_s(arguments.get("name_or_id")).strip())
+                return self._get_entity(
+                    _s(arguments.get("name_or_id")).strip(),
+                    exposed_only=exposed_only,
+                )
             if name == "search_entities":
                 limit = arguments.get("limit")
                 try:
@@ -209,6 +252,7 @@ class HALocalToolRegistry:
                 return self._search_entities(
                     query=_s(arguments.get("query")).strip(),
                     limit=max(1, min(50, limit)),
+                    exposed_only=exposed_only,
                 )
             return f"[Unknown local tool: {name!r}]"
         except Exception as exc:  # noqa: BLE001
@@ -225,7 +269,10 @@ class HALocalToolRegistry:
         return _cap([f"- {n}" for n in names], header=f"{len(names)} areas:\n")
 
     def _list_entities(
-        self, area: str | None = None, domain: str | None = None
+        self,
+        area: str | None = None,
+        domain: str | None = None,
+        exposed_only: bool = True,
     ) -> str:
         hass = self._hass
         ent_reg = er.async_get(hass)
@@ -250,6 +297,8 @@ class HALocalToolRegistry:
         for entity_id, entry in ent_reg.entities.items():
             if target_domain and not entity_id.startswith(f"{target_domain}."):
                 continue
+            if exposed_only and not self._is_exposed(entity_id):
+                continue
             a_name = _area_name(entry)
             if target_area:
                 if not a_name or a_name.lower() != target_area:
@@ -261,7 +310,8 @@ class HALocalToolRegistry:
 
         if not rows:
             filt = ", ".join(f"{k}={v}" for k, v in [("area", area), ("domain", domain)] if v)
-            return f"No entities match ({filt or 'no filter'})."
+            exp_note = "" if not exposed_only else ", exposed only"
+            return f"No entities match ({filt or 'no filter'}{exp_note})."
 
         rows.sort(key=lambda r: (r[2], r[0]))
         lines = [f"- {eid} — {fn} @ {a}" for eid, fn, a in rows]
@@ -272,7 +322,7 @@ class HALocalToolRegistry:
             header += f" area={area}"
         return _cap(lines, header=header + ":\n")
 
-    def _get_entity(self, name_or_id: str) -> str:
+    def _get_entity(self, name_or_id: str, exposed_only: bool = True) -> str:
         if not name_or_id:
             return "get_entity: empty name_or_id."
         hass = self._hass
@@ -319,6 +369,12 @@ class HALocalToolRegistry:
             return f"No entity matches {name_or_id!r}. Try search_entities."
 
         entity_id = entry.entity_id
+        if exposed_only and not self._is_exposed(entity_id):
+            return (
+                f"Entity {entity_id!r} exists but is not exposed to the conversation assistant. "
+                f"Use exposed_only=false if you need to inspect it."
+            )
+
         state = hass.states.get(entity_id)
         friendly = _s(state.attributes.get("friendly_name")) if state else ""
         friendly = friendly or _s(entry.name) or _s(entry.original_name) or entity_id
@@ -342,7 +398,9 @@ class HALocalToolRegistry:
             lines.extend(attrs)
         return "\n".join(lines)
 
-    def _search_entities(self, query: str, limit: int = 10) -> str:
+    def _search_entities(
+        self, query: str, limit: int = 10, exposed_only: bool = True
+    ) -> str:
         if not query:
             return "search_entities: empty query."
         hass = self._hass
@@ -364,6 +422,8 @@ class HALocalToolRegistry:
 
         hits: list[tuple[str, str, str]] = []
         for entity_id, entry in ent_reg.entities.items():
+            if exposed_only and not self._is_exposed(entity_id):
+                continue
             candidates = [entity_id, _s(entry.name), _s(entry.original_name)]
             candidates.extend(_s(a) for a in (entry.aliases or ()))
             state = hass.states.get(entity_id)

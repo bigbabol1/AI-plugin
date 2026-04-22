@@ -73,6 +73,67 @@ _LOGGER = logging.getLogger(__name__)
 # they are written to canonical history (XML fallback path).
 _XML_TOOL_CALL_RE = re.compile(r"<tool_call[^>]*>.*?</tool_call>", re.DOTALL)
 
+# Domain/device words that suggest the user is asking about a specific entity.
+_ENTITY_WORDS = frozenset(
+    "light lights switch switches lamp lamps bulb bulbs sensor sensors "
+    "thermostat thermostats blinds cover covers lock locks fan fans "
+    "vacuum vacuums plug plugs media speaker tv television climate".split()
+)
+# Words that suggest an area-level question.
+_AREA_WORDS = frozenset("room rooms area areas house zones zone".split())
+# Words that suggest a domain sweep ("list all lights", "show switches").
+_SWEEP_WORDS = frozenset("list show which all every what".split())
+# Pronouns that reference a prior action — keep all schemas so model is flexible.
+_PRONOUN_RE = re.compile(r"\b(it|that|them|those|there|here)\b", re.IGNORECASE)
+
+
+def _prune_ha_local_schemas(
+    user_message: str, schemas: list[dict]
+) -> list[dict]:
+    """Drop ha_local tool schemas that are unlikely to be useful for this turn.
+
+    Heuristic-only — cheap, never perfect. When in doubt, keep the schema.
+    Minimum 2 schemas always returned so the model always has search + get.
+    """
+    if len(schemas) <= 2:
+        return schemas
+
+    text = user_message.lower()
+    words = set(re.findall(r"[a-z_]+", text))
+
+    # Pronouns → keep everything; prior-turn entity is in [LAST ACTION].
+    if _PRONOUN_RE.search(text):
+        return schemas
+
+    has_entity_word = bool(words & _ENTITY_WORDS)
+    # entity_id pattern like "light.something"
+    has_entity_id = bool(re.search(r"[a-z_]+\.[a-z0-9_]+", text))
+    has_area_word = bool(words & _AREA_WORDS)
+    has_sweep = bool(words & _SWEEP_WORDS)
+
+    names_to_drop: set[str] = set()
+
+    # If message is clearly about a specific entity (no area question, no sweep):
+    if (has_entity_word or has_entity_id) and not has_area_word and not has_sweep:
+        names_to_drop.add("list_areas")
+        names_to_drop.add("list_entities")
+
+    if not names_to_drop:
+        return schemas
+
+    pruned = [s for s in schemas if s.get("function", {}).get("name") not in names_to_drop]
+    # Safety: always keep at least 2 ha_local schemas (search_entities + get_entity).
+    if len(pruned) < 2:
+        return schemas
+
+    if names_to_drop:
+        _LOGGER.debug(
+            "AI Plugin: pruned ha_local schemas %s for message %r",
+            names_to_drop,
+            user_message[:60],
+        )
+    return pruned
+
 
 class Orchestrator:
     """Processes messages: history → system prompt → LLM → reply.
@@ -229,7 +290,8 @@ class Orchestrator:
             if self._memory is not None:
                 tool_schemas = [*MEMORY_TOOL_SCHEMAS, *tool_schemas]
             if self._ha_local is not None:
-                tool_schemas = [*self._ha_local.get_schemas(), *tool_schemas]
+                ha_schemas = _prune_ha_local_schemas(message, self._ha_local.get_schemas())
+                tool_schemas = [*ha_schemas, *tool_schemas]
 
             _LOGGER.debug(
                 "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
@@ -239,6 +301,24 @@ class Orchestrator:
                 len(messages),
                 len(tool_schemas),
             )
+
+            # Token budget snapshot — one INFO line per user turn for observability.
+            if _LOGGER.isEnabledFor(logging.INFO):
+                schema_tokens = self._context_mgr.estimate_tokens(str(tool_schemas))
+                report = self._context_mgr.budget_report(
+                    system_prompt, messages, schema_tokens
+                )
+                log_fn = _LOGGER.warning if report["pct"] >= 0.80 else _LOGGER.info
+                log_fn(
+                    "AI Plugin budget conv=%s sys=%d tools=%d hist=%d total=%d/%d (%.0f%%)",
+                    conversation_id,
+                    report["system"],
+                    report["tools"],
+                    report["history"],
+                    report["total"],
+                    report["cap"],
+                    report["pct"] * 100,
+                )
 
             # 5. Call LLM — three paths based on config and tool availability:
             #    a) XML fallback (opt-in, experimental) — tool spec injected into prompt

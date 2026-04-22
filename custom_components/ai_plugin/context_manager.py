@@ -111,6 +111,33 @@ class ContextManager:
         available = max(0, self._max_tokens - system_tokens - self._tool_budget)
         return int(available * 0.65), int(available * 0.85)
 
+    def budget_report(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        tool_schemas_tokens: int,
+    ) -> dict:
+        """Snapshot of token pressure for a single turn.
+
+        Returns a plain dict so the caller can log or act without coupling to
+        this class's internals.  Keys: system, tools, history, total, cap, pct.
+        pct is history/available (0.0–1.0+); cap is self._max_tokens.
+        """
+        system_tokens = self.estimate_tokens(system_prompt)
+        # messages list includes the system message; skip it for history count.
+        history_msgs = [m for m in messages if m.get("role") != "system"]
+        history_tokens = self._estimate_messages_tokens(history_msgs)
+        total = system_tokens + tool_schemas_tokens + history_tokens
+        available = max(1, self._max_tokens - system_tokens - tool_schemas_tokens)
+        return {
+            "system": system_tokens,
+            "tools": tool_schemas_tokens,
+            "history": history_tokens,
+            "total": total,
+            "cap": self._max_tokens,
+            "pct": history_tokens / available,
+        }
+
     # ── public API ────────────────────────────────────────────────────────────
 
     async def add_turn(self, conv_id: str, role: str, content: str) -> None:
