@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import ulid as ulid_util
 
 from .const import DOMAIN
 from .exceptions import OrchestratorError
@@ -62,14 +63,12 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         user_id: str | None = (
             getattr(user_input.context, "user_id", None) if user_input.context else None
         )
-        # Always use a stable per-user conversation ID so context persists
-        # across Assist panel reopen, HA restarts, and session boundaries.
-        # HA's ephemeral session conversation_id is intentionally ignored —
-        # it resets every time the Assist panel is opened.
-        conversation_id = (
-            f"ai_plugin_user_{user_id}" if user_id
-            else f"ai_plugin_{self._entry.entry_id}"
-        )
+        # Honour HA's ephemeral conversation_id so history resets when the
+        # Assist panel is reopened or a new session begins. Follow-up turns
+        # within the same session reuse the id HA echoes back. Long-term
+        # memory lives in the remember/recall tool (.ai_plugin_memory_*.json),
+        # not in conversation history.
+        conversation_id = user_input.conversation_id or ulid_util.ulid_now()
         _LOGGER.info(
             "AI Plugin: conv_id=%s user_id=%s input=%r",
             conversation_id, user_id, user_input.text[:80],
