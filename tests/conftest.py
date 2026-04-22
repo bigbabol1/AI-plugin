@@ -113,7 +113,15 @@ class _DeviceInfo:
     def __init__(self, **kw): pass
 
 
-_make_module("homeassistant.helpers.device_registry", DeviceInfo=_DeviceInfo)
+_dev_reg_mod = _make_module("homeassistant.helpers.device_registry", DeviceInfo=_DeviceInfo)
+
+# ── homeassistant.helpers.area_registry ──────────────────────────────────────
+
+_area_reg_mod = _make_module("homeassistant.helpers.area_registry", async_get=MagicMock())
+
+# ── homeassistant.helpers.entity_registry ────────────────────────────────────
+
+_ent_reg_mod = _make_module("homeassistant.helpers.entity_registry", async_get=MagicMock())
 
 # ── homeassistant.helpers.entity_platform ────────────────────────────────────
 
@@ -124,6 +132,9 @@ _make_module("homeassistant.helpers.entity_platform", AddEntitiesCallback=object
 _helpers = _make_module(
     "homeassistant.helpers",
     intent=_intent_mod,
+    area_registry=_area_reg_mod,
+    entity_registry=_ent_reg_mod,
+    device_registry=_dev_reg_mod,
 )
 
 # ── homeassistant.util.ulid ───────────────────────────────────────────────────
