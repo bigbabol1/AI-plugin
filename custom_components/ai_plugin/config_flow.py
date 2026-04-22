@@ -45,6 +45,7 @@ from .const import (
     CONF_BASE_URL,
     CONF_BRAVE_API_KEY,
     CONF_CONTEXT_WINDOW,
+    CONF_FALLBACK_USER_ID,
     CONF_MAX_RESULTS,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
@@ -170,14 +171,47 @@ def _web_search_schema(current: dict[str, Any]) -> vol.Schema:
     )
 
 
-def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
-    """Build the advanced settings vol.Schema with current values as defaults."""
-    return vol.Schema(
-        {
+async def _fallback_user_options(hass) -> list[dict[str, str]]:
+    """Build options for the fallback-user dropdown.
+
+    Returns a list of ``{"value", "label"}`` dicts, starting with the empty
+    "(none)" choice and followed by all non-system HA users. This is the list
+    consumed by ``_advanced_schema`` when rendering the Advanced form.
+    """
+    options: list[dict[str, str]] = [
+        {"value": "", "label": "(none — use anonymous memory file)"}
+    ]
+    try:
+        users = await hass.auth.async_get_users()
+    except Exception:  # noqa: BLE001
+        return options
+    for u in users:
+        if getattr(u, "system_generated", False):
+            continue
+        if not getattr(u, "is_active", True):
+            continue
+        options.append({"value": u.id, "label": u.name or u.id})
+    return options
+
+
+def _advanced_schema(
+    current: dict[str, Any],
+    user_options: list[dict[str, str]] | None = None,
+) -> vol.Schema:
+    """Build the advanced settings vol.Schema with current values as defaults.
+
+    ``user_options`` is a list of ``{"value", "label"}`` dicts for the
+    fallback-user dropdown. The first entry should be the empty "(none)"
+    option so that the field can be cleared. When ``None`` is passed the
+    field is omitted (tests / callers that cannot reach the HA user list).
+    """
+    fallback_current = current.get(CONF_FALLBACK_USER_ID, "") or ""
+    schema: dict[Any, Any] = {
             vol.Optional(
                 CONF_SYSTEM_PROMPT,
                 default=current.get(CONF_SYSTEM_PROMPT, SYSTEM_PROMPT_DEFAULT),
             ): selector.TemplateSelector(),
+
             vol.Optional(
                 CONF_CONTEXT_WINDOW,
                 default=current.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW),
@@ -257,7 +291,17 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
                 )
             ),
         }
-    )
+    if user_options is not None:
+        schema[
+            vol.Optional(CONF_FALLBACK_USER_ID, default=fallback_current)
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=user_options,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                custom_value=False,
+            )
+        )
+    return vol.Schema(schema)
 
 
 class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -493,6 +537,9 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             for key in (CONF_TEMPERATURE, CONF_TOP_P):
                 if key in user_input:
                     user_input[key] = float(user_input[key])
+            # Normalise empty fallback selection to None (anonymous file)
+            if CONF_FALLBACK_USER_ID in user_input and not user_input[CONF_FALLBACK_USER_ID]:
+                user_input[CONF_FALLBACK_USER_ID] = None
             # HA MCP quick-connect: build the server entry and append to mcp_servers
             use_ha_mcp = bool(user_input.pop("use_ha_mcp", False))
             ha_mcp_token = str(user_input.pop("ha_mcp_token", "")).strip()
@@ -508,10 +555,11 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._options.update(user_input)
             return self._create_entry()
 
+        user_options = await _fallback_user_options(self.hass)
         # Merge the standard advanced schema with the HA MCP quick-connect fields.
         schema = vol.Schema(
             {
-                **_advanced_schema(self._options).schema,
+                **_advanced_schema(self._options, user_options).schema,
                 vol.Optional("use_ha_mcp", default=False): selector.BooleanSelector(),
                 vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
@@ -724,12 +772,15 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             for key in (CONF_TEMPERATURE, CONF_TOP_P):
                 if key in user_input:
                     user_input[key] = float(user_input[key])
+            if CONF_FALLBACK_USER_ID in user_input and not user_input[CONF_FALLBACK_USER_ID]:
+                user_input[CONF_FALLBACK_USER_ID] = None
             self._options.update(user_input)
             return self.async_create_entry(title="", data=self._options)
 
+        user_options = await _fallback_user_options(self.hass)
         return self.async_show_form(
             step_id="advanced",
-            data_schema=_advanced_schema(self._options),
+            data_schema=_advanced_schema(self._options, user_options),
         )
 
     # ── MCP servers ──────────────────────────────────────────────────────────

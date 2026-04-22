@@ -70,6 +70,7 @@
           "temperature": "Temperature",
           "top_p": "Top P",
           "max_tokens": "Max tokens (output)",
+          "fallback_user_id": "Voice fallback user",
           "use_ha_mcp": "Connect to Home Assistant's built-in MCP server",
           "ha_mcp_token": "Long-lived access token"
         },
@@ -84,6 +85,7 @@
           "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
           "top_p": "Nucleus sampling threshold. Leave blank to use the model's default.",
           "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit.",
+          "fallback_user_id": "Voice Assist (satellites, wake-word) has no authenticated HA user, so its memory goes to a separate 'anonymous' file. Pick a user here to make voice reuse that user's memory file — so facts you save via typed Assist are recalled over voice too.",
           "use_ha_mcp": "Gives AI Plugin access to your sensors, devices, and automations via HA's built-in MCP server.",
           "ha_mcp_token": "Create one in your HA profile → Long-lived access tokens (scroll to the bottom of the page)."
         }
@@ -169,7 +171,8 @@
           "response_timeout": "Timeout (seconds)",
           "temperature": "Temperature",
           "top_p": "Top P",
-          "max_tokens": "Max tokens (output)"
+          "max_tokens": "Max tokens (output)",
+          "fallback_user_id": "Voice fallback user"
         },
         "data_description": {
           "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
@@ -181,7 +184,8 @@
           "response_timeout": "How long to wait for the AI before giving up.",
           "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
           "top_p": "Nucleus sampling threshold. Leave blank to use the model's default.",
-          "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit."
+          "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit.",
+          "fallback_user_id": "Voice Assist (satellites, wake-word) has no authenticated HA user, so its memory goes to a separate 'anonymous' file. Pick a user here to make voice reuse that user's memory file — so facts you save via typed Assist are recalled over voice too."
         }
       },
       "mcp_servers": {
