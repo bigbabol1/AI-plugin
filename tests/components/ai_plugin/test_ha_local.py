@@ -182,3 +182,131 @@ async def test_set_area_state_unknown_area(patched_registries) -> None:
     )
     assert out.startswith("Unknown area 'garden'")
     hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_success_light_turn_off(patched_registries) -> None:
+    """Happy path: all exposed lights in the area get a single service call."""
+    areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
+    entities = [
+        _entity("light.ceiling", area_id="a_kit"),
+        _entity("light.counter", area_id="a_kit"),
+        _entity("light.dining", area_id="a_kit"),
+        _entity("light.bedroom_lamp", area_id="a_bed"),  # different area
+        _entity("switch.kettle", area_id="a_kit"),        # different domain
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "kitchen", "domain": "light", "action": "turn_off"},
+    )
+    assert out.startswith("OK — turn_off 3 light(s) in Kitchen")
+    assert "light.ceiling" in out and "light.counter" in out and "light.dining" in out
+
+    hass.services.async_call.assert_awaited_once()
+    args, kwargs = hass.services.async_call.call_args
+    assert args[0] == "light"
+    assert args[1] == "turn_off"
+    assert kwargs["target"] == {
+        "entity_id": ["light.ceiling", "light.counter", "light.dining"],
+    }
+    assert kwargs["blocking"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_cover_open_uses_open_cover(patched_registries) -> None:
+    """cover+turn_on maps to the open_cover service."""
+    areas = [_area("a1", "Hobbyroom")]
+    entities = [_entity("cover.garage", area_id="a1")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "hobbyroom", "domain": "cover", "action": "turn_on"},
+    )
+    assert "OK — turn_on 1 cover(s) in Hobbyroom" in out
+
+    args, _kw = hass.services.async_call.call_args
+    assert args[0] == "cover"
+    assert args[1] == "open_cover"
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_no_exposed_entities(patched_registries) -> None:
+    """Area and domain exist but no entity is exposed → friendly message."""
+    areas = [_area("a1", "Kitchen")]
+    entities = [_entity("light.hidden", area_id="a1")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    # force _is_exposed to return False for this test
+    with patch.object(HALocalToolRegistry, "_is_exposed", return_value=False):
+        out = await reg.call_tool(
+            "set_area_state",
+            {"area": "kitchen", "domain": "light", "action": "turn_off"},
+        )
+    assert out == "No exposed light in Kitchen."
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_alias_match(patched_registries) -> None:
+    """Alias match resolves to the canonical area name."""
+    areas = [_area("a1", "Kitchen", aliases=("Küche",))]
+    entities = [_entity("light.ceiling", area_id="a1")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "küche", "domain": "light", "action": "turn_on"},
+    )
+    assert "in Kitchen" in out
+    hass.services.async_call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_device_inherits_area(patched_registries) -> None:
+    """Entity with no area_id inherits its device's area_id."""
+    areas = [_area("a1", "Kitchen")]
+    devices = [_device("d1", area_id="a1")]
+    entities = [_entity("light.stove", area_id=None, device_id="d1")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities, devices=devices)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "kitchen", "domain": "light", "action": "turn_on"},
+    )
+    assert "1 light(s) in Kitchen" in out
+    args, _kw = hass.services.async_call.call_args
+    assert _kw["target"] == {"entity_id": ["light.stove"]}
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_service_exception_caught(patched_registries) -> None:
+    """Service failure returns a bracketed error string, does not raise."""
+    areas = [_area("a1", "Kitchen")]
+    entities = [_entity("light.ceiling", area_id="a1")]
+    hass, ar_r, er_r, dr_r = _make_hass(
+        areas=areas,
+        entities=entities,
+        service_side_effect=RuntimeError("boom"),
+    )
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "kitchen", "domain": "light", "action": "turn_on"},
+    )
+    assert out.startswith("[set_area_state failed:")
+    assert "boom" in out

@@ -524,5 +524,44 @@ class HALocalToolRegistry:
         if target_area is None:
             return f"Unknown area {area!r}. Try list_areas."
 
-        # remainder of implementation added in Task 4
-        return "[set_area_state: not yet implemented past area resolution]"
+        ent_reg = er.async_get(self._hass)
+        dev_reg = dr.async_get(self._hass)
+
+        ids: list[str] = []
+        for eid, entry in ent_reg.entities.items():
+            if not eid.startswith(f"{domain}."):
+                continue
+            area_id = entry.area_id
+            if not area_id and entry.device_id:
+                dev = dev_reg.async_get(entry.device_id)
+                if dev:
+                    area_id = dev.area_id
+            if area_id != target_area.id:
+                continue
+            if exposed_only and not self._is_exposed(eid):
+                continue
+            ids.append(eid)
+
+        if not ids:
+            scope = "exposed " if exposed_only else ""
+            return f"No {scope}{domain} in {target_area.name}."
+
+        ids.sort()
+        service = svc_map[action]
+        try:
+            await self._hass.services.async_call(
+                domain,
+                service,
+                target={"entity_id": ids},
+                blocking=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin set_area_state failed")
+            return f"[set_area_state failed: {exc}]"
+
+        preview = ", ".join(ids[:6])
+        more = f" (+{len(ids) - 6} more)" if len(ids) > 6 else ""
+        return (
+            f"OK — {action} {len(ids)} {domain}(s) in {target_area.name}: "
+            f"{preview}{more}"
+        )
