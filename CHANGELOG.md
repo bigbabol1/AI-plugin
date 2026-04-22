@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.22] - 2026-04-22
+
+### Fixed
+
+- **LLM now calls `recall` proactively** (`const.py`). After v0.5.21 started prepending `SYSTEM_PROMPT_DEFAULT` to user-supplied custom prompts, small LLMs locked onto the default prompt's heavy entity-discovery rules and stopped invoking the `recall` memory tool — facts were written but never surfaced. Added a `[MEMORY]` block to both the default and voice system prompts explicitly directing the model to call `recall` when the user asks about their preferences, past statements, or anything depending on previously stored facts, and `remember`/`forget` on durable preference statements.
+
 ## [0.5.21] - 2026-04-22
 
 ### Changed

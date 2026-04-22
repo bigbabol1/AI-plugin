@@ -99,6 +99,13 @@ SYSTEM_PROMPT_DEFAULT = (
     "- When confirming an action, repeat back ONLY the entity name and the action. Do not add area, brightness, colour, or other attributes unless the tool result contained them.\n"
     "- If a tool call fails or returns empty, say so plainly. Do not fabricate a plausible answer.\n"
     "\n"
+    "[MEMORY]\n"
+    "- Long-term facts about the user (preferences, names, routines, anything they said to remember) live in the remember/recall/forget tools.\n"
+    "- When the user asks 'what do I like', 'what did I tell you about X', 'do you remember Y', or anything that depends on past user-provided facts: CALL recall FIRST, then answer from its output.\n"
+    "- When the user says 'remember X', 'don't forget Y', or states a durable preference: CALL remember(fact=...).\n"
+    "- When the user says 'forget X' or corrects a past fact: CALL forget(fact=...).\n"
+    "- Recall is cheap — if unsure whether you know something about the user, call recall before guessing.\n"
+    "\n"
     "[TOOL USE]\n"
     "- Do not ask for permission to search or control devices. Call the tool immediately.\n"
     "- If a discovery tool returns no results, try a looser filter (drop area, drop domain, switch to search_entities) before giving up.\n"
@@ -122,7 +129,11 @@ SYSTEM_PROMPT_VOICE = (
     "with entity_id.\n"
     "- \"Which rooms\": list_areas. \"What's in X\": list_entities(area=X).\n"
     "- Never invent entity_ids or area names. "
-    "If unsure, call a discovery tool first."
+    "If unsure, call a discovery tool first.\n"
+    "\n"
+    "Memory:\n"
+    "- User asks \"what do I like\", \"do you remember\", or anything depending on past facts: CALL recall first.\n"
+    "- User says \"remember X\": CALL remember(fact=X). \"forget X\": CALL forget(fact=X)."
 )
 
 # Token budget warning threshold (tokens remaining for history)
