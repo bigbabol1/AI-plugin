@@ -112,6 +112,62 @@ def _any_list_entities_call(tool_msgs: list[dict]) -> bool:
     return False
 
 
+def _any_tool_call(tool_msgs: list[dict], tool_name: str) -> bool:
+    """True if the tool-loop invoked a given tool at least once."""
+    for m in tool_msgs:
+        for tc in m.get("tool_calls") or []:
+            if tc.get("function", {}).get("name") == tool_name:
+                return True
+    return False
+
+
+# Phrases get_entity / search_entities return when an entity can't be
+# resolved. When the model sees these in a tool result it is supposed
+# to broaden the search (search_entities) or list_entities; small models
+# sometimes accept the miss and tell the user "can't find X" instead.
+_MISS_RESULT_PATTERNS = (
+    "no entity matches",
+    "no matches for",
+    "no results",
+    "try search_entities",
+)
+
+
+def _get_entity_missed(tool_msgs: list[dict]) -> str | None:
+    """Return the original get_entity argument if a call returned a miss.
+
+    Scans tool result messages; if a get_entity call returned a
+    no-match string, return the name/entity_id that was asked about so
+    the retry can pass it straight to search_entities.
+    """
+    import json as _json
+    last_get_args: dict | None = None
+    for m in tool_msgs:
+        if m.get("role") == "assistant":
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                if fn.get("name") == "get_entity":
+                    raw = fn.get("arguments", "{}")
+                    try:
+                        last_get_args = (
+                            _json.loads(raw) if isinstance(raw, str) else (raw or {})
+                        )
+                    except Exception:  # noqa: BLE001
+                        last_get_args = {}
+        elif m.get("role") == "tool":
+            content = (m.get("content") or "").lower()
+            if any(p in content for p in _MISS_RESULT_PATTERNS):
+                if last_get_args:
+                    return (
+                        last_get_args.get("name")
+                        or last_get_args.get("entity_id")
+                        or last_get_args.get("entity")
+                        or ""
+                    )
+                return ""
+    return None
+
+
 # Detect when a model emits a tool call as plain text ("content") instead of
 # using the API's structured tool_calls field. Matches first call in text.
 # Accepts optional "CALL " prefix and optional trailing period.
@@ -552,6 +608,49 @@ class Orchestrator:
                         tool_msgs = tool_msgs + tool_msgs2
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("AI Plugin: grounding retry failed — keeping original reply")
+
+            # 5c. Fuzzy-resolve verifier: if get_entity returned a no-match
+            # ("No entity matches 'bedroom temperature'. Try search_entities.")
+            # and the model never fell back to search_entities, force the
+            # fallback. Small models accept the miss and tell the user "can't
+            # find" instead of broadening the search.
+            missed_name = _get_entity_missed(tool_msgs)
+            if (
+                missed_name is not None
+                and tool_schemas
+                and not self._xml_fallback
+                and not _any_tool_call(tool_msgs, "search_entities")
+            ):
+                _LOGGER.info(
+                    "AI Plugin: fuzzy-resolve retry — get_entity(%r) missed, "
+                    "search_entities was not called",
+                    missed_name,
+                )
+                hint = (missed_name or "").strip() or "the requested entity"
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"CRITICAL: get_entity returned no match for {hint!r}. "
+                        "Do NOT tell the user you cannot find it. CALL "
+                        "search_entities with a BROADER, single-keyword query "
+                        "(e.g. 'temperature', 'bedroom', 'door', 'stehlampe') "
+                        "— never the full phrase. Read the returned list, pick "
+                        "the best match, then CALL get_entity with its "
+                        "entity_id. Only after both tools have run, answer "
+                        "the user from the returned state."
+                    ),
+                })
+                try:
+                    reply3, tool_msgs3 = await self._tool_loop(
+                        messages, tool_schemas, user_id, voice_mode
+                    )
+                    if _any_tool_call(tool_msgs3, "search_entities"):
+                        reply = reply3
+                        tool_msgs = tool_msgs + tool_msgs3
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "AI Plugin: fuzzy-resolve retry failed — keeping original reply"
+                    )
 
             # 6. Append tool call/result messages then the assistant reply to history.
             for msg in tool_msgs:
