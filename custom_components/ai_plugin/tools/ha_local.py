@@ -126,10 +126,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "list_entities",
             "description": (
                 "List entities in Home Assistant. Optionally filter by area "
-                "(e.g. 'hobbyroom') and/or domain (e.g. 'light', 'switch', "
-                "'sensor', 'media_player', 'climate'). Call this to answer "
-                "'which lights can you see', 'what is in the kitchen', "
-                "'list all switches'."
+                "(e.g. 'hobbyroom'), domain (e.g. 'light', 'switch', "
+                "'sensor'), and/or state (e.g. 'on', 'off', 'home'). Call "
+                "this to answer 'which lights can you see', 'what is in the "
+                "kitchen', 'list all switches', 'which lights are on', "
+                "'any windows open?'. Each row includes the live state."
             ),
             "parameters": {
                 "type": "object",
@@ -143,6 +144,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": (
                             "Optional HA domain to filter by (light, switch, "
                             "sensor, climate, media_player, cover, etc.)."
+                        ),
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": (
+                            "Optional state filter (case-insensitive). "
+                            "Examples: 'on', 'off', 'home', 'open', 'unavailable'. "
+                            "Use this to answer 'which lights are on', "
+                            "'any windows open', 'welche Lichter sind an'."
                         ),
                     },
                     **_EXPOSED_ONLY_PROP,
@@ -301,6 +311,7 @@ class HALocalToolRegistry:
                 return self._list_entities(
                     area=_s(arguments.get("area")).strip() or None,
                     domain=_s(arguments.get("domain")).strip() or None,
+                    state=_s(arguments.get("state")).strip() or None,
                     exposed_only=exposed_only,
                 )
             if name == "get_entity":
@@ -346,6 +357,7 @@ class HALocalToolRegistry:
         self,
         area: str | None = None,
         domain: str | None = None,
+        state: str | None = None,
         exposed_only: bool = True,
     ) -> str:
         hass = self._hass
@@ -355,6 +367,7 @@ class HALocalToolRegistry:
 
         target_area = area.lower() if area else None
         target_domain = domain.lower().strip(".") if domain else None
+        target_state = state.lower().strip() if state else None
 
         def _area_name(entry) -> str | None:
             area_id = entry.area_id
@@ -367,7 +380,7 @@ class HALocalToolRegistry:
             a = area_reg.async_get_area(area_id)
             return _s(a.name) if a else None
 
-        rows: list[tuple[str, str, str]] = []
+        rows: list[tuple[str, str, str, str]] = []
         for entity_id, entry in ent_reg.entities.items():
             if target_domain and not entity_id.startswith(f"{target_domain}."):
                 continue
@@ -377,23 +390,30 @@ class HALocalToolRegistry:
             if target_area:
                 if not a_name or a_name.lower() != target_area:
                     continue
-            state = hass.states.get(entity_id)
-            friendly = _s(state.attributes.get("friendly_name")) if state else ""
+            ent_state = hass.states.get(entity_id)
+            state_val = ent_state.state if ent_state else "unknown"
+            if target_state and state_val.lower() != target_state:
+                continue
+            friendly = _s(ent_state.attributes.get("friendly_name")) if ent_state else ""
             friendly = friendly or _s(entry.name) or _s(entry.original_name) or entity_id
-            rows.append((entity_id, friendly, a_name or "-"))
+            rows.append((entity_id, friendly, a_name or "-", state_val))
 
         if not rows:
-            filt = ", ".join(f"{k}={v}" for k, v in [("area", area), ("domain", domain)] if v)
+            filt = ", ".join(
+                f"{k}={v}" for k, v in [("area", area), ("domain", domain), ("state", state)] if v
+            )
             exp_note = "" if not exposed_only else ", exposed only"
             return f"No entities match ({filt or 'no filter'}{exp_note})."
 
         rows.sort(key=lambda r: (r[2], r[0]))
-        lines = [f"- {eid} — {fn} @ {a}" for eid, fn, a in rows]
+        lines = [f"- {eid} — {fn} [{st}] @ {a}" for eid, fn, a, st in rows]
         header = f"{len(rows)} entities"
         if domain:
             header += f" domain={domain}"
         if area:
             header += f" area={area}"
+        if state:
+            header += f" state={state}"
         return _cap(lines, header=header + ":\n")
 
     def _get_entity(self, name_or_id: str, exposed_only: bool = True) -> str:
