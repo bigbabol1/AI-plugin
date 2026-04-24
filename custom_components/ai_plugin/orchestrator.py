@@ -442,7 +442,7 @@ class Orchestrator:
                 conversation_id, history_depth, self._last_entities.get(conversation_id),
             )
 
-        return reply
+        return stored_reply
 
     async def _tool_loop(
         self,
