@@ -217,11 +217,53 @@ class Orchestrator:
 
         Base prompt (voice-compact or default) is always sent so the plugin's
         entity-discovery, grounding, and speech rules apply. User's custom
-        instructions are appended on top — persona, location, etc.
+        instructions are appended on top — persona, location, etc. A
+        [HOME LOCATION] block is always injected from hass.config so the
+        model can enrich web_search queries with the user's real location.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
+        location_block = self._build_location_block()
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
-        return f"{base}\n\n{custom}" if custom else base
+        parts = [base, location_block]
+        if custom:
+            parts.append(custom)
+        return "\n\n".join(p for p in parts if p)
+
+    def _build_location_block(self) -> str:
+        """Render hass.config home location as a prompt block.
+
+        Used by the model to scope web_search queries (weather, news,
+        local events) to the user's actual location instead of guessing.
+        """
+        try:
+            cfg = self._hass.config
+            parts: list[str] = []
+            name = str(getattr(cfg, "location_name", "") or "").strip()
+            country = str(getattr(cfg, "country", "") or "").strip()
+            tz = str(getattr(cfg, "time_zone", "") or "").strip()
+            lat = getattr(cfg, "latitude", None)
+            lon = getattr(cfg, "longitude", None)
+            if name:
+                parts.append(f"name={name}")
+            if country:
+                parts.append(f"country={country}")
+            if tz:
+                parts.append(f"timezone={tz}")
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                parts.append(f"coords={lat:.4f},{lon:.4f}")
+            if not parts:
+                return ""
+            joined = ", ".join(parts)
+            return (
+                "[HOME LOCATION]\n"
+                f"- {joined}\n"
+                "- For weather, news, local events, or any location-sensitive "
+                "web_search, include this location (name or country) in the "
+                "query so results match the user's actual area."
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: could not build location block", exc_info=True)
+            return ""
 
     async def async_process(
         self,
