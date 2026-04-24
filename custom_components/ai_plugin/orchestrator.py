@@ -73,6 +73,31 @@ _LOGGER = logging.getLogger(__name__)
 # they are written to canonical history (XML fallback path).
 _XML_TOOL_CALL_RE = re.compile(r"<tool_call[^>]*>.*?</tool_call>", re.DOTALL)
 
+# Strip narration sentences like "Calling list_entities(...)..." that small
+# models emit even when the system prompt forbids it. Matches a full line
+# or a leading sentence up to the next newline / sentence break.
+_NARRATION_PATTERNS = [
+    r"^\s*Calling\s+\w+\([^\n]*?\)\s*\.{0,6}\s*$",
+    r"^\s*(?:Let me|I will|I'll|I am going to|Let's)\s+(?:call|check|see|look|run|use|try|invoke)[^\n]*$",
+    r"^\s*(?:Checking|Searching|Looking up|Querying)[^\n]*\.{0,6}\s*$",
+    r"^\s*Found\s+(?:a\s+|the\s+|one\s+)?\w+\s+entit(?:y|ies)[^\n]*$",
+    r"^\s*No\s+\w+\s+entit(?:y|ies)\s+found[^\n]*$",
+]
+_NARRATION_RE = re.compile("|".join(_NARRATION_PATTERNS), re.MULTILINE | re.IGNORECASE)
+
+
+def _strip_narration(text: str) -> str:
+    """Remove tool-call narration lines from a model reply.
+
+    Small models (qwen2.5:7B and similar) sometimes ignore the
+    "don't narrate" prompt rule and prefix their real answer with
+    progress chatter. Strip those lines before handing the reply to
+    the user / TTS.
+    """
+    cleaned = _NARRATION_RE.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
 # Domain/device words that suggest the user is asking about a specific entity.
 _ENTITY_WORDS = frozenset(
     "light lights switch switches lamp lamps bulb bulbs sensor sensors "
@@ -243,23 +268,24 @@ class Orchestrator:
             tz = str(getattr(cfg, "time_zone", "") or "").strip()
             lat = getattr(cfg, "latitude", None)
             lon = getattr(cfg, "longitude", None)
-            if name:
-                parts.append(f"name={name}")
             if country:
                 parts.append(f"country={country}")
-            if tz:
-                parts.append(f"timezone={tz}")
             if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
                 parts.append(f"coords={lat:.4f},{lon:.4f}")
+            if tz:
+                parts.append(f"timezone={tz}")
+            if name:
+                parts.append(f"friendly_label={name}")
             if not parts:
                 return ""
             joined = ", ".join(parts)
             return (
                 "[HOME LOCATION]\n"
                 f"- {joined}\n"
-                "- For weather, news, local events, or any location-sensitive "
-                "web_search, include this location (name or country) in the "
-                "query so results match the user's actual area."
+                "- For web_search queries use country and/or coords. "
+                "The friendly_label (e.g. 'HomeSweetHome', 'Casa') is a "
+                "user-chosen nickname for the HA instance — it is NOT a city "
+                "or country name; never put it in a web_search query."
             )
         except Exception:  # noqa: BLE001
             _LOGGER.debug("AI Plugin: could not build location block", exc_info=True)
@@ -383,6 +409,7 @@ class Orchestrator:
             for msg in tool_msgs:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
             stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
+            stored_reply = _strip_narration(stored_reply) or stored_reply
 
             # Defensive: small models occasionally return empty content with no
             # tool calls (prompt/tool confusion). Surface a user-facing fallback
