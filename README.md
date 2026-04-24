@@ -21,15 +21,16 @@ The most critical factor for reliable entity control is **tool calling quality**
 
 | Model | Ollama tag | Weights | Tool calling | Notes |
 |-------|-----------|---------|-------------|-------|
-| Qwen2.5 7B | `qwen2.5:7b` | ~4.7 GB | ⭐⭐⭐⭐ | Recommended. Strong tool calling, fits comfortably. |
+| **Qwen3 8B** | `qwen3:8b` | ~5.2 GB | ⭐⭐⭐⭐⭐ | **Recommended.** 92% reliability in our 25-query benchmark with the plugin's native function-calling path. Emits reasoning into a separate `thinking` field — the plugin passes `think: false` automatically so `content` is populated. Supports up to 40 K context. |
+| Qwen2.5 7B | `qwen2.5:7b` | ~4.7 GB | ⭐⭐⭐⭐ | Solid fallback. No reasoning-mode quirks. |
 | Mistral 7B | `mistral:7b` | ~4.1 GB | ⭐⭐⭐⭐ | Lighter, decisive tool calls, leaves more headroom for context. |
 | Llama 3.1 8B | `llama3.1:8b` | ~4.8 GB | ⭐⭐⭐⭐ | Good balance; instruction-tuned variant preferred. |
 
 > **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB.
-> A 7B Q4_K_M model uses ~4.7 GB weights; KV cache is roughly 0.2 GB per 1 K tokens.
+> A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache is roughly 0.2 GB per 1 K tokens.
 > Setting **Context Window = 8192** is the practical sweet spot — leaves margin without wasting VRAM.
 > The integration default is **16384** (sized for 12 GB+ cards) — lower it to 8192 in Advanced settings on 8 GB hardware.
-> Avoid values above 12 000 on an 8 GB card with 7B models.
+> Avoid values above 16 000 on an 8 GB card with 7–8B models.
 
 ### 24 GB VRAM (e.g. RTX 3090, RTX 4090)
 
@@ -68,7 +69,35 @@ Choosing the right value:
 
 ### Temperature
 
-Set temperature to **0.1–0.3** for home control. Higher values cause models to ask clarifying questions instead of calling tools and acting. Configure via the integration's Advanced settings.
+Set temperature to **0.1–0.3** for home control. Higher values cause models to ask clarifying questions instead of calling tools and acting. Configure via the integration's Advanced settings. **0.2 is what the benchmark below was run with.**
+
+### Reasoning models (qwen3, deepseek-r1)
+
+Reasoning-capable Ollama models emit chain-of-thought into a separate `thinking` field and sometimes leave `content` empty. The plugin sends `think: false` on every Ollama `/api/chat` call so final answers land in `content` where they belong — no Modelfile tweaks required. A `SYSTEM """/no_think"""` directive in a custom Modelfile is unreliable and unnecessary.
+
+## Reliability Benchmark
+
+A 25-prompt matrix covering discovery, cross-domain state queries, weather, web search, memory, edge cases, and multilingual input (German + English). Measured on Home Assistant Core 2026.4.x via `/api/conversation/process`.
+
+**Reference setup — qwen3:8b on RTX 3060 Ti (8 GB), plugin v0.5.38:**
+
+- **23/25 passes (92%)** including 7/7 cross-domain state queries (`any lights on?`, `welche Lichter sind an?`, `which switches are off?`)
+- Discovery, weather, web, memory, pronoun/context resolution all pass
+- Two remaining misses: one single-entity sensor lookup where the model skipped `search_entities`, and one stale web-search result from the backend (not the plugin)
+
+**Recommended configuration**
+
+| Setting | Value |
+|---------|-------|
+| Model | `qwen3:8b` (alias to taste) |
+| Temperature | 0.2 |
+| top_p | 0.4 |
+| Context Window | 16384 (drop to 8192 if only 8 GB VRAM after other workloads) |
+| Max Tokens | 512 |
+| Voice Mode | on (compact system prompt) |
+| Web Search | Tavily or Brave |
+
+No custom Modelfile parameters are required — the plugin manages `think`, `num_ctx`, `temperature`, `top_p`, and `num_predict` per request on Ollama's native API.
 
 ### Keep-alive (optional)
 
@@ -136,6 +165,8 @@ Add any MCP-compatible tool server in the integration settings. Supports:
 - **Model keeps asking questions instead of acting** — lower temperature to 0.1–0.3, or switch to a higher tool-calling tier model.
 - **Slow first response** — Ollama is loading the model into VRAM. Use `OLLAMA_KEEP_ALIVE=-1` to keep it warm.
 - **OOM / CPU fallback in Ollama** — lower the **Context Window** in Advanced settings.
+- **Empty replies from reasoning models (qwen3, deepseek-r1)** — the plugin already sends `think: false`; if you still see empty content, upgrade Ollama to 0.20 or newer (earlier versions don't honour the flag).
+- **"Any lights on?" answers about a single light** — fixed in v0.5.38. Upgrade if you're on an older release.
 
 ## Changelog
 
