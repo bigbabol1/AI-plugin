@@ -341,6 +341,18 @@ class Orchestrator:
             for msg in tool_msgs:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
             stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
+
+            # Defensive: small models occasionally return empty content with no
+            # tool calls (prompt/tool confusion). Surface a user-facing fallback
+            # so TTS doesn't play silence.
+            if not stored_reply.strip():
+                _LOGGER.warning(
+                    "AI Plugin: empty reply from model (conv=%s, tools_called=%d) — substituting fallback",
+                    conversation_id, len(tool_msgs),
+                )
+                reply = "I couldn't produce an answer for that. Try rephrasing."
+                stored_reply = reply
+
             await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
 
             # Track last-controlled entities for explicit context injection.
