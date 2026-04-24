@@ -17,7 +17,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import ulid as ulid_util
 
-from .const import CONF_FALLBACK_USER_ID, DOMAIN
+from .const import DOMAIN
 from .exceptions import OrchestratorError
 from .orchestrator import Orchestrator
 
@@ -63,15 +63,6 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         user_id: str | None = (
             getattr(user_input.context, "user_id", None) if user_input.context else None
         )
-        # Voice Assist (satellites, wake-word, TTS-initiated flows) does not
-        # carry an authenticated HA user in the context, so user_id is None
-        # and the memory tool would route to .ai_plugin_memory_anonymous.json
-        # instead of the file the user writes to over typed Assist. The
-        # fallback option lets voice reuse a chosen user's memory file.
-        if user_id is None:
-            fallback = self._entry.options.get(CONF_FALLBACK_USER_ID)
-            if fallback:
-                user_id = fallback
         # Honour HA's ephemeral conversation_id so history resets when the
         # Assist panel is reopened or a new session begins. Follow-up turns
         # within the same session reuse the id HA echoes back. Long-term

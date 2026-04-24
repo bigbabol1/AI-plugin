@@ -522,65 +522,16 @@ async def test_conversation_entity_returns_graceful_reply_on_error(
     assert "Sorry" in result.response.speech["plain"]["speech"]
 
 
-async def test_conversation_entity_applies_fallback_user_id_when_context_missing_user(
+async def test_conversation_entity_passes_context_user_id_through(
     hass: HomeAssistant,
 ) -> None:
-    """Voice Assist (no authenticated user) should reuse the configured fallback user.
-
-    Without this, `user_id` stays None and the memory tool writes/reads
-    `.ai_plugin_memory_anonymous.json` instead of the user's file — so facts
-    saved via typed Assist are invisible over voice.
-    """
+    """Context user_id is forwarded to the orchestrator verbatim."""
     from custom_components.ai_plugin.conversation import AIPluginConversationEntity
-    from custom_components.ai_plugin.const import CONF_FALLBACK_USER_ID
 
     entry = _make_mock_entry(
         options={
             CONF_BASE_URL: "http://localhost:11434/v1",
             CONF_MODEL: "llama3.2:3b",
-            CONF_FALLBACK_USER_ID: "user-xyz",
-        }
-    )
-    entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
-    entity.hass = hass
-    entity._entry = entry
-    entity._attr_unique_id = "test"
-
-    mock_orch = MagicMock()
-    mock_orch.async_process = AsyncMock(return_value="ok")
-    entity._orchestrator = mock_orch
-
-    from homeassistant.components.conversation import ConversationInput
-    from homeassistant.core import Context
-
-    # Context with no user_id — mimics satellite / wake-word pipeline
-    user_input = ConversationInput(
-        text="what do you remember",
-        context=Context(),
-        conversation_id="conv-voice",
-        device_id="media_player.satellite",
-        language="en",
-        agent_id=None,
-    )
-    await entity.async_process(user_input)
-
-    mock_orch.async_process.assert_awaited_once()
-    kwargs = mock_orch.async_process.await_args.kwargs
-    assert kwargs["user_id"] == "user-xyz"
-
-
-async def test_conversation_entity_ignores_fallback_when_context_has_user(
-    hass: HomeAssistant,
-) -> None:
-    """When context already carries a user_id, the fallback must not override it."""
-    from custom_components.ai_plugin.conversation import AIPluginConversationEntity
-    from custom_components.ai_plugin.const import CONF_FALLBACK_USER_ID
-
-    entry = _make_mock_entry(
-        options={
-            CONF_BASE_URL: "http://localhost:11434/v1",
-            CONF_MODEL: "llama3.2:3b",
-            CONF_FALLBACK_USER_ID: "fallback-user",
         }
     )
     entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
@@ -609,10 +560,10 @@ async def test_conversation_entity_ignores_fallback_when_context_has_user(
     assert kwargs["user_id"] == "real-typed-user"
 
 
-async def test_conversation_entity_no_fallback_keeps_user_id_none(
+async def test_conversation_entity_anonymous_context_keeps_user_id_none(
     hass: HomeAssistant,
 ) -> None:
-    """Without a fallback configured, anonymous voice traffic stays anonymous."""
+    """Voice Assist with no authenticated user stays anonymous (no fallback)."""
     from custom_components.ai_plugin.conversation import AIPluginConversationEntity
 
     entry = _make_mock_entry()

@@ -29,7 +29,6 @@ CONF_VOICE_MODE = "voice_mode"
 CONF_XML_FALLBACK = "xml_fallback"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
-CONF_FALLBACK_USER_ID = "fallback_user_id"
 
 # Sampling parameters (None = omit from request, let the provider use its default)
 CONF_TEMPERATURE = "temperature"
