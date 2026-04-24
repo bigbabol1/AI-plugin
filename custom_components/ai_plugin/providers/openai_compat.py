@@ -250,6 +250,13 @@ class OpenAICompatProvider(AbstractProvider):
             "model": self._model,
             "messages": messages,
             "stream": False,
+            # Disable qwen3-style chain-of-thought. Reasoning models
+            # (qwen3, deepseek-r1) emit CoT into a separate `thinking`
+            # field and sometimes leave `content` empty. Assist needs
+            # final answers, not scratchpads. Harmless for non-thinking
+            # models: Ollama ignores the flag if the model doesn't
+            # support it.
+            "think": False,
         }
         if tools:
             payload["tools"] = tools

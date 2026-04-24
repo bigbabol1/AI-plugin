@@ -179,6 +179,32 @@ def _strip_narration(text: str) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
+
+# Strip emoji and pictographs. TTS either mispronounces or reads them
+# ("smiling face with sunglasses"), and chatty models like qwen3 love
+# sprinkling them into greetings. Unicode ranges cover emoji blocks,
+# misc symbols, dingbats, transport, and common decorative chars.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"   # symbols & pictographs, emoticons, transport, extended-A/B
+    "\U00002600-\U000027BF"   # misc symbols, dingbats
+    "\U0001F000-\U0001F2FF"   # mahjong, domino, playing cards, enclosed alphanumerics
+    "\U0000FE00-\U0000FE0F"   # variation selectors
+    "\U0001F1E6-\U0001F1FF"   # regional indicators (flags)
+    "]",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emoji(text: str) -> str:
+    """Remove emoji/pictographs. Safe for TTS and voice output."""
+    if not text:
+        return text
+    cleaned = _EMOJI_RE.sub("", text)
+    # Collapse residual double-spaces introduced by stripped emoji.
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
+
 # Domain/device words that suggest the user is asking about a specific entity.
 _ENTITY_WORDS = frozenset(
     "light lights switch switches lamp lamps bulb bulbs sensor sensors "
@@ -524,6 +550,7 @@ class Orchestrator:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
             stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
             stored_reply = _strip_narration(stored_reply) or stored_reply
+            stored_reply = _strip_emoji(stored_reply) or stored_reply
 
             # Defensive: small models occasionally return empty content with no
             # tool calls (prompt/tool confusion). Surface a user-facing fallback
