@@ -59,6 +59,7 @@ from .const import (
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
 from .providers.openai_compat import OpenAICompatProvider
+from .shortcuts import try_shortcut
 from .tools.ha_local import HALocalToolRegistry
 from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
@@ -512,6 +513,25 @@ class Orchestrator:
         async with self._get_conv_lock(conversation_id):
             # 1. Add user turn to history.
             await self._context_mgr.add_turn(conversation_id, "user", message)
+
+            # 1b. Deterministic pre-LLM shortcut for "<attr> in <area>" questions.
+            # Bypasses the tool loop entirely when we can answer from the
+            # entity/area registry directly. ~50ms vs ~2-4s via the LLM, and
+            # avoids fuzzy-resolve misses on multi-sensor rooms. Falls through
+            # on any miss so the LLM still handles ambiguous/novel phrasings.
+            try:
+                shortcut_reply = try_shortcut(self._hass, message)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: shortcut raised", exc_info=True)
+                shortcut_reply = None
+            if shortcut_reply:
+                _LOGGER.info(
+                    "AI Plugin: shortcut hit for conv=%s", conversation_id
+                )
+                await self._context_mgr.add_turn(
+                    conversation_id, "assistant", shortcut_reply
+                )
+                return shortcut_reply
 
             # 2. Summarize old turns if we're approaching the soft token limit.
             if self._summarization_enabled:
