@@ -747,6 +747,28 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             "command": "uvx",
             "args": ["mcp-server-fetch"],
         },
+        "sqlite": {
+            "label": "SQLite — query a database file (e.g. your HA history DB for 'what was the temperature at 3pm yesterday?')",
+            "command": "uvx",
+            "args_template": ["mcp-server-sqlite", "--db-path", "{value}"],
+            "config_label": "database file path",
+            "config_placeholder": "/config/home-assistant_v2.db",
+        },
+        "wikipedia": {
+            "label": "Wikipedia — quick factual lookups without a web search",
+            "command": "uvx",
+            "args": ["wikipedia-mcp"],
+        },
+        "sequential-thinking": {
+            "label": "Sequential thinking — helps smaller models plan multi-step answers",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        },
+        "calculator": {
+            "label": "Calculator — precise math without model guessing",
+            "command": "uvx",
+            "args": ["mcp-server-calculator"],
+        },
     }
 
     def _mcp_server_label(self, s: dict) -> str:
