@@ -123,6 +123,21 @@ SYSTEM_PROMPT_DEFAULT = (
     "- NEVER suggest visiting a website. YOU are the interface.\n"
     "- Never return an empty reply. If you have no tool result to summarise, state plainly what you couldn't do and suggest a next step."
 )
+
+# Pre-filled template for the user's CUSTOM system prompt (appended to base).
+# Kept short and non-redundant with SYSTEM_PROMPT_DEFAULT — only persona +
+# high-level style rules that aren't covered by the base prompt.
+CUSTOM_PROMPT_TEMPLATE = (
+    "[PERSONALITY]\n"
+    "You are a helpful assistant integrated into Home Assistant.\n"
+    "\n"
+    "[STYLE]\n"
+    "- Use area names in replies, not entity IDs.\n"
+    "- Only elaborate when the question requires explanation.\n"
+    "- For yes/no device commands, confirm in under 8 words.\n"
+    "- If search_entities can't resolve a device, pick the most likely match and state the assumption briefly."
+)
+
 SYSTEM_PROMPT_VOICE = (
     "You control a smart home. Answer briefly in plain speech — no lists, "
     "no markdown, no emojis. Confirm actions in one sentence.\n"

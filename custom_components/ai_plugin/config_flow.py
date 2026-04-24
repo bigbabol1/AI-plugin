@@ -71,8 +71,8 @@ from .const import (
     DEFAULT_VOICE_MODE,
     DEFAULT_WEB_SEARCH_BACKEND,
     DEFAULT_XML_FALLBACK,
+    CUSTOM_PROMPT_TEMPLATE,
     DOMAIN,
-    SYSTEM_PROMPT_DEFAULT,
     ERROR_CANNOT_CONNECT,
     ERROR_INVALID_URL,
     ERROR_MODEL_REQUIRED,
@@ -175,7 +175,7 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
     schema: dict[Any, Any] = {
             vol.Optional(
                 CONF_SYSTEM_PROMPT,
-                default=current.get(CONF_SYSTEM_PROMPT, SYSTEM_PROMPT_DEFAULT),
+                default=current.get(CONF_SYSTEM_PROMPT, CUSTOM_PROMPT_TEMPLATE),
             ): selector.TemplateSelector(),
 
             vol.Optional(
