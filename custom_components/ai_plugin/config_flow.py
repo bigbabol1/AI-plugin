@@ -759,11 +759,6 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             "command": "uvx",
             "args": ["wikipedia-mcp"],
         },
-        "sequential-thinking": {
-            "label": "Sequential thinking — helps smaller models plan multi-step answers",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-        },
         "calculator": {
             "label": "Calculator — precise math without model guessing",
             "command": "uvx",

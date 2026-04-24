@@ -86,6 +86,87 @@ _NARRATION_PATTERNS = [
 _NARRATION_RE = re.compile("|".join(_NARRATION_PATTERNS), re.MULTILINE | re.IGNORECASE)
 
 
+# Trigger phrases for questions that MUST be grounded in list_entities.
+# "any X on", "which X are off", "welche X sind an", etc. — used by the
+# grounding verifier to detect when the model answered from memory instead
+# of calling list_entities. Keep conservative to avoid false positives
+# (e.g. on plain greetings or commands).
+_STATE_SET_QUERY_RE = re.compile(
+    r"\b(?:any|are\s+any|is\s+any|is\s+anything|which|what(?:'s|\s+is)?|"
+    r"what's|welche|sind)\b.*?\b"
+    r"(?:on|off|open|closed|playing|active|running|an|aus|offen|auf)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_state_set_query(text: str) -> bool:
+    return bool(_STATE_SET_QUERY_RE.search(text or ""))
+
+
+def _any_list_entities_call(tool_msgs: list[dict]) -> bool:
+    """True if the tool-loop made at least one list_entities call."""
+    for m in tool_msgs:
+        for tc in m.get("tool_calls") or []:
+            if tc.get("function", {}).get("name") == "list_entities":
+                return True
+    return False
+
+
+# Detect when a model emits a tool call as plain text ("content") instead of
+# using the API's structured tool_calls field. Matches first call in text.
+# Accepts optional "CALL " prefix and optional trailing period.
+_RAW_TOOL_CALL_RE = re.compile(
+    r"(?:^|\n)\s*(?:CALL\s+)?([a-zA-Z_][\w]*)\s*\(([^()\n]*)\)",
+    re.IGNORECASE,
+)
+
+
+def _parse_raw_tool_call(text: str, valid_names: set[str]) -> tuple[str, dict] | None:
+    """Parse 'tool_name(kwargs)' pseudo-syntax out of a model reply.
+
+    Returns (name, args_dict) on success, None otherwise. Handles:
+    - list_entities(domain="light", state="on")
+    - CALL web_search('price of bitcoin')  (positional → first arg name)
+    - list_entities()
+    Only matches if the parsed tool name is in valid_names.
+    """
+    if not text:
+        return None
+    m = _RAW_TOOL_CALL_RE.search(text)
+    if not m:
+        return None
+    name = m.group(1)
+    if name not in valid_names:
+        return None
+    arg_str = m.group(2).strip()
+    if not arg_str:
+        return (name, {})
+    args: dict = {}
+    # kwargs: key="value" | key='value' | key=bareword
+    kw_pairs = re.findall(
+        r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|[^,\s][^,]*?)\s*(?:,|$)",
+        arg_str,
+    )
+    if kw_pairs:
+        for k, v in kw_pairs:
+            v = v.strip()
+            if (v.startswith('"') and v.endswith('"')) or (
+                v.startswith("'") and v.endswith("'")
+            ):
+                v = v[1:-1]
+            args[k] = v
+        return (name, args)
+    # Positional single value: map to "query" for web_search, else "name".
+    val = arg_str
+    if (val.startswith('"') and val.endswith('"')) or (
+        val.startswith("'") and val.endswith("'")
+    ):
+        val = val[1:-1]
+    if name == "web_search":
+        return (name, {"query": val})
+    return (name, {"name": val})
+
+
 def _strip_narration(text: str) -> str:
     """Remove tool-call narration lines from a model reply.
 
@@ -405,6 +486,39 @@ class Orchestrator:
                 await self._context_mgr.remove_last_turn(conversation_id)
                 raise
 
+            # 5b. Grounding verifier: if the user asked a state-set question
+            # ("any lights on?", "which switches are off?") and the tool loop
+            # never called list_entities, the model is answering from imagination.
+            # Inject a corrective system turn and re-run the tool loop ONCE.
+            if (
+                tool_schemas
+                and not self._xml_fallback
+                and _is_state_set_query(message)
+                and not _any_list_entities_call(tool_msgs)
+            ):
+                _LOGGER.info(
+                    "AI Plugin: grounding retry — state-set query had no list_entities call"
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "CRITICAL: The user asked about the CURRENT state across a domain "
+                        "(e.g. which lights are on, any windows open). You did NOT call "
+                        "list_entities. Answering from memory is wrong. Call "
+                        "list_entities(domain=..., state=...) now, then answer from the "
+                        "returned rows."
+                    ),
+                })
+                try:
+                    reply2, tool_msgs2 = await self._tool_loop(
+                        messages, tool_schemas, user_id, voice_mode
+                    )
+                    if _any_list_entities_call(tool_msgs2):
+                        reply = reply2
+                        tool_msgs = tool_msgs + tool_msgs2
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("AI Plugin: grounding retry failed — keeping original reply")
+
             # 6. Append tool call/result messages then the assistant reply to history.
             for msg in tool_msgs:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
@@ -459,15 +573,59 @@ class Orchestrator:
         context on subsequent turns (entity IDs, results, etc.) — far more
         reliable than a text summary for pronoun/reference resolution.
         """
+        import json as _json
+
         last_response = None
         history_messages: list[dict] = []
+        valid_tool_names = {
+            s.get("function", {}).get("name")
+            for s in tool_schemas
+            if s.get("function", {}).get("name")
+        }
 
         for iteration in range(self._max_tool_iterations):
             response = await self._provider.async_chat(messages, tool_schemas)
             last_response = response
 
             if not response.has_tool_calls:
-                return response.reply_text(), history_messages
+                reply_text = response.reply_text()
+                # Raw-tool-syntax catcher: small models sometimes write
+                # `tool_name(args)` into content instead of emitting a
+                # structured tool_call. Recover by parsing and executing.
+                recovered = _parse_raw_tool_call(reply_text, valid_tool_names)
+                if recovered is not None:
+                    rec_name, rec_args = recovered
+                    _LOGGER.info(
+                        "AI Plugin: recovered raw tool-call from content: %s(%s)",
+                        rec_name, rec_args,
+                    )
+                    call_id = f"call_recovered_{iteration}"
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": rec_name,
+                                "arguments": _json.dumps(rec_args),
+                            },
+                        }],
+                    }
+                    messages.append(assistant_msg)
+                    history_messages.append(assistant_msg)
+                    result = await self._dispatch_tool(
+                        rec_name, rec_args, user_id, voice_mode
+                    )
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": result,
+                    }
+                    messages.append(tool_msg)
+                    history_messages.append(tool_msg)
+                    continue
+                return reply_text, history_messages
 
             _LOGGER.debug(
                 "Tool loop iteration %d/%d: %d call(s): %s",
