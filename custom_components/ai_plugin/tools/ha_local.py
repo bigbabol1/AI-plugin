@@ -68,6 +68,26 @@ _INTERESTING_ATTRS = (
 
 _ACTION_DOMAINS = {"light", "switch", "fan", "media_player", "cover", "climate"}
 
+# Magic values that set_area_state treats as "every area".
+_SWEEP_ALL_KEYWORDS = {
+    "",
+    "*",
+    "all",
+    "any",
+    "every",
+    "everywhere",
+    "anywhere",
+    "whole house",
+    "entire house",
+    "house",
+    # German aliases — primary user locale.
+    "alle",
+    "alles",
+    "überall",
+    "ueberall",
+    "ganzes haus",
+}
+
 _DOMAIN_SERVICE_MAP: dict[str, dict[str, str]] = {
     "light":        {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
     "switch":       {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
@@ -195,7 +215,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "area": {
                         "type": "string",
-                        "description": "Area name (e.g. 'kitchen'). Call list_areas if unsure.",
+                        "description": (
+                            "Area name (e.g. 'kitchen'). Omit, leave empty, or pass "
+                            "'all'/'everywhere'/'*' to act on every area "
+                            "(e.g. 'turn off all lights'). Call list_areas if unsure."
+                        ),
                     },
                     "domain": {
                         "type": "string",
@@ -207,7 +231,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     **_EXPOSED_ONLY_PROP,
                 },
-                "required": ["area", "domain", "action"],
+                "required": ["domain", "action"],
             },
         },
     },
@@ -296,8 +320,10 @@ class HALocalToolRegistry:
                     exposed_only=exposed_only,
                 )
             if name == "set_area_state":
+                raw_area = arguments.get("area")
+                area_val = _s(raw_area).strip() if raw_area is not None else ""
                 return await self._set_area_state(
-                    area=_s(arguments.get("area")).strip(),
+                    area=area_val or None,
                     domain=_s(arguments.get("domain")).strip(),
                     action=_s(arguments.get("action")).strip(),
                     exposed_only=exposed_only,
@@ -491,12 +517,16 @@ class HALocalToolRegistry:
 
     async def _set_area_state(
         self,
-        area: str,
+        area: str | None,
         domain: str,
         action: str,
         exposed_only: bool = True,
     ) -> str:
-        """Turn devices in an area on/off/toggle via a single service call."""
+        """Turn devices in an area on/off/toggle via a single service call.
+
+        If ``area`` is None, empty, or a wildcard keyword (all/every/everywhere/
+        anywhere/* and German aliases alle/überall), sweep every area.
+        """
         domain = domain.lower().strip(".")
         action = action.lower()
 
@@ -509,20 +539,22 @@ class HALocalToolRegistry:
             allowed = " or ".join(svc_map)
             return f"{domain} does not support {action}. Use {allowed}."
 
-        # resolve area (name or alias, case-insensitive)
-        area_reg = ar.async_get(self._hass)
+        needle = (area or "").strip().lower()
+        sweep_all = needle in _SWEEP_ALL_KEYWORDS
+
         target_area = None
-        needle = area.lower()
-        for a in area_reg.async_list_areas():
-            if _s(a.name).lower() == needle:
-                target_area = a
-                break
-            aliases = getattr(a, "aliases", None) or ()
-            if any(_s(al).lower() == needle for al in aliases):
-                target_area = a
-                break
-        if target_area is None:
-            return f"Unknown area {area!r}. Try list_areas."
+        if not sweep_all:
+            area_reg = ar.async_get(self._hass)
+            for a in area_reg.async_list_areas():
+                if _s(a.name).lower() == needle:
+                    target_area = a
+                    break
+                aliases = getattr(a, "aliases", None) or ()
+                if any(_s(al).lower() == needle for al in aliases):
+                    target_area = a
+                    break
+            if target_area is None:
+                return f"Unknown area {area!r}. Try list_areas."
 
         ent_reg = er.async_get(self._hass)
         dev_reg = dr.async_get(self._hass)
@@ -531,20 +563,22 @@ class HALocalToolRegistry:
         for eid, entry in ent_reg.entities.items():
             if not eid.startswith(f"{domain}."):
                 continue
-            area_id = entry.area_id
-            if not area_id and entry.device_id:
-                dev = dev_reg.async_get(entry.device_id)
-                if dev:
-                    area_id = dev.area_id
-            if area_id != target_area.id:
-                continue
+            if not sweep_all:
+                area_id = entry.area_id
+                if not area_id and entry.device_id:
+                    dev = dev_reg.async_get(entry.device_id)
+                    if dev:
+                        area_id = dev.area_id
+                if area_id != target_area.id:
+                    continue
             if exposed_only and not self._is_exposed(eid):
                 continue
             ids.append(eid)
 
+        scope_label = "all areas" if sweep_all else target_area.name
         if not ids:
             scope = "exposed " if exposed_only else ""
-            return f"No {scope}{domain} in {target_area.name}."
+            return f"No {scope}{domain} in {scope_label}."
 
         ids.sort()
         service = svc_map[action]
@@ -562,6 +596,6 @@ class HALocalToolRegistry:
         preview = ", ".join(ids[:6])
         more = f" (+{len(ids) - 6} more)" if len(ids) > 6 else ""
         return (
-            f"OK — {action} {len(ids)} {domain}(s) in {target_area.name}: "
+            f"OK — {action} {len(ids)} {domain}(s) in {scope_label}: "
             f"{preview}{more}"
         )

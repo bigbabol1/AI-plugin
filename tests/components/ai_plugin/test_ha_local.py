@@ -128,7 +128,8 @@ def test_set_area_state_schema_registered() -> None:
     )
     assert schema is not None, "set_area_state schema missing"
     params = schema["function"]["parameters"]
-    assert set(params["required"]) == {"area", "domain", "action"}
+    assert set(params["required"]) == {"domain", "action"}
+    assert "area" in params["properties"]
     assert set(params["properties"]["domain"]["enum"]) == {
         "light", "switch", "fan", "media_player", "cover", "climate",
     }
@@ -308,3 +309,64 @@ async def test_set_area_state_service_exception_caught(patched_registries) -> No
     )
     assert out.startswith("[set_area_state failed:")
     assert "boom" in out
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_sweep_all_keyword(patched_registries) -> None:
+    """area='all' sweeps every area (and domain mismatches still filter)."""
+    areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
+    entities = [
+        _entity("light.ceiling", area_id="a_kit"),
+        _entity("light.bedroom_lamp", area_id="a_bed"),
+        _entity("switch.kettle", area_id="a_kit"),
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "all", "domain": "light", "action": "turn_off"},
+    )
+    assert "turn_off 2 light(s) in all areas" in out
+    args, kwargs = hass.services.async_call.call_args
+    assert args[0] == "light"
+    assert args[1] == "turn_off"
+    assert kwargs["target"] == {
+        "entity_id": ["light.bedroom_lamp", "light.ceiling"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_sweep_area_omitted(patched_registries) -> None:
+    """Omitted area also sweeps every area."""
+    areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
+    entities = [
+        _entity("light.ceiling", area_id="a_kit"),
+        _entity("light.bedroom_lamp", area_id="a_bed"),
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"domain": "light", "action": "turn_on"},
+    )
+    assert "turn_on 2 light(s) in all areas" in out
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_sweep_german_alias(patched_registries) -> None:
+    """German 'alle' is treated as sweep-all."""
+    areas = [_area("a_kit", "Küche")]
+    entities = [_entity("light.ceiling", area_id="a_kit")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "alle", "domain": "light", "action": "turn_off"},
+    )
+    assert "turn_off 1 light(s) in all areas" in out
