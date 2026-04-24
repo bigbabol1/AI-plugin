@@ -237,6 +237,14 @@ def _prune_ha_local_schemas(
     if _PRONOUN_RE.search(text):
         return schemas
 
+    # State-set questions ("any lights on?", "are any lights turned on?")
+    # must retain list_entities — that's the only tool that can answer them.
+    # Without this check the entity-word heuristic below drops list_entities
+    # for short-form queries whose trigger word ("any", "are") isn't in the
+    # sweep set, leaving the model tool-less and producing empty replies.
+    if _is_state_set_query(user_message):
+        return schemas
+
     has_entity_word = bool(words & _ENTITY_WORDS)
     # entity_id pattern like "light.something"
     has_entity_id = bool(re.search(r"[a-z_]+\.[a-z0-9_]+", text))
