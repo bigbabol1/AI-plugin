@@ -409,7 +409,9 @@ class Orchestrator:
             context_window=int(opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW)),
         )
 
-    def _build_system_prompt(self, voice_mode: bool) -> str:
+    async def _build_system_prompt(
+        self, voice_mode: bool, user_id: str | None = None
+    ) -> str:
         """Return the system prompt for this request.
 
         Base prompt (voice-compact or default) is always sent so the plugin's
@@ -417,14 +419,49 @@ class Orchestrator:
         instructions are appended on top — persona, location, etc. A
         [HOME LOCATION] block is always injected from hass.config so the
         model can enrich web_search queries with the user's real location.
+        A [USER FACTS] block is auto-injected from the memory file so small
+        LLMs that ignore the recall tool still see stored facts.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
         location_block = self._build_location_block()
+        facts_block = await self._build_user_facts_block(user_id)
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
-        parts = [base, location_block]
+        parts = [base, location_block, facts_block]
         if custom:
             parts.append(custom)
         return "\n\n".join(p for p in parts if p)
+
+    async def _build_user_facts_block(self, user_id: str | None) -> str:
+        """Render stored user facts as a numbered prompt block.
+
+        Auto-injected on every turn so small LLMs that fail to call the
+        recall tool can still answer questions about previously-saved
+        facts (name, preferences, etc.). The numbered list also doubles
+        as the index reference for the two-step forget(index=N) flow.
+        File I/O runs in the executor to keep the event loop unblocked.
+        """
+        if self._memory is None:
+            return ""
+        try:
+            from .tools.memory import _memory_path  # noqa: PLC0415
+            path = _memory_path(self._memory._config_dir, user_id)
+            facts = await asyncio.get_running_loop().run_in_executor(
+                None, self._memory._load, path
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: could not read user facts", exc_info=True)
+            return ""
+        if not facts:
+            return ""
+        numbered = "\n".join(f"{i}. {f}" for i, f in enumerate(facts, 1))
+        return (
+            "[USER FACTS]\n"
+            "Facts previously saved by the user. Use them when answering "
+            "questions about who they are or their preferences. To remove "
+            "a fact, call forget(index=N, fact='<keyword>') with the matching "
+            "number. Never call forget for a fact that is not listed here.\n"
+            f"{numbered}"
+        )
 
     def _build_location_block(self) -> str:
         """Render hass.config home location as a prompt block.
@@ -435,7 +472,6 @@ class Orchestrator:
         try:
             cfg = self._hass.config
             parts: list[str] = []
-            name = str(getattr(cfg, "location_name", "") or "").strip()
             country = str(getattr(cfg, "country", "") or "").strip()
             tz = str(getattr(cfg, "time_zone", "") or "").strip()
             lat = getattr(cfg, "latitude", None)
@@ -446,8 +482,6 @@ class Orchestrator:
                 parts.append(f"coords={lat:.4f},{lon:.4f}")
             if tz:
                 parts.append(f"timezone={tz}")
-            if name:
-                parts.append(f"friendly_label={name}")
             if not parts:
                 return ""
             joined = ", ".join(parts)
@@ -455,9 +489,8 @@ class Orchestrator:
                 "[HOME LOCATION]\n"
                 f"- {joined}\n"
                 "- For web_search queries use country and/or coords. "
-                "The friendly_label (e.g. 'HomeSweetHome', 'Casa') is a "
-                "user-chosen nickname for the HA instance — it is NOT a city "
-                "or country name; never put it in a web_search query."
+                "Never invent a city name; if the user asks where they are, "
+                "answer from country and coords only."
             )
         except Exception:  # noqa: BLE001
             _LOGGER.debug("AI Plugin: could not build location block", exc_info=True)
@@ -496,7 +529,7 @@ class Orchestrator:
         voice_mode: bool = (device_id is not None) or bool(
             self._entry.options.get(CONF_VOICE_MODE, False)
         )
-        base_prompt = self._build_system_prompt(voice_mode)
+        base_prompt = await self._build_system_prompt(voice_mode, user_id)
 
         # v0.5.15: no more [HOME CONTEXT] YAML dump. Small LLMs drown in it and
         # hallucinate their way through inventory questions. The model instead
@@ -585,9 +618,9 @@ class Orchestrator:
             #    c) Plain completion (no tools)
             try:
                 if tool_schemas and self._xml_fallback:
-                    reply, tool_msgs = await self._xml_tool_loop(messages, tool_schemas, user_id, voice_mode)
+                    reply, tool_msgs = await self._xml_tool_loop(messages, tool_schemas, user_id, voice_mode, message)
                 elif tool_schemas:
-                    reply, tool_msgs = await self._tool_loop(messages, tool_schemas, user_id, voice_mode)
+                    reply, tool_msgs = await self._tool_loop(messages, tool_schemas, user_id, voice_mode, message)
                 else:
                     reply = await self._provider.async_complete(messages)
                     tool_msgs = []
@@ -621,7 +654,7 @@ class Orchestrator:
                 })
                 try:
                     reply2, tool_msgs2 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode
+                        messages, tool_schemas, user_id, voice_mode, message
                     )
                     if _any_list_entities_call(tool_msgs2):
                         reply = reply2
@@ -662,7 +695,7 @@ class Orchestrator:
                 })
                 try:
                     reply3, tool_msgs3 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode
+                        messages, tool_schemas, user_id, voice_mode, message
                     )
                     if _any_tool_call(tool_msgs3, "search_entities"):
                         reply = reply3
@@ -718,6 +751,7 @@ class Orchestrator:
         tool_schemas: list[dict],
         user_id: str | None = None,
         voice_mode: bool = False,
+        user_message: str = "",
     ) -> tuple[str, list[dict]]:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
@@ -769,7 +803,7 @@ class Orchestrator:
                     messages.append(assistant_msg)
                     history_messages.append(assistant_msg)
                     result = await self._dispatch_tool(
-                        rec_name, rec_args, user_id, voice_mode
+                        rec_name, rec_args, user_id, voice_mode, user_message
                     )
                     tool_msg = {
                         "role": "tool",
@@ -795,7 +829,7 @@ class Orchestrator:
                 history_messages.append(msg)
 
             for tc in response.tool_calls:
-                result = await self._dispatch_tool(tc.name, tc.arguments, user_id, voice_mode)
+                result = await self._dispatch_tool(tc.name, tc.arguments, user_id, voice_mode, user_message)
                 msg = tc.to_tool_result_message(result)
                 messages.append(msg)
                 history_messages.append(msg)
@@ -809,6 +843,7 @@ class Orchestrator:
         tool_schemas: list[dict],
         user_id: str | None = None,
         voice_mode: bool = False,
+        user_message: str = "",
     ) -> tuple[str, list[dict]]:
         """XML fallback tool loop for models without native function calling.
 
@@ -866,7 +901,7 @@ class Orchestrator:
                     args = _json.loads(raw_args.strip())
                 except _json.JSONDecodeError:
                     args = {}
-                result = await self._dispatch_tool(name, args, user_id, voice_mode)
+                result = await self._dispatch_tool(name, args, user_id, voice_mode, user_message)
                 patched.append({"role": "user", "content": f"Tool result for {name}: {result}"})
 
         return reply + " [Note: reached tool call limit — response may be incomplete.]", []
@@ -877,12 +912,15 @@ class Orchestrator:
         arguments: dict,
         user_id: str | None = None,
         voice_mode: bool = False,
+        user_message: str = "",
     ) -> str:
         """Route a tool call to ha_local, memory, web search, or MCP. Never raises."""
         if self._ha_local is not None and name in self._ha_local.tool_names:
             return await self._ha_local.call_tool(name, arguments)
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
-            return await self._memory.call_tool(name, arguments, user_id=user_id)
+            return await self._memory.call_tool(
+                name, arguments, user_id=user_id, user_message=user_message
+            )
         if name == "web_search" and self._web_search is not None:
             query = arguments.get("query", "")
             return await self._web_search.async_search(query, strip_urls=voice_mode)

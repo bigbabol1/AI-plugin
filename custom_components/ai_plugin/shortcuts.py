@@ -270,6 +270,27 @@ def _pick_best_sensor(entities: list[Any], hass: HomeAssistant, spec: dict) -> A
     return candidates[0][1]
 
 
+def _pick_climate_temperature(entities: list[Any], hass: HomeAssistant) -> tuple[Any, Any] | None:
+    """Fallback for temperature queries: read current_temperature from climate.* in area.
+
+    Many rooms only have a thermostat (e.g. Tado, Nest) and no separate
+    temperature sensor exposed. The thermostat publishes the room's actual
+    temperature in its current_temperature attribute. Returns
+    (state_obj, current_temperature_value) or None.
+    """
+    for entry in entities:
+        if not entry.entity_id.startswith("climate."):
+            continue
+        state = hass.states.get(entry.entity_id)
+        if state is None:
+            continue
+        val = state.attributes.get("current_temperature")
+        if val in (None, "", "unknown", "unavailable"):
+            continue
+        return state, val
+    return None
+
+
 def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
     """Return a deterministic reply for supported patterns, else None.
 
@@ -325,12 +346,25 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
         return None
 
     best = _pick_best_sensor(entities, hass, spec)
-    if best is None:
-        return None
-    reply = _format_state(best, spec)
-    if reply:
-        _LOGGER.info(
-            "AI Plugin shortcut hit: %s in %s → %s", attr_key, area.name, best.entity_id
-        )
-        return reply
+    if best is not None:
+        reply = _format_state(best, spec)
+        if reply:
+            _LOGGER.info(
+                "AI Plugin shortcut hit: %s in %s → %s", attr_key, area.name, best.entity_id
+            )
+            return reply
+
+    # Temperature fallback: rooms with only a thermostat (no exposed
+    # temperature sensor). Read current_temperature from climate.*.
+    if attr_key == "temperature":
+        fallback = _pick_climate_temperature(entities, hass)
+        if fallback:
+            state, val = fallback
+            unit = state.attributes.get("unit_of_measurement") or spec.get("unit_fallback") or "°C"
+            _LOGGER.info(
+                "AI Plugin shortcut hit: temperature in %s → %s (climate fallback)",
+                area.name, state.entity_id,
+            )
+            return f"The {spec['label']} is {val}{unit}."
+
     return None

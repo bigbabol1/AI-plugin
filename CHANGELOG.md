@@ -4,6 +4,19 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.44] - 2026-04-25
+
+### Fixed
+
+- **Memory recall now works on small LLMs** (`orchestrator.py`, `tools/memory.py`, `const.py`). Memory testing on qwen3:8b revealed three independent bugs: (1) `recall` was never invoked on questions like "Wie heiße ich?" / "What is my name?" — the LLM either answered from message history or refused — leaving every saved fact invisible; (2) the `[HOME LOCATION]` block leaked the HA instance's `friendly_label` (e.g. "HomeSweetHome") into the prompt, which small models then read aloud as the user's home town; (3) `forget('...')` did a case-insensitive substring match, so a German `Vergiss, dass ich Kaffee mit Milch trinke` against an English-stored `I drink coffee with milk` removed nothing while the tool still replied "forgotten". Three-part fix:
+  - Auto-inject a numbered `[USER FACTS]` block into every system prompt directly from `.ai_plugin_memory_<user_id>.json`. Small LLMs see the facts as context and answer correctly without needing a tool call. Memory section of both system prompts updated to read from the block first and only call `recall` when it is absent.
+  - Strip `friendly_label=` (and its multi-line explanation) from `_build_location_block`. Country, coords, timezone remain. Eliminates the "you live in HomeSweetHome" failure mode.
+  - Add `index: integer` parameter to the `forget` tool schema (1-based, matching the `[USER FACTS]` numbering). `_forget` now removes by index when present, falls back to substring on `fact`. Cross-language forget (`forget(index=3)` in any language) finally works. The `fact` argument is required as a sanity check, validated by a two-stage guard: (1) `fact` must token-overlap the user message (catches the LLM lifting a keyword from the stored entry it is hallucinating about); (2) when crude EN/DE language detection sees `fact`/`user_message` and `stored[index]` in the same language, `fact` must also overlap the stored entry — this rejects calls like `forget('drive a Ferrari', index=1)` against stored `"KL is short for Kuala Lumpur"`. Cross-language forgets (German `Vergiss Kaffee mit Milch` against English `I drink coffee with milk`) skip the second stage because token mismatch is expected. System prompts updated to prefer `index` and to refuse forgetting when the referenced fact is not in `[USER FACTS]`. Verified end-to-end on qwen3:8b: 19/19 prompts pass including M11 cross-lang forget and M13 refusal of unstored fact.
+
+### Fixed
+
+- **Shortcut now answers temperature for thermostat-only rooms** (`shortcuts.py`). Rooms whose only exposed temperature source is a thermostat (e.g. Tado, Nest publishing `current_temperature` on a `climate.*` entity) fell through the deterministic shortcut because `_pick_best_sensor` only matched `sensor.*` with `device_class: temperature`. The LLM tool loop then took over and frequently picked the wrong entity — `media_player.wohnzimmer_2` (state `off`), `sensor.luftreiniger_pm2_5` (PM2.5 reading), or hallucinated `climate.wohnzimmer_heizung` — because `search_entities` doesn't index by area and `friendly_name` rarely contains the room name. Added a `_pick_climate_temperature` fallback that reads the `current_temperature` attribute from any `climate.*` entity in the resolved area when the sensor lookup misses. Pure addition; bedroom / hobby-room paths that already hit a sensor remain unchanged.
+
 ## [0.5.42] - 2026-04-25
 
 ### Fixed
