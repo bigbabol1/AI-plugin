@@ -17,7 +17,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import ulid as ulid_util
 
-from .const import DOMAIN
+from .const import CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION, DOMAIN
 from .exceptions import OrchestratorError
 from .orchestrator import Orchestrator
 
@@ -88,9 +88,13 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(reply)
+        continue_conversation = self._entry.options.get(
+            CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION
+        )
         return ConversationResult(
             response=intent_response,
             conversation_id=conversation_id,
+            continue_conversation=continue_conversation,
         )
 
     async def async_will_remove_from_hass(self) -> None:

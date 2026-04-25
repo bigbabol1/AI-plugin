@@ -478,8 +478,17 @@ class HALocalToolRegistry:
         attrs: list[str] = []
         if state:
             for key in _INTERESTING_ATTRS:
-                if key in state.attributes:
-                    attrs.append(f"  {key}: {state.attributes[key]}")
+                if key not in state.attributes:
+                    continue
+                val = state.attributes[key]
+                if key == "brightness":
+                    try:
+                        pct = round(int(val) / 255 * 100)
+                        attrs.append(f"  brightness: {pct}%")
+                        continue
+                    except (TypeError, ValueError):
+                        pass
+                attrs.append(f"  {key}: {val}")
 
         lines = [
             f"entity_id: {entity_id}",

@@ -26,6 +26,7 @@ CONF_SYSTEM_PROMPT = "system_prompt"
 CONF_CONTEXT_WINDOW = "context_window"
 CONF_SUMMARIZATION_ENABLED = "summarization_enabled"
 CONF_VOICE_MODE = "voice_mode"
+CONF_CONTINUE_CONVERSATION = "continue_conversation"
 CONF_XML_FALLBACK = "xml_fallback"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
@@ -58,6 +59,7 @@ DEFAULT_RESPONSE_TIMEOUT = 30
 DEFAULT_WEB_SEARCH_BACKEND = BACKEND_BRAVE
 DEFAULT_SUMMARIZATION_ENABLED = True
 DEFAULT_VOICE_MODE = False
+DEFAULT_CONTINUE_CONVERSATION = False
 DEFAULT_XML_FALLBACK = False
 
 # Error keys (must match strings.json config.error and options.error)

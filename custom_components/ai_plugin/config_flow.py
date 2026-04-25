@@ -45,6 +45,7 @@ from .const import (
     CONF_BASE_URL,
     CONF_BRAVE_API_KEY,
     CONF_CONTEXT_WINDOW,
+    CONF_CONTINUE_CONVERSATION,
     CONF_MAX_RESULTS,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
@@ -64,6 +65,7 @@ from .const import (
     CONF_XML_FALLBACK,
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_CONTINUE_CONVERSATION,
     DEFAULT_MAX_RESULTS,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_RESPONSE_TIMEOUT,
@@ -196,6 +198,10 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_VOICE_MODE,
                 default=current.get(CONF_VOICE_MODE, DEFAULT_VOICE_MODE),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_CONTINUE_CONVERSATION,
+                default=current.get(CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_XML_FALLBACK,
