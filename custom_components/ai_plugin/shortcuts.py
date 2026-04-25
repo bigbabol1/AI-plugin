@@ -32,7 +32,15 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
+try:
+    from homeassistant.components.homeassistant.exposed_entities import (
+        async_should_expose,
+    )
+except ImportError:  # pragma: no cover — older HA cores
+    async_should_expose = None  # type: ignore[assignment]
+
 _LOGGER = logging.getLogger(__name__)
+_CONVERSATION_ASSISTANT = "conversation"
 
 
 # Attribute → (domain, device_class, attribute_key, unit_hint, label).
@@ -168,6 +176,14 @@ def _resolve_area(hass: HomeAssistant, raw: str) -> Any | None:
 
 
 def _entities_in_area(hass: HomeAssistant, area_id: str) -> list[Any]:
+    """Entities in an area that the user has exposed to the conversation agent.
+
+    The exposure check matches HA's own intent / Assist pipeline so unexposed
+    entities (e.g. voice-satellite chip sensors that share an area with the
+    real room sensors) cannot leak into shortcut answers. If the
+    exposed_entities helper is unavailable on older cores, fall back to
+    returning all area-matching entities.
+    """
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
     results = []
@@ -177,8 +193,20 @@ def _entities_in_area(hass: HomeAssistant, area_id: str) -> list[Any]:
             dev = dev_reg.async_get(entry.device_id)
             if dev:
                 eid_area = dev.area_id
-        if eid_area == area_id:
-            results.append(entry)
+        if eid_area != area_id:
+            continue
+        if async_should_expose is not None:
+            try:
+                if not async_should_expose(
+                    hass, _CONVERSATION_ASSISTANT, entry.entity_id
+                ):
+                    continue
+            except Exception:  # noqa: BLE001 — never block on registry quirks
+                _LOGGER.debug(
+                    "AI Plugin: should_expose check failed for %s", entry.entity_id,
+                    exc_info=True,
+                )
+        results.append(entry)
     return results
 
 

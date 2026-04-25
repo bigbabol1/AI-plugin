@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.42] - 2026-04-25
+
+### Fixed
+
+- **Pre-LLM shortcut now respects Assist exposure** (`shortcuts.py`). `_entities_in_area` walked the entity registry filtered only by area, ignoring each entity's `conversation.should_expose` setting. As a result, sensors that share an area with a voice satellite (e.g. `sensor.satellite1_*_temperature`, the chip's onboard reading at ~28 °C) could outrank the actual room sensor in `_pick_best_sensor` and be returned to users who had hidden them from Assist. Added an `async_should_expose(hass, "conversation", entity_id)` filter that mirrors HA's own intent / Assist pipeline visibility. Falls back to the previous behaviour on cores without `homeassistant.components.homeassistant.exposed_entities`.
+
 ## [0.5.23] - 2026-04-22
 
 ### Fixed
