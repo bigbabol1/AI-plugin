@@ -4,6 +4,14 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.46] - 2026-04-26
+
+### Fixed
+
+- **Two follow-up quirks from the v0.5.45 location-bias rollout** (`tools/web_search.py`, `const.py`). Live 25-prompt sweep against Assist showed v0.5.45 killed the Texas hallucination cleanly (0 hits) but exposed two pre-existing pinpoints: (1) injected `near Berlin` returned mostly *Berlin, NY / NJ / MD* hits because DuckDuckGo's region resolver tie-breaks ambiguous toponyms toward the user's IP locale; (2) `weather in Tokyo right now` returned the local Berlin weather entity's numbers because the system prompt's `[WEATHER — STRICT ORDER]` block ran `list_entities(domain='weather')` before the LLM could route the named-place case to `web_search`. Two coordinated changes:
+  - **Country disambiguation in injected place.** `_best_place_label` now returns `"<city>, <country>"` (or `"<region>, <country>"`) whenever both fields are populated, falling back to the bare city/region/country/coord chain only when one is missing. Search engines treat the comma-separated form as an unambiguous geo hint, so `near Berlin, Germany` no longer collapses to small-town US results. Idempotent against the existing `_has_place_token` check (the longer label still matches when re-injected).
+  - **Named-place precondition in weather block.** Both `SYSTEM_PROMPT_DEFAULT` and `SYSTEM_PROMPT_VOICE` weather blocks now lead with: *"IF the user names a city/country/region different from their home: SKIP `list_entities` and CALL `web_search('weather in <named place>', near_user=false)` instead."* The local weather entity covers the user's home, not Tokyo — telling the LLM to short-circuit on explicit pins routes the query to the same web path that already handles non-home weather correctly.
+
 ## [0.5.45] - 2026-04-26
 
 ### Fixed

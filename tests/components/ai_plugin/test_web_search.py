@@ -445,11 +445,22 @@ async def test_async_search_strip_urls_forwarded_to_output(monkeypatch):
 
 def test_best_place_label_picks_city_first() -> None:
     loc = {"city": "Berlin", "region": "BE", "country_name": "Germany"}
-    assert _best_place_label(loc) == "Berlin"
+    # Country appended for search-engine disambiguation (Berlin DE vs Berlin NY)
+    assert _best_place_label(loc) == "Berlin, Germany"
+
+
+def test_best_place_label_city_without_country_returns_bare_city() -> None:
+    assert _best_place_label({"city": "Berlin"}) == "Berlin"
+
+
+def test_best_place_label_does_not_duplicate_country_when_label_equals_country() -> None:
+    # Some Nominatim payloads put the country into the city field
+    assert _best_place_label({"city": "France", "country_name": "France"}) == "France"
 
 
 def test_best_place_label_falls_back_to_region_then_country() -> None:
     assert _best_place_label({"region": "Bavaria"}) == "Bavaria"
+    assert _best_place_label({"region": "Bavaria", "country_name": "Germany"}) == "Bavaria, Germany"
     assert _best_place_label({"country_name": "France"}) == "France"
 
 

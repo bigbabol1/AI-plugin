@@ -366,16 +366,25 @@ def _has_place_token(query: str) -> bool:
 def _best_place_label(location: dict[str, Any] | None) -> str | None:
     """Pick the most specific non-empty field from a resolved location.
 
-    Preference order: city > region > country_name > "lat,lon" coord
-    string. Returns ``None`` when nothing usable is available; callers
-    must treat ``None`` as "do not inject" rather than as a fallback.
+    Preference: ``"<city|region>, <country>"`` when both available
+    (disambiguates Berlin DE vs Berlin NY for search engines), else the
+    bare city/region/country, else a "lat,lon" coord string. Returns
+    ``None`` when nothing usable is available; callers must treat
+    ``None`` as "do not inject" rather than as a fallback.
     """
     if not location:
         return None
-    for key in ("city", "region", "country_name"):
+    country = location.get("country_name")
+    country_str = country.strip() if isinstance(country, str) and country.strip() else None
+    for key in ("city", "region"):
         value = location.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            label = value.strip()
+            if country_str and country_str.lower() != label.lower():
+                return f"{label}, {country_str}"
+            return label
+    if country_str:
+        return country_str
     lat = location.get("lat")
     lon = location.get("lon")
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
