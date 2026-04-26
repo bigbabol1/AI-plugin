@@ -108,7 +108,7 @@ def test_tool_call_to_assistant_message() -> None:
     tc = ToolCall(id="call_abc", name="search", arguments={"q": "HA"})
     msg = tc.to_assistant_message()
     assert msg["role"] == "assistant"
-    assert msg["content"] is None
+    assert msg["content"] == ""
     fn = msg["tool_calls"][0]["function"]
     assert fn["name"] == "search"
     assert json.loads(fn["arguments"]) == {"q": "HA"}

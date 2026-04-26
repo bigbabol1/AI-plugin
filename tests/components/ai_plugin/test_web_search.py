@@ -333,6 +333,8 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
     orch._web_search = mock_web
     orch._provider = mock_provider
     orch._location = mock_location
+    orch._last_entities = {}
+    orch._conv_locks = {}
 
     reply = await orch.async_process("What's new in HA?", "c", "en")
 

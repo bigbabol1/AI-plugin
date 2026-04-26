@@ -31,30 +31,47 @@ def _make_mock_entry(options: dict | None = None) -> MagicMock:
     return entry
 
 
+def _baseline_orch(entry=None) -> Orchestrator:
+    """Build a bare Orchestrator with all attributes async_process touches."""
+    from custom_components.ai_plugin.context_manager import ContextManager
+
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._entry = entry or _make_mock_entry()
+    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch._summarization_enabled = False
+    orch._mcp = None
+    orch._memory = None
+    orch._max_tool_iterations = 5
+    orch._web_search = None
+    orch._ha_local = None
+    orch._last_entities = {}
+    orch._conv_locks = {}
+    loc = MagicMock()
+    loc.async_resolve = AsyncMock(return_value={})
+    orch._location = loc
+    return orch
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Orchestrator: system prompt selection
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def test_system_prompt_default() -> None:
+async def test_system_prompt_default() -> None:
     """Default system prompt is returned when no custom prompt and voice=False."""
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    prompt = orch._build_system_prompt(voice_mode=False)
+    orch = _baseline_orch()
+    prompt = await orch._build_system_prompt(voice_mode=False)
     assert prompt == SYSTEM_PROMPT_DEFAULT
 
 
-def test_system_prompt_voice() -> None:
+async def test_system_prompt_voice() -> None:
     """Voice system prompt is returned when voice_mode=True and no custom prompt."""
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    prompt = orch._build_system_prompt(voice_mode=True)
+    orch = _baseline_orch()
+    prompt = await orch._build_system_prompt(voice_mode=True)
     assert prompt == SYSTEM_PROMPT_VOICE
 
 
-def test_system_prompt_custom_appended_to_voice() -> None:
+async def test_system_prompt_custom_appended_to_voice() -> None:
     """Custom instructions are appended after the voice base prompt."""
     entry = _make_mock_entry(
         options={
@@ -64,13 +81,12 @@ def test_system_prompt_custom_appended_to_voice() -> None:
             CONF_VOICE_MODE: True,
         }
     )
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    prompt = orch._build_system_prompt(voice_mode=True)
+    orch = _baseline_orch(entry)
+    prompt = await orch._build_system_prompt(voice_mode=True)
     assert prompt == f"{SYSTEM_PROMPT_VOICE}\n\nYou are a pirate."
 
 
-def test_system_prompt_custom_appended_to_default() -> None:
+async def test_system_prompt_custom_appended_to_default() -> None:
     """Custom instructions are appended after the default base prompt."""
     entry = _make_mock_entry(
         options={
@@ -79,9 +95,8 @@ def test_system_prompt_custom_appended_to_default() -> None:
             "system_prompt": "You are a pirate.",
         }
     )
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    prompt = orch._build_system_prompt(voice_mode=False)
+    orch = _baseline_orch(entry)
+    prompt = await orch._build_system_prompt(voice_mode=False)
     assert prompt == f"{SYSTEM_PROMPT_DEFAULT}\n\nYou are a pirate."
 
 
@@ -92,17 +107,7 @@ def test_system_prompt_custom_appended_to_default() -> None:
 
 async def test_process_happy_path() -> None:
     """async_process returns the provider reply and stores history."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False  # keep test simple
-    orch._mcp = None
-    orch._memory = None
-    orch._max_tool_iterations = 5
-    orch._web_search = None
+    orch = _baseline_orch()
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Lights are on.")
@@ -123,17 +128,7 @@ async def test_process_happy_path() -> None:
 
 async def test_process_multi_turn_maintains_history() -> None:
     """Multi-turn conversation accumulates history correctly."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
-    orch._mcp = None
-    orch._memory = None
-    orch._max_tool_iterations = 5
-    orch._web_search = None
+    orch = _baseline_orch()
 
     responses = ["Hello!", "The temperature is 72°F."]
     call_count = 0
@@ -161,17 +156,7 @@ async def test_process_multi_turn_maintains_history() -> None:
 
 async def test_process_isolates_conversation_ids() -> None:
     """Different conversation_ids maintain separate histories."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
-    orch._mcp = None
-    orch._memory = None
-    orch._max_tool_iterations = 5
-    orch._web_search = None
+    orch = _baseline_orch()
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Reply")
@@ -188,17 +173,7 @@ async def test_process_isolates_conversation_ids() -> None:
 
 async def test_process_propagates_orchestrator_error() -> None:
     """OrchestratorError from provider propagates out of async_process."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
-    orch._mcp = None
-    orch._memory = None
-    orch._max_tool_iterations = 5
-    orch._web_search = None
+    orch = _baseline_orch()
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(
@@ -217,17 +192,8 @@ async def test_process_propagates_orchestrator_error() -> None:
 
 def _make_orch_with_mcp(mock_mcp, mock_provider):
     """Helper: build a minimal Orchestrator with MCP and provider pre-wired."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
+    orch = _baseline_orch()
     orch._mcp = mock_mcp
-    orch._memory = None
-    orch._max_tool_iterations = 5
-    orch._web_search = None
     orch._provider = mock_provider
     return orch
 
@@ -265,17 +231,8 @@ async def test_tool_loop_single_tool_call() -> None:
 
 async def test_process_with_summarization_enabled() -> None:
     """When summarization is enabled, summarize_if_needed is called."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch = _baseline_orch()
     orch._summarization_enabled = True
-    orch._mcp = None
-    orch._memory = None
-    orch._max_tool_iterations = 5
-    orch._web_search = None
 
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Summarized reply.")
@@ -293,15 +250,7 @@ async def test_process_with_summarization_enabled() -> None:
 
 async def test_dispatch_tool_no_handler_returns_unavailable_message() -> None:
     """_dispatch_tool returns unavailable message when no MCP and no web_search."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._mcp = None
-    orch._memory = None
-    orch._web_search = None
-
+    orch = _baseline_orch()
     result = await orch._dispatch_tool("unknown_tool", {"arg": "value"})
 
     assert "unavailable" in result
@@ -310,11 +259,7 @@ async def test_dispatch_tool_no_handler_returns_unavailable_message() -> None:
 
 async def test_async_close_delegates_to_provider() -> None:
     """async_close calls provider.async_close."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
+    orch = _baseline_orch()
 
     mock_provider = MagicMock()
     mock_provider.async_close = AsyncMock()

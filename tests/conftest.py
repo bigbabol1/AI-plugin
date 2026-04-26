@@ -21,7 +21,8 @@ def _make_module(name: str, **attrs) -> types.ModuleType:
 # ── homeassistant.core ────────────────────────────────────────────────────────
 
 class _Context:
-    def __init__(self, *a, **kw): pass
+    def __init__(self, user_id=None, *a, **kw):
+        self.user_id = user_id
 
 
 class _HomeAssistant:
@@ -70,6 +71,10 @@ class _ConversationEntity:
     pass
 
 
+class _ConversationEntityFeature:
+    CONTROL = 1
+
+
 class _ConversationInput:
     def __init__(self, text, context, conversation_id, device_id, language, agent_id=None):
         self.text = text
@@ -81,14 +86,16 @@ class _ConversationInput:
 
 
 class _ConversationResult:
-    def __init__(self, response, conversation_id):
+    def __init__(self, response, conversation_id, continue_conversation=False):
         self.response = response
         self.conversation_id = conversation_id
+        self.continue_conversation = continue_conversation
 
 
 _conv_mod = _make_module(
     "homeassistant.components.conversation",
     ConversationEntity=_ConversationEntity,
+    ConversationEntityFeature=_ConversationEntityFeature,
     ConversationInput=_ConversationInput,
     ConversationResult=_ConversationResult,
 )
