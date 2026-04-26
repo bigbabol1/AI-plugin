@@ -64,7 +64,6 @@ from .const import (
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
-    CONF_XML_FALLBACK,
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_CONTINUE_CONVERSATION,
@@ -75,7 +74,6 @@ from .const import (
     DEFAULT_SUMMARIZATION_ENABLED,
     DEFAULT_VOICE_MODE,
     DEFAULT_WEB_SEARCH_BACKEND,
-    DEFAULT_XML_FALLBACK,
     CUSTOM_PROMPT_TEMPLATE,
     DOMAIN,
     ERROR_CANNOT_CONNECT,
@@ -205,10 +203,6 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_CONTINUE_CONVERSATION,
                 default=current.get(CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION),
-            ): selector.BooleanSelector(),
-            vol.Optional(
-                CONF_XML_FALLBACK,
-                default=current.get(CONF_XML_FALLBACK, DEFAULT_XML_FALLBACK),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_MAX_TOOL_ITERATIONS,
@@ -769,11 +763,11 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             "args": ["mcp-server-fetch"],
         },
         "sqlite": {
-            "label": "SQLite — query a database file (e.g. your HA history DB for 'what was the temperature at 3pm yesterday?')",
+            "label": "SQLite — query and write a database file the AI can use as a notebook or scratchpad",
             "command": "uvx",
             "args_template": ["mcp-server-sqlite", "--db-path", "{value}"],
             "config_label": "database file path",
-            "config_placeholder": "/config/home-assistant_v2.db",
+            "config_placeholder": "/config/buddy_notes.db",
         },
         "wikipedia": {
             "label": "Wikipedia — quick factual lookups without a web search",
@@ -968,15 +962,14 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required("preset_value"): selector.TextSelector(
-                        selector.TextSelectorConfig(
-                            placeholder=preset.get("config_placeholder", "")
-                        )
+                        selector.TextSelectorConfig()
                     ),
                 }
             ),
             description_placeholders={
                 "preset_label": preset["label"],
                 "config_label": preset.get("config_label", "Value"),
+                "example": preset.get("config_placeholder", ""),
             },
             errors=errors,
         )

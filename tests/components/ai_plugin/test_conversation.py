@@ -102,7 +102,6 @@ async def test_process_happy_path() -> None:
     orch._mcp = None
     orch._memory = None
     orch._max_tool_iterations = 5
-    orch._xml_fallback = False
     orch._web_search = None
 
     mock_provider = MagicMock()
@@ -134,7 +133,6 @@ async def test_process_multi_turn_maintains_history() -> None:
     orch._mcp = None
     orch._memory = None
     orch._max_tool_iterations = 5
-    orch._xml_fallback = False
     orch._web_search = None
 
     responses = ["Hello!", "The temperature is 72°F."]
@@ -173,7 +171,6 @@ async def test_process_isolates_conversation_ids() -> None:
     orch._mcp = None
     orch._memory = None
     orch._max_tool_iterations = 5
-    orch._xml_fallback = False
     orch._web_search = None
 
     mock_provider = MagicMock()
@@ -201,7 +198,6 @@ async def test_process_propagates_orchestrator_error() -> None:
     orch._mcp = None
     orch._memory = None
     orch._max_tool_iterations = 5
-    orch._xml_fallback = False
     orch._web_search = None
 
     mock_provider = MagicMock()
@@ -231,7 +227,6 @@ def _make_orch_with_mcp(mock_mcp, mock_provider):
     orch._mcp = mock_mcp
     orch._memory = None
     orch._max_tool_iterations = 5
-    orch._xml_fallback = False
     orch._web_search = None
     orch._provider = mock_provider
     return orch
@@ -280,7 +275,6 @@ async def test_process_with_summarization_enabled() -> None:
     orch._mcp = None
     orch._memory = None
     orch._max_tool_iterations = 5
-    orch._xml_fallback = False
     orch._web_search = None
 
     mock_provider = MagicMock()
@@ -329,116 +323,6 @@ async def test_async_close_delegates_to_provider() -> None:
     await orch.async_close()
 
     mock_provider.async_close.assert_awaited_once()
-
-
-async def test_xml_fallback_path_is_used_when_enabled() -> None:
-    """When xml_fallback=True and tools exist, _xml_tool_loop is called."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
-    orch._max_tool_iterations = 5
-    orch._xml_fallback = True
-    orch._web_search = None
-
-    mock_mcp = MagicMock()
-    mock_mcp.get_tool_schemas = MagicMock(
-        return_value=[{"type": "function", "function": {"name": "get_time", "description": "Gets time", "parameters": {}}}]
-    )
-    mock_mcp.call_tool = AsyncMock(return_value="22:00")
-    orch._mcp = mock_mcp
-    orch._memory = None
-
-    mock_provider = MagicMock()
-    # Return a reply with no <tool_call> tags → terminates immediately
-    mock_provider.async_complete = AsyncMock(return_value="It is 22:00.")
-    orch._provider = mock_provider
-
-    reply = await orch.async_process("What time?", "conv-xml", "en")
-
-    assert reply == "It is 22:00."
-    mock_provider.async_complete.assert_awaited_once()
-
-
-async def test_xml_tool_loop_handles_json_decode_error() -> None:
-    """_xml_tool_loop falls back to empty args on malformed JSON in tool call."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
-    orch._max_tool_iterations = 5
-    orch._xml_fallback = True
-    orch._web_search = None
-
-    mock_mcp = MagicMock()
-    mock_mcp.get_tool_schemas = MagicMock(
-        return_value=[{"type": "function", "function": {"name": "bad_tool", "description": "x", "parameters": {}}}]
-    )
-    mock_mcp.call_tool = AsyncMock(return_value="result")
-    orch._mcp = mock_mcp
-    orch._memory = None
-
-    # First call returns malformed JSON in tool_call, second returns final answer
-    responses = [
-        '<tool_call name="bad_tool">NOT VALID JSON</tool_call>',
-        "Final answer after bad json.",
-    ]
-    call_idx = 0
-
-    async def mock_complete(messages):
-        nonlocal call_idx
-        r = responses[call_idx]
-        call_idx += 1
-        return r
-
-    mock_provider = MagicMock()
-    mock_provider.async_complete = mock_complete
-    orch._provider = mock_provider
-
-    reply = await orch.async_process("Do bad tool", "conv-bad", "en")
-
-    # Should call tool with empty args (no crash) and return final answer
-    assert reply == "Final answer after bad json."
-    mock_mcp.call_tool.assert_awaited_once_with("bad_tool", {})
-
-
-async def test_xml_tool_loop_max_iterations_appends_note() -> None:
-    """XML tool loop appends note when max iterations reached."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-
-    entry = _make_mock_entry()
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
-    orch._max_tool_iterations = 2
-    orch._xml_fallback = True
-    orch._web_search = None
-
-    mock_mcp = MagicMock()
-    mock_mcp.get_tool_schemas = MagicMock(
-        return_value=[{"type": "function", "function": {"name": "loop_tool", "description": "loops", "parameters": {}}}]
-    )
-    mock_mcp.call_tool = AsyncMock(return_value="ok")
-    orch._mcp = mock_mcp
-    orch._memory = None
-
-    # Always return a tool call — never a final answer
-    mock_provider = MagicMock()
-    mock_provider.async_complete = AsyncMock(
-        return_value='partial <tool_call name="loop_tool">{"x": 1}</tool_call>'
-    )
-    orch._provider = mock_provider
-
-    reply = await orch.async_process("Loop forever", "conv-xml-limit", "en")
-
-    assert "tool call limit" in reply.lower()
 
 
 async def test_tool_loop_max_iterations_appends_note() -> None:

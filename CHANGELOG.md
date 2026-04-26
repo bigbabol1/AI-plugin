@@ -4,6 +4,23 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.47] - 2026-04-26
+
+### Fixed
+
+- **Adding any MCP preset that needs a path (SQLite, filesystem) failed with "unknown error"** (`config_flow.py`, `strings.json`, `translations/en.json`). The preset-config form passed `selector.TextSelectorConfig(placeholder=...)`, but `placeholder` is not a valid `TextSelectorConfig` field — HA core whitelists only `multiline / prefix / suffix / type / autocomplete / multiple`. Voluptuous rejected the unknown key on schema build and HA surfaced the generic "unknown error" string with no log line tying it to the config flow. Fix: drop the kwarg, surface the example path through `description_placeholders["example"]` instead, and append `Example: {example}` to the step description so users still see the suggested path.
+- **SQLite preset now suggests a non-conflicting path** (`config_flow.py`). Old example `/config/home-assistant_v2.db` is HA's recorder DB and is locked for writes while HA runs — `mcp-server-sqlite` exposes `write_query` and `create_table`, so any LLM-issued write would have collided with the recorder. New example `/config/buddy_notes.db` is auto-created by `mcp-server-sqlite` on first connect (`Path.parent.mkdir(parents=True, exist_ok=True)` + `sqlite3.connect(...)`) and gives the model a private scratchpad to read and write without fighting the recorder. The label was updated to reflect the scratchpad use case.
+
+### Removed
+
+- **XML tool-calling fallback removed entirely** (`orchestrator.py`, `const.py`, `config_flow.py`, `strings.json`, `translations/en.json`, tests). The `xml_fallback` option, the `_xml_tool_loop` method, the `<tools>`/`<tool_call>` system-prompt scaffolding, and the `CONF_XML_FALLBACK` / `DEFAULT_XML_FALLBACK` constants are gone. Every model in the recommended list (Qwen3 8B, Qwen2.5 7B, Mistral 7B, Hermes 3 8B for ≤8 GB VRAM and ministral-3:14b / GPT-4o / Claude / Grok above) supports native OpenAI-compatible function calling, and models that don't are not recommended for this plugin in the first place — the XML path was carrying ~70 lines of orchestrator code, a config option, and four UI strings for a code path that the suggested setups never executed. Existing entries with `xml_fallback: true` in `options` are silently ignored on next load (HA's options store tolerates unknown keys); no migration step is required.
+
+### Docs
+
+- **Mistral 7B added to the bench, Llama 3.1 row removed.** Fresh 51-prompt voice-mode sweep against `mistral:7b` Q4_K_M scored 82.4 % (42/51) at median 0.4 s — fastest of the four tested but the only one that fabricated a German weather forecast for `wie ist das wetter?` instead of calling a tool, and it dumps the system prompt verbatim on bare nouns like `weather` / `events` / `temperature`. Llama 3.1 8B was never benched in this round so it has been pulled from the table; recommendations remain Qwen3 8B for voice, Qwen2.5 7B for text.
+- **Ollama-only disclaimer.** Features list now states upfront that only Ollama has been exercised end-to-end. The OpenAI-compatible endpoint should accept OpenAI / xAI / LM Studio / llama.cpp, but those paths are untested.
+- **Removed local IP / failure-analysis subsection / stale troubleshooting bullet.** The `192.168.0.66:11435` reference, the per-prompt qwen failure-analysis tables, and the obsolete `"Any lights on?" answers about a single light — fixed in v0.5.38` troubleshooting line are all dropped from the README.
+
 ## [0.5.46] - 2026-04-26
 
 ### Fixed

@@ -6,10 +6,8 @@ Request flow:
   3.  summarize_if_needed (Week 2)
   4.  get_messages → [system] + trimmed history
   5.  Collect tool schemas: MCP tools + web_search (if enabled)
-  6a. Native tool loop (OpenAI function calling):
+  6.  Native tool loop (OpenAI function calling):
         LLM → tool calls → execute → repeat → final text
-  6b. XML fallback (opt-in, experimental):
-        Inject XML tool spec into system prompt, parse <tool_call> tags
   7.  add_turn(assistant)
   8.  Return reply text
 
@@ -47,14 +45,12 @@ from .const import (
     CONF_TOP_P,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_ENABLED,
-    CONF_XML_FALLBACK,
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
-    DEFAULT_XML_FALLBACK,
     DOMAIN,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
@@ -73,10 +69,6 @@ if TYPE_CHECKING:
     from .tools.mcp_client import MCPToolRegistry
 
 _LOGGER = logging.getLogger(__name__)
-
-# Strips <tool_call name="...">...</tool_call> tags from LLM replies before
-# they are written to canonical history (XML fallback path).
-_XML_TOOL_CALL_RE = re.compile(r"<tool_call[^>]*>.*?</tool_call>", re.DOTALL)
 
 # Strip narration sentences like "Calling list_entities(...)..." that small
 # models emit even when the system prompt forbids it. Matches a full line
@@ -503,8 +495,6 @@ class Orchestrator:
         self._max_tool_iterations: int = opts.get(
             CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS
         )
-        self._xml_fallback: bool = opts.get(CONF_XML_FALLBACK, DEFAULT_XML_FALLBACK)
-
         # Web search tool (None when disabled in config).
         self._web_search: WebSearchTool | None = (
             WebSearchTool(opts) if opts.get(CONF_WEB_SEARCH_ENABLED, False) else None
@@ -767,14 +757,10 @@ class Orchestrator:
                     report["pct"] * 100,
                 )
 
-            # 5. Call LLM — three paths based on config and tool availability:
-            #    a) XML fallback (opt-in, experimental) — tool spec injected into prompt
-            #    b) Native tool loop (function calling)
-            #    c) Plain completion (no tools)
+            # 5. Call LLM — native tool loop when tools available, plain
+            #    completion otherwise.
             try:
-                if tool_schemas and self._xml_fallback:
-                    reply, tool_msgs = await self._xml_tool_loop(messages, tool_schemas, user_id, voice_mode, message)
-                elif tool_schemas:
+                if tool_schemas:
                     reply, tool_msgs = await self._tool_loop(messages, tool_schemas, user_id, voice_mode, message)
                 else:
                     reply = await self._provider.async_complete(messages)
@@ -790,7 +776,6 @@ class Orchestrator:
             # Inject a corrective system turn and re-run the tool loop ONCE.
             if (
                 tool_schemas
-                and not self._xml_fallback
                 and _is_state_set_query(message)
                 and not _any_list_entities_call(tool_msgs)
             ):
@@ -826,7 +811,6 @@ class Orchestrator:
             if (
                 missed_name is not None
                 and tool_schemas
-                and not self._xml_fallback
                 and not _any_tool_call(tool_msgs, "search_entities")
             ):
                 _LOGGER.info(
@@ -863,8 +847,7 @@ class Orchestrator:
             # 6. Append tool call/result messages then the assistant reply to history.
             for msg in tool_msgs:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
-            stored_reply = _XML_TOOL_CALL_RE.sub("", reply).strip() or reply
-            stored_reply = _strip_narration(stored_reply) or stored_reply
+            stored_reply = _strip_narration(reply) or reply
             stored_reply = _strip_emoji(stored_reply) or stored_reply
 
             # Defensive: small models occasionally return empty content with no
@@ -991,75 +974,6 @@ class Orchestrator:
 
         suffix = " [Note: reached tool call limit — response may be incomplete.]"
         return (last_response.reply_text() if last_response else "") + suffix, history_messages
-
-    async def _xml_tool_loop(
-        self,
-        messages: list[dict],
-        tool_schemas: list[dict],
-        user_id: str | None = None,
-        voice_mode: bool = False,
-        user_message: str = "",
-    ) -> tuple[str, list[dict]]:
-        """XML fallback tool loop for models without native function calling.
-
-        Returns (reply_text, []) — XML path doesn't produce structured tool
-        messages, so history_messages is always empty.
-        """
-        import json as _json
-        import re as _re
-
-        # Build XML tool spec to append to system prompt.
-        tool_spec_lines = ["<tools>"]
-        for schema in tool_schemas:
-            fn = schema.get("function", {})
-            name = fn.get("name", "")
-            desc = fn.get("description", "")
-            params = _json.dumps(fn.get("parameters", {}))
-            tool_spec_lines.append(
-                f'  <tool name="{name}"><description>{desc}</description>'
-                f"<parameters>{params}</parameters></tool>"
-            )
-        tool_spec_lines.append("</tools>")
-        tool_spec_lines.append(
-            'To call a tool respond with: <tool_call name="tool_name">{"arg": "value"}</tool_call>'
-        )
-        xml_suffix = "\n".join(tool_spec_lines)
-
-        # Patch system message to include XML spec.
-        patched = list(messages)
-        if patched and patched[0]["role"] == "system":
-            patched[0] = {
-                "role": "system",
-                "content": patched[0]["content"] + "\n\n" + xml_suffix,
-            }
-
-        tool_call_re = _re.compile(
-            r'<tool_call\s+name="([^"]+)">(.*?)</tool_call>',
-            _re.DOTALL,
-        )
-
-        for iteration in range(self._max_tool_iterations):
-            reply = await self._provider.async_complete(patched)
-
-            matches = tool_call_re.findall(reply)
-            if not matches:
-                return reply, []
-
-            _LOGGER.debug(
-                "XML tool loop iteration %d/%d: %d call(s)",
-                iteration + 1, self._max_tool_iterations, len(matches),
-            )
-
-            patched.append({"role": "assistant", "content": reply})
-            for name, raw_args in matches:
-                try:
-                    args = _json.loads(raw_args.strip())
-                except _json.JSONDecodeError:
-                    args = {}
-                result = await self._dispatch_tool(name, args, user_id, voice_mode, user_message)
-                patched.append({"role": "user", "content": f"Tool result for {name}: {result}"})
-
-        return reply + " [Note: reached tool call limit — response may be incomplete.]", []
 
     async def _dispatch_tool(
         self,

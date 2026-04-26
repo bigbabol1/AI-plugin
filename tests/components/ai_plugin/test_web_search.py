@@ -330,7 +330,6 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
     orch._memory = None
     orch._ha_local = None
     orch._max_tool_iterations = 5
-    orch._xml_fallback = False
     orch._web_search = mock_web
     orch._provider = mock_provider
     orch._location = mock_location
@@ -346,66 +345,6 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
         language=None,
     )
     mock_mcp.call_tool.assert_not_awaited()
-
-
-async def test_orchestrator_xml_fallback_parses_tool_call() -> None:
-    """XML fallback mode parses <tool_call> tags and dispatches the tool."""
-    from custom_components.ai_plugin.context_manager import ContextManager
-    from custom_components.ai_plugin.orchestrator import Orchestrator
-    from custom_components.ai_plugin.tools.web_search import TOOL_SCHEMA
-
-    responses = [
-        '<tool_call name="web_search">{"query": "news"}</tool_call>',
-        "Final answer.",
-    ]
-    call_i = 0
-
-    async def mock_complete(messages):
-        nonlocal call_i
-        r = responses[call_i]
-        call_i += 1
-        return r
-
-    mock_provider = MagicMock()
-    mock_provider.async_complete = mock_complete
-
-    mock_web = MagicMock()
-    mock_web.async_search = AsyncMock(return_value="Search results here")
-
-    entry = MagicMock()
-    entry.entry_id = "e2"
-    entry.options = {}
-
-    mock_location = MagicMock()
-    mock_location.async_resolve = AsyncMock(return_value={})
-
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._entry = entry
-    orch._context_mgr = ContextManager(max_tokens=8192)
-    orch._summarization_enabled = False
-    orch._mcp = None
-    orch._memory = None
-    orch._ha_local = None
-    orch._max_tool_iterations = 5
-    orch._xml_fallback = True
-    orch._web_search = mock_web
-    orch._provider = mock_provider
-    orch._location = mock_location
-
-    reply, _tool_ctx = await orch._xml_tool_loop(
-        [{"role": "system", "content": "sys"}, {"role": "user", "content": "news?"}],
-        [TOOL_SCHEMA],
-    )
-
-    assert reply == "Final answer."
-    mock_web.async_search.assert_awaited_once_with(
-        "news",
-        strip_urls=False,
-        near_user=False,
-        location=None,
-        language=None,
-    )
-
 
 
 def test_strip_url_lines_removes_url_only_lines_and_inline_urls():

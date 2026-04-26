@@ -11,7 +11,8 @@ A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — O
 - **MCP extensibility** — connect external MCP servers (HTTP and stdio) for additional tools
 - **Smart context management** — sliding window + automatic LLM summarization prevents memory loss with local models
 - **Voice mode** — compact system prompt when triggered via HA Assist voice pipeline
-- **XML fallback** — tool calling for models without native function-calling support
+
+> **Tested only with Ollama.** The OpenAI-compatible endpoint should accept any of the listed backends, but only Ollama (local) has been exercised end-to-end against the prompt suite below. Reports for OpenAI / xAI / LM Studio / llama.cpp setups welcome.
 
 ## Recommended Models
 
@@ -19,17 +20,16 @@ The most critical factor for reliable entity control is **tool calling quality**
 
 ### 8 GB VRAM (e.g. RTX 3060 Ti, RTX 3070)
 
-Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/process` in **voice mode** (`device_id` set → `SYSTEM_PROMPT_VOICE` + `strip_urls=True`). 51 prompts covering light/climate/sensor/media/weather/web/memory/multi-step/multilingual. Plugin v0.5.46, num_ctx 16384, temperature 0.2, on Ollama at `192.168.0.66:11435` (RTX 3060 Ti, 8 GB).
+Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/process` in **voice mode** (`device_id` set → `SYSTEM_PROMPT_VOICE` + `strip_urls=True`). 51 prompts covering light/climate/sensor/media/weather/web/memory/multi-step/multilingual. Plugin v0.5.47, num_ctx 16384, temperature 0.2, on Ollama against an RTX 3060 Ti (8 GB).
 
 | Model | Ollama tag | Weights | Pass rate | Avg latency | Texas-class hallucinations | Notes |
 |-------|-----------|---------|-----------|-------------|----------------------------|-------|
 | **Qwen3 8B** | `qwen3:8b` | ~5.2 GB | **86.3 %** (44/51) | **1.8 s** (median 1.4 s, max 4.9 s) | 0 | **Top recommendation.** Most consistent latency, perfect on weather (5/5) and web (5/5), strong on lights (9/10). Emits CoT into `thinking`; plugin passes `think: false` so `content` is populated. The HA-Assist `homeassistant:latest` alias points here. |
 | **Qwen2.5 7B** | `qwen2.5:7b` | ~4.7 GB | **88.2 %** (45/51) | 2.6 s (median 0.7 s, max **37.8 s**) | 0 | Tied at the top by score, slightly higher tail latency on multi-step tool loops. No reasoning-mode quirks. Pick this if you want lower VRAM headroom or non-think behaviour. |
+| Mistral 7B | `mistral:7b` | ~4.1 GB | 82.4 % (42/51) | 1.3 s (median 0.4 s, max 10.0 s) | **1** (fabricated *"das Wetter in Berlin ist regnerisch und kühl"* with no tool call) | Fast and decisive on lights/climate/web (perfect on all three), but takes some commands literally wrong (`volume up bedroom` → tried to switch on bedroom lights) and dumps the system prompt verbatim on bare nouns like `weather` / `events` / `temperature`. Acceptable for English text; not the safe pick for German voice. |
 | Hermes 3 8B | `hermes3:8b` | ~4.7 GB | 74.5 % (38/51) | 2.1 s (median 1.5 s, max 23.5 s) | **1** (returned a Super Bowl LA Rams story to "events") | Llama-3.1 base, tool-calling FT. Weak on weather (2/5 — refuses or asks for location), weak on light entity resolution (6/10). Not recommended for HA. |
-| Mistral 7B | `mistral:7b` | ~4.1 GB | not in this round | — | — | Native FC, no system-prompt scaffolding needed. Was strong in earlier 25-prompt runs. |
-| Llama 3.1 8B | `llama3.1:8b` | ~4.8 GB | not in this round | — | — | Good general baseline; bench separately for your install. |
 
-**Headline:** Qwen3 8B and Qwen2.5 7B are within one prompt of each other on the raw rubric, but **once you discount environment misses and rubric edge-cases the gap widens to ~96 % vs ~92 %** — see *Failure analysis* below. Qwen3 8B is the safer pick for voice TTS because Qwen2.5 7B occasionally leaks raw tool-call syntax (`Calling list_entities(domain='weather')...`) into the reply on short prompts; Qwen3 never did this.
+**Headline:** Qwen2.5 7B has the highest raw score, Qwen3 8B has the most consistent latency and the cleanest voice output. Mistral 7B is the fastest of the bunch but is the only model in this round that fabricated a weather answer instead of calling a tool — a hard fail for an HA agent. Qwen3 8B remains the safer pick for voice TTS because Qwen2.5 7B occasionally leaks raw tool-call syntax (`Calling list_entities(domain='weather')...`) into the reply on short prompts; Qwen3 never did this.
 
 > **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB.
 > A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
@@ -84,48 +84,20 @@ Reasoning-capable Ollama models emit chain-of-thought into a separate `thinking`
 
 ## Reliability Benchmark
 
-51-prompt matrix covering light control, climate, sensors/status, media, weather (local + named-place), web search & nearby-events, memory, multi-step regression, and multilingual input (English + German). Measured on Home Assistant Core 2026.4.x against plugin v0.5.46 via `/api/conversation/process`, **voice mode** (`device_id` set so `SYSTEM_PROMPT_VOICE` + `strip_urls=True` are active — the most common Assist usage path).
+51-prompt matrix covering light control, climate, sensors/status, media, weather (local + named-place), web search & nearby-events, memory, multi-step regression, and multilingual input (English + German). Measured on Home Assistant Core 2026.4.x against plugin v0.5.47 via `/api/conversation/process`, **voice mode** (`device_id` set so `SYSTEM_PROMPT_VOICE` + `strip_urls=True` are active — the most common Assist usage path).
 
 | Model | Pass rate | Median latency | Avg latency | Suspect-place hits | Best categories | Worst categories |
 |-------|-----------|----------------|-------------|--------------------|-----------------|------------------|
 | `qwen3:8b` (alias `homeassistant:latest`) | **86.3 %** (44/51) | **1.4 s** | 1.8 s | 0 | weather 5/5, web 5/5, light 9/10, media 4/4, memory 4/4 | sanity 2/3, multi 2/3 |
 | `qwen2.5:7b` | **88.2 %** (45/51) | 0.7 s | 2.6 s | 0 | sensor 6/6, multi 3/3, sanity 3/3, weather 5/5, web 5/5 | climate 5/7 (couldn't resolve thermostat target), short 2/4 |
+| `mistral:7b` | 82.4 % (42/51) | **0.4 s** | 1.3 s | **1** | climate 7/7, web 5/5, multi 3/3, light 9/10 | short 1/4 (dumps the system prompt for bare nouns), sanity 2/3, weather 4/5 (one fabricated forecast) |
 | `hermes3:8b` | 74.5 % (38/51) | 1.5 s | 2.1 s | **1** | sensor 6/6, multi 3/3, web 5/5 | weather 2/5 (asks for location), light 6/10, sanity 1/3 |
 
-**Reference setup:** RTX 3060 Ti (8 GB), Ollama 0.20+, num_ctx 16384, temperature 0.2, top_p 0.4, num_predict 512. All three models Q4_K_M. Plugin v0.5.46.
+**Reference setup:** RTX 3060 Ti (8 GB), Ollama 0.20+, num_ctx 16384, temperature 0.2, top_p 0.4, num_predict 512. All four models Q4_K_M. Plugin v0.5.47.
 
 Notes on the rubric:
 - "Pass" = HTTP 200 + non-empty reply + matches one of the per-prompt positive regexes + matches none of the per-prompt negative regexes (e.g. *"don't have"*, *"cannot"*).
-- The single Hermes Texas-class hit was the prompt `"events"` in voice-short mode, which returned a fabricated US sports recap.
-
-### Failure analysis (qwen models)
-
-Failures classified by root cause: **real model fault**, **environment** (entity unhealthy / unexposed), or **rubric** (model behaved correctly but the regex didn't agree).
-
-**`qwen3:8b` — 7 flagged, ~2 real faults (≈96 % adjusted):**
-
-| Prompt | Class | Detail |
-|--------|-------|--------|
-| `is the kitchen light on?` | **real** | Gave up: *"couldn't produce an answer for that"* |
-| `what's the indoor temperature?` | env | Underlying sensor returned `unknown` |
-| `kitchen humidity?` | rubric | Correctly said no humidity sensor; tripped *"don't have"* regex |
-| `is the front door locked?` | env/rubric | No lock entity exposed; correct refusal |
-| `turn off all lights and lock the doors` | env | Turned lights off; correctly said no lock domain |
-| `temperature` (voice-short) | env | Same unhealthy temp sensor as `clim-5` |
-| `danke` | rubric | Valid reply *"Du bist willkommen!"* — regex only allowed *bitte/gerne* |
-
-**`qwen2.5:7b` — 6 flagged, ~4 real faults (≈92 % adjusted):**
-
-| Prompt | Class | Detail |
-|--------|-------|--------|
-| `turn on the living room light` | **real** | Couldn't resolve `living room` to area `Wohnzimmer` (qwen3 handled the same install fine) |
-| `lichter im wohnzimmer aus` | **real** | Fabricated *"network error"* instead of issuing the off command |
-| `set the bedroom to 21 degrees` | **real** | Couldn't find the Tado thermostat (qwen3 found it) |
-| `kitchen humidity?` | **real** | Leaked tool-call syntax as text: `CallCheck(list_entities(domain="sensor", area="kitchen"))` |
-| `weather` (voice-short) | **real** | Same leak: *"Calling list_entities(domain='weather')..."* spoken instead of invoked |
-| `events` (voice-short) | env | Misread as a sensor query |
-
-**Implication for voice TTS:** Qwen2.5 7B's two tool-syntax leaks would be read aloud verbatim through the text-to-speech pipeline. That's an audible regression Qwen3 8B does not exhibit. If voice is the primary surface, **prefer Qwen3 8B even though the raw pass count is one lower.**
+- The Hermes Texas-class hit was the prompt `"events"` in voice-short mode, which returned a fabricated US sports recap. The Mistral hit was a fabricated German forecast for `wie ist das wetter?` — answered from the model's prior, no tool call.
 
 **Recommended configuration**
 
@@ -208,7 +180,6 @@ Add any MCP-compatible tool server in the integration settings. Supports:
 - **Slow first response** — Ollama is loading the model into VRAM. Use `OLLAMA_KEEP_ALIVE=-1` to keep it warm.
 - **OOM / CPU fallback in Ollama** — lower the **Context Window** in Advanced settings.
 - **Empty replies from reasoning models (qwen3, deepseek-r1)** — the plugin already sends `think: false`; if you still see empty content, upgrade Ollama to 0.20 or newer (earlier versions don't honour the flag).
-- **"Any lights on?" answers about a single light** — fixed in v0.5.38. Upgrade if you're on an older release.
 
 ## Changelog
 
