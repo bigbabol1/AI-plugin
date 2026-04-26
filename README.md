@@ -19,18 +19,25 @@ The most critical factor for reliable entity control is **tool calling quality**
 
 ### 8 GB VRAM (e.g. RTX 3060 Ti, RTX 3070)
 
-| Model | Ollama tag | Weights | Tool calling | Notes |
-|-------|-----------|---------|-------------|-------|
-| **Qwen3 8B** | `qwen3:8b` | ~5.2 GB | ⭐⭐⭐⭐⭐ | **Recommended.** 92% reliability in our 25-query benchmark with the plugin's native function-calling path. Emits reasoning into a separate `thinking` field — the plugin passes `think: false` automatically so `content` is populated. Supports up to 40 K context. |
-| Qwen2.5 7B | `qwen2.5:7b` | ~4.7 GB | ⭐⭐⭐⭐ | Solid fallback. No reasoning-mode quirks. |
-| Mistral 7B | `mistral:7b` | ~4.1 GB | ⭐⭐⭐⭐ | Lighter, decisive tool calls, leaves more headroom for context. |
-| Llama 3.1 8B | `llama3.1:8b` | ~4.8 GB | ⭐⭐⭐⭐ | Good balance; instruction-tuned variant preferred. |
+Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/process` in **voice mode** (`device_id` set → `SYSTEM_PROMPT_VOICE` + `strip_urls=True`). 51 prompts covering light/climate/sensor/media/weather/web/memory/multi-step/multilingual. Plugin v0.5.46, num_ctx 16384, temperature 0.2, on Ollama at `192.168.0.66:11435` (RTX 3060 Ti, 8 GB).
+
+| Model | Ollama tag | Weights | Pass rate | Avg latency | Texas-class hallucinations | Notes |
+|-------|-----------|---------|-----------|-------------|----------------------------|-------|
+| **Qwen3 8B** | `qwen3:8b` | ~5.2 GB | **86.3 %** (44/51) | **1.8 s** (median 1.4 s, max 4.9 s) | 0 | **Top recommendation.** Most consistent latency, perfect on weather (5/5) and web (5/5), strong on lights (9/10). Emits CoT into `thinking`; plugin passes `think: false` so `content` is populated. The HA-Assist `homeassistant:latest` alias points here. |
+| **Qwen2.5 7B** | `qwen2.5:7b` | ~4.7 GB | **88.2 %** (45/51) | 2.6 s (median 0.7 s, max **37.8 s**) | 0 | Tied at the top by score, slightly higher tail latency on multi-step tool loops. No reasoning-mode quirks. Pick this if you want lower VRAM headroom or non-think behaviour. |
+| Hermes 3 8B | `hermes3:8b` | ~4.7 GB | 74.5 % (38/51) | 2.1 s (median 1.5 s, max 23.5 s) | **1** (returned a Super Bowl LA Rams story to "events") | Llama-3.1 base, tool-calling FT. Weak on weather (2/5 — refuses or asks for location), weak on light entity resolution (6/10). Not recommended for HA. |
+| Mistral 7B | `mistral:7b` | ~4.1 GB | not in this round | — | — | Native FC, no system-prompt scaffolding needed. Was strong in earlier 25-prompt runs. |
+| Llama 3.1 8B | `llama3.1:8b` | ~4.8 GB | not in this round | — | — | Good general baseline; bench separately for your install. |
+
+**Headline:** Qwen3 8B and Qwen2.5 7B are within one prompt of each other on the raw rubric, but **once you discount environment misses and rubric edge-cases the gap widens to ~96 % vs ~92 %** — see *Failure analysis* below. Qwen3 8B is the safer pick for voice TTS because Qwen2.5 7B occasionally leaks raw tool-call syntax (`Calling list_entities(domain='weather')...`) into the reply on short prompts; Qwen3 never did this.
 
 > **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB.
-> A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache is roughly 0.2 GB per 1 K tokens.
-> Setting **Context Window = 8192** is the practical sweet spot — leaves margin without wasting VRAM.
-> The integration default is **16384** (sized for 12 GB+ cards) — lower it to 8192 in Advanced settings on 8 GB hardware.
-> Avoid values above 16 000 on an 8 GB card with 7–8B models.
+> A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
+> The plugin's first-turn header (system prompt + HA tool schemas + home location + user facts) is ~4.2 K tokens in default mode and ~3.3 K in voice mode — leaves the rest of the window for conversation + tool results.
+>
+> **Minimum recommended context: 16384.** Multi-step tool loops (discovery → state → confirm) routinely emit 6–10 K of intermediate tokens, and 8192 starves them — most of the false-negatives in the 8B sweep that *did* call the right tool then ran out of context to summarise the result.
+> 8192 only works for chat-only setups with no entity discovery. The integration default is **16384** for this reason.
+> Avoid values above ~24 000 on an 8 GB card with 7–8B models.
 
 ### 24 GB VRAM (e.g. RTX 3090, RTX 4090)
 
@@ -77,25 +84,60 @@ Reasoning-capable Ollama models emit chain-of-thought into a separate `thinking`
 
 ## Reliability Benchmark
 
-A 25-prompt matrix covering discovery, cross-domain state queries, weather, web search, memory, edge cases, and multilingual input (German + English). Measured on Home Assistant Core 2026.4.x via `/api/conversation/process`.
+51-prompt matrix covering light control, climate, sensors/status, media, weather (local + named-place), web search & nearby-events, memory, multi-step regression, and multilingual input (English + German). Measured on Home Assistant Core 2026.4.x against plugin v0.5.46 via `/api/conversation/process`, **voice mode** (`device_id` set so `SYSTEM_PROMPT_VOICE` + `strip_urls=True` are active — the most common Assist usage path).
 
-**Reference setup — qwen3:8b on RTX 3060 Ti (8 GB), plugin v0.5.38:**
+| Model | Pass rate | Median latency | Avg latency | Suspect-place hits | Best categories | Worst categories |
+|-------|-----------|----------------|-------------|--------------------|-----------------|------------------|
+| `qwen3:8b` (alias `homeassistant:latest`) | **86.3 %** (44/51) | **1.4 s** | 1.8 s | 0 | weather 5/5, web 5/5, light 9/10, media 4/4, memory 4/4 | sanity 2/3, multi 2/3 |
+| `qwen2.5:7b` | **88.2 %** (45/51) | 0.7 s | 2.6 s | 0 | sensor 6/6, multi 3/3, sanity 3/3, weather 5/5, web 5/5 | climate 5/7 (couldn't resolve thermostat target), short 2/4 |
+| `hermes3:8b` | 74.5 % (38/51) | 1.5 s | 2.1 s | **1** | sensor 6/6, multi 3/3, web 5/5 | weather 2/5 (asks for location), light 6/10, sanity 1/3 |
 
-- **23/25 passes (92%)** including 7/7 cross-domain state queries (`any lights on?`, `welche Lichter sind an?`, `which switches are off?`)
-- Discovery, weather, web, memory, pronoun/context resolution all pass
-- Two remaining misses: one single-entity sensor lookup where the model skipped `search_entities`, and one stale web-search result from the backend (not the plugin)
+**Reference setup:** RTX 3060 Ti (8 GB), Ollama 0.20+, num_ctx 16384, temperature 0.2, top_p 0.4, num_predict 512. All three models Q4_K_M. Plugin v0.5.46.
+
+Notes on the rubric:
+- "Pass" = HTTP 200 + non-empty reply + matches one of the per-prompt positive regexes + matches none of the per-prompt negative regexes (e.g. *"don't have"*, *"cannot"*).
+- The single Hermes Texas-class hit was the prompt `"events"` in voice-short mode, which returned a fabricated US sports recap.
+
+### Failure analysis (qwen models)
+
+Failures classified by root cause: **real model fault**, **environment** (entity unhealthy / unexposed), or **rubric** (model behaved correctly but the regex didn't agree).
+
+**`qwen3:8b` — 7 flagged, ~2 real faults (≈96 % adjusted):**
+
+| Prompt | Class | Detail |
+|--------|-------|--------|
+| `is the kitchen light on?` | **real** | Gave up: *"couldn't produce an answer for that"* |
+| `what's the indoor temperature?` | env | Underlying sensor returned `unknown` |
+| `kitchen humidity?` | rubric | Correctly said no humidity sensor; tripped *"don't have"* regex |
+| `is the front door locked?` | env/rubric | No lock entity exposed; correct refusal |
+| `turn off all lights and lock the doors` | env | Turned lights off; correctly said no lock domain |
+| `temperature` (voice-short) | env | Same unhealthy temp sensor as `clim-5` |
+| `danke` | rubric | Valid reply *"Du bist willkommen!"* — regex only allowed *bitte/gerne* |
+
+**`qwen2.5:7b` — 6 flagged, ~4 real faults (≈92 % adjusted):**
+
+| Prompt | Class | Detail |
+|--------|-------|--------|
+| `turn on the living room light` | **real** | Couldn't resolve `living room` to area `Wohnzimmer` (qwen3 handled the same install fine) |
+| `lichter im wohnzimmer aus` | **real** | Fabricated *"network error"* instead of issuing the off command |
+| `set the bedroom to 21 degrees` | **real** | Couldn't find the Tado thermostat (qwen3 found it) |
+| `kitchen humidity?` | **real** | Leaked tool-call syntax as text: `CallCheck(list_entities(domain="sensor", area="kitchen"))` |
+| `weather` (voice-short) | **real** | Same leak: *"Calling list_entities(domain='weather')..."* spoken instead of invoked |
+| `events` (voice-short) | env | Misread as a sensor query |
+
+**Implication for voice TTS:** Qwen2.5 7B's two tool-syntax leaks would be read aloud verbatim through the text-to-speech pipeline. That's an audible regression Qwen3 8B does not exhibit. If voice is the primary surface, **prefer Qwen3 8B even though the raw pass count is one lower.**
 
 **Recommended configuration**
 
 | Setting | Value |
 |---------|-------|
-| Model | `qwen3:8b` (alias to taste) |
+| Model | `qwen3:8b` (or `qwen2.5:7b` as fallback) |
 | Temperature | 0.2 |
 | top_p | 0.4 |
-| Context Window | 16384 (drop to 8192 if only 8 GB VRAM after other workloads) |
-| Max Tokens | 512 |
-| Voice Mode | on (compact system prompt) |
-| Web Search | Tavily or Brave |
+| Context Window | **16384** (minimum — multi-step tool loops need the headroom; do not drop to 8192 unless you've disabled entity discovery) |
+| Max Tokens (`num_predict`) | 512 |
+| Voice Mode | on (compact system prompt — saves ~930 input tokens per turn) |
+| Web Search | Tavily or Brave (DuckDuckGo works but tie-breaks ambiguous toponyms toward US locales — v0.5.46 mitigates by injecting `city, country`) |
 
 No custom Modelfile parameters are required — the plugin manages `think`, `num_ctx`, `temperature`, `top_p`, and `num_predict` per request on Ollama's native API.
 
