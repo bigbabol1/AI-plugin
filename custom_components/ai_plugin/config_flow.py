@@ -46,6 +46,8 @@ from .const import (
     CONF_BRAVE_API_KEY,
     CONF_CONTEXT_WINDOW,
     CONF_CONTINUE_CONVERSATION,
+    CONF_LOCATION_BIAS,
+    CONF_LOCATION_ENTITY,
     CONF_MAX_RESULTS,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
@@ -66,6 +68,7 @@ from .const import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_CONTINUE_CONVERSATION,
+    DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_RESULTS,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_RESPONSE_TIMEOUT,
@@ -260,6 +263,18 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
                     max=8192,
                     step=256,
                     mode=selector.NumberSelectorMode.SLIDER,
+                )
+            ),
+            vol.Optional(
+                CONF_LOCATION_BIAS,
+                default=current.get(CONF_LOCATION_BIAS, DEFAULT_LOCATION_BIAS),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_LOCATION_ENTITY,
+                description={"suggested_value": current.get(CONF_LOCATION_ENTITY)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["zone", "device_tracker", "person"],
                 )
             ),
         }

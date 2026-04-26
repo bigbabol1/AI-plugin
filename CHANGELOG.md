@@ -4,6 +4,16 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.5.45] - 2026-04-26
+
+### Fixed
+
+- **`web_search` no longer hallucinates the user's location** (`tools/web_search.py`, `tools/_locality_tokens.py`, `tools/_geocode.py`, `orchestrator.py`, `const.py`, `config_flow.py`, `strings.json`, `translations/en.json`). Asking *"any events nearby?"* could return Texas results because the LLM either wrote a free-form query (`events near me`) that the search backend resolved geographically, or it picked a city out of thin air after the v0.5.44 prompt stripped the `friendly_label` field. Three coordinated changes close the gap globally — the plugin runs on installs across the world, some with location entities exposed and some without, so every layer fails open:
+  - **Schema-level intent flag.** `web_search` gained a `near_user: bool` parameter steered by both system prompts. The LLM now signals locality intent declaratively instead of hand-crafting a place name.
+  - **Two-signal injection gate.** `_maybe_inject_location` appends ` near {place}` to the query only when (intent: `near_user=True` *or* multi-lingual locality regex match) **and** (safety: a place is resolved *and* the query does not already pin itself to a place via preposition + proper noun). The regex fallback covers EN, DE, ES, FR, IT, NL, PT, PL, SV, DA, NO, FI, CS, TR, JA, ZH for installs where the LLM omits the flag. Idempotent — never appends a place that's already in the query.
+  - **Heterogeneous-install location resolver.** New `LocationProvider` walks a source chain (configured location entity → `hass.config` lat/lon → nothing) and reverse-geocodes via OpenStreetMap Nominatim with disk cache + 1.1 s rate gate. When no signal resolves, the location block is omitted from the prompt entirely and `near_user` becomes a no-op rather than an excuse to invent a city. New `_geocode` module is fail-silent on network/timeout/non-200; new `_locality_tokens` module compiles per-language regex with CJK word-boundary handling.
+  - **Privacy opt-out.** New `location_bias` (default on) and `location_entity` (optional) options under config/options Advanced. Disabling `location_bias` makes the resolver return `{}`, which deterministically prevents both the prompt block and the query injection — a single switch for users who don't want their coords leaving HA.
+
 ## [0.5.44] - 2026-04-25
 
 ### Fixed

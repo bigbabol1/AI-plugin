@@ -64,9 +64,15 @@
           "context_window": "Context window (tokens)",
           "summarization_enabled": "Auto-summarize long conversations",
           "voice_mode": "Use compact prompts for voice",
+          "continue_conversation": "Listen for follow-up after voice replies",
           "xml_fallback": "XML tool calling (experimental)",
           "max_tool_iterations": "Tool call limit",
           "response_timeout": "Timeout (seconds)",
+          "temperature": "Temperature",
+          "top_p": "Top P",
+          "max_tokens": "Max tokens (output)",
+          "location_bias": "Bias web search to your home area",
+          "location_entity": "Live location entity (optional)",
           "use_ha_mcp": "Connect to Home Assistant's built-in MCP server",
           "ha_mcp_token": "Long-lived access token"
         },
@@ -75,9 +81,15 @@
           "context_window": "Maximum context your model supports. Check your model's documentation.",
           "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
           "voice_mode": "Shorter responses optimized for text-to-speech. Enabled by default for voice assistant interactions.",
+          "continue_conversation": "After each spoken reply, the satellite reopens its microphone for a follow-up without needing the wake word. Listen duration is set on the satellite (silence/VAD timeout).",
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "response_timeout": "How long to wait for the AI before giving up.",
+          "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
+          "top_p": "Nucleus sampling threshold. Leave blank to use the model's default.",
+          "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit.",
+          "location_bias": "When the AI asks about local weather, nearby events, or restaurants here, the plugin scopes the web search to your home area instead of letting the model guess. Turn off to keep coordinates off the network.",
+          "location_entity": "Use this entity's coordinates as your live location (zone, device tracker, or person). Leave blank to use Home Assistant's home coordinates.",
           "use_ha_mcp": "Gives AI Plugin access to your sensors, devices, and automations via HA's built-in MCP server.",
           "ha_mcp_token": "Create one in your HA profile → Long-lived access tokens (scroll to the bottom of the page)."
         }
@@ -158,18 +170,30 @@
           "context_window": "Context window (tokens)",
           "summarization_enabled": "Auto-summarize long conversations",
           "voice_mode": "Use compact prompts for voice",
+          "continue_conversation": "Listen for follow-up after voice replies",
           "xml_fallback": "XML tool calling (experimental)",
           "max_tool_iterations": "Tool call limit",
-          "response_timeout": "Timeout (seconds)"
+          "response_timeout": "Timeout (seconds)",
+          "temperature": "Temperature",
+          "top_p": "Top P",
+          "max_tokens": "Max tokens (output)",
+          "location_bias": "Bias web search to your home area",
+          "location_entity": "Live location entity (optional)"
         },
         "data_description": {
           "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
           "context_window": "Maximum context your model supports. Check your model's documentation.",
           "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
           "voice_mode": "Shorter responses optimized for text-to-speech.",
+          "continue_conversation": "After each spoken reply, the satellite reopens its microphone for a follow-up without needing the wake word. Listen duration is set on the satellite (silence/VAD timeout).",
           "xml_fallback": "For models that don't support native tool calling. May produce unreliable results.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
-          "response_timeout": "How long to wait for the AI before giving up."
+          "response_timeout": "How long to wait for the AI before giving up.",
+          "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
+          "top_p": "Nucleus sampling threshold. Leave blank to use the model's default.",
+          "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit.",
+          "location_bias": "When the AI asks about local weather, nearby events, or restaurants here, the plugin scopes the web search to your home area instead of letting the model guess. Turn off to keep coordinates off the network.",
+          "location_entity": "Use this entity's coordinates as your live location (zone, device tracker, or person). Leave blank to use Home Assistant's home coordinates."
         }
       },
       "mcp_servers": {
@@ -180,6 +204,16 @@
         },
         "data_description": {
           "mcp_action": "Changes are only saved when you choose Save and close."
+        }
+      },
+      "mcp_add_ha": {
+        "title": "Add Home Assistant MCP Server",
+        "description": "Detected HA URL: {ha_mcp_url}\n\nCreate a Long-lived access token in your HA profile (Settings → scroll to the bottom of your profile page).",
+        "data": {
+          "ha_mcp_token": "Long-lived access token"
+        },
+        "data_description": {
+          "ha_mcp_token": "Required. Paste the token from your HA profile here."
         }
       },
       "mcp_add_preset": {
@@ -197,16 +231,6 @@
         },
         "data_description": {
           "preset_value": "Must be an absolute path accessible to Home Assistant."
-        }
-      },
-      "mcp_add_ha": {
-        "title": "Add Home Assistant MCP Server",
-        "description": "Detected HA URL: {ha_mcp_url}\n\nCreate a Long-lived access token in your HA profile (Settings → scroll to the bottom of your profile page).",
-        "data": {
-          "ha_mcp_token": "Long-lived access token"
-        },
-        "data_description": {
-          "ha_mcp_token": "Required. Paste the token from your HA profile here."
         }
       },
       "mcp_add_http": {

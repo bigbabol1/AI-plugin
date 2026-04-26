@@ -20,7 +20,10 @@ from custom_components.ai_plugin.const import (
 )
 from custom_components.ai_plugin.tools.web_search import (
     WebSearchTool,
+    _best_place_label,
     _format_results,
+    _has_place_token,
+    _maybe_inject_location,
     _parse_ddg_lite,
     _strip_url_lines,
 )
@@ -316,21 +319,32 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
     entry.entry_id = "e1"
     entry.options = {"web_search_enabled": True}
 
+    mock_location = MagicMock()
+    mock_location.async_resolve = AsyncMock(return_value={})
+
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = mock_mcp
     orch._memory = None
+    orch._ha_local = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = False
     orch._web_search = mock_web
     orch._provider = mock_provider
+    orch._location = mock_location
 
     reply = await orch.async_process("What's new in HA?", "c", "en")
 
     assert reply == "Here are the results."
-    mock_web.async_search.assert_awaited_once_with("HA news", strip_urls=False)
+    mock_web.async_search.assert_awaited_once_with(
+        "HA news",
+        strip_urls=False,
+        near_user=False,
+        location=None,
+        language=None,
+    )
     mock_mcp.call_tool.assert_not_awaited()
 
 
@@ -362,16 +376,21 @@ async def test_orchestrator_xml_fallback_parses_tool_call() -> None:
     entry.entry_id = "e2"
     entry.options = {}
 
+    mock_location = MagicMock()
+    mock_location.async_resolve = AsyncMock(return_value={})
+
     orch = Orchestrator.__new__(Orchestrator)
     orch._entry = entry
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
     orch._mcp = None
     orch._memory = None
+    orch._ha_local = None
     orch._max_tool_iterations = 5
     orch._xml_fallback = True
     orch._web_search = mock_web
     orch._provider = mock_provider
+    orch._location = mock_location
 
     reply, _tool_ctx = await orch._xml_tool_loop(
         [{"role": "system", "content": "sys"}, {"role": "user", "content": "news?"}],
@@ -379,7 +398,13 @@ async def test_orchestrator_xml_fallback_parses_tool_call() -> None:
     )
 
     assert reply == "Final answer."
-    mock_web.async_search.assert_awaited_once_with("news", strip_urls=False)
+    mock_web.async_search.assert_awaited_once_with(
+        "news",
+        strip_urls=False,
+        near_user=False,
+        location=None,
+        language=None,
+    )
 
 
 
@@ -411,4 +436,366 @@ async def test_async_search_strip_urls_forwarded_to_output(monkeypatch):
     assert "https://" not in out
     assert "T" in out
     assert "snip" in out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Location-bias helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_best_place_label_picks_city_first() -> None:
+    loc = {"city": "Berlin", "region": "BE", "country_name": "Germany"}
+    assert _best_place_label(loc) == "Berlin"
+
+
+def test_best_place_label_falls_back_to_region_then_country() -> None:
+    assert _best_place_label({"region": "Bavaria"}) == "Bavaria"
+    assert _best_place_label({"country_name": "France"}) == "France"
+
+
+def test_best_place_label_falls_back_to_coords() -> None:
+    assert _best_place_label({"lat": 52.5, "lon": 13.4}) == "52.5000,13.4000"
+
+
+def test_best_place_label_returns_none_for_empty() -> None:
+    assert _best_place_label(None) is None
+    assert _best_place_label({}) is None
+    assert _best_place_label({"city": "  "}) is None
+
+
+def test_has_place_token_detects_in_munich() -> None:
+    assert _has_place_token("events in Munich tonight") is True
+    assert _has_place_token("weather at New York airport") is True
+    assert _has_place_token("near Saint-Étienne") is True
+
+
+def test_has_place_token_does_not_detect_lowercase_token() -> None:
+    assert _has_place_token("events in some bar") is False
+
+
+def test_has_place_token_ignores_plain_query() -> None:
+    assert _has_place_token("price of bitcoin") is False
+    assert _has_place_token("") is False
+
+
+def test_maybe_inject_location_appends_when_near_user_true() -> None:
+    out = _maybe_inject_location(
+        query="events tonight",
+        near_user=True,
+        location={"city": "Berlin"},
+        language="en",
+    )
+    assert out == "events tonight near Berlin"
+
+
+def test_maybe_inject_location_appends_via_locality_regex() -> None:
+    """near_user=False but query contains a locality token (DE)."""
+    out = _maybe_inject_location(
+        query="veranstaltungen in meiner nähe",
+        near_user=False,
+        location={"city": "Berlin"},
+        language="de",
+    )
+    assert out.endswith("near Berlin")
+
+
+def test_maybe_inject_location_skips_when_query_has_place() -> None:
+    out = _maybe_inject_location(
+        query="events in Munich tonight",
+        near_user=True,
+        location={"city": "Berlin"},
+        language="en",
+    )
+    assert out == "events in Munich tonight"
+
+
+def test_maybe_inject_location_skips_without_intent() -> None:
+    out = _maybe_inject_location(
+        query="price of bitcoin",
+        near_user=False,
+        location={"city": "Berlin"},
+        language="en",
+    )
+    assert out == "price of bitcoin"
+
+
+def test_maybe_inject_location_skips_without_location() -> None:
+    out = _maybe_inject_location(
+        query="events near me",
+        near_user=True,
+        location=None,
+        language="en",
+    )
+    assert out == "events near me"
+
+
+def test_maybe_inject_location_idempotent() -> None:
+    """Don't append the same place twice."""
+    out = _maybe_inject_location(
+        query="berlin events near me",
+        near_user=True,
+        location={"city": "Berlin"},
+        language="en",
+    )
+    assert out == "berlin events near me"
+
+
+def test_maybe_inject_location_japanese() -> None:
+    out = _maybe_inject_location(
+        query="近くのレストラン",
+        near_user=False,
+        location={"city": "東京"},
+        language="ja",
+    )
+    assert out.endswith("near 東京")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WebSearchTool: near_user injection through async_search
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def test_async_search_injects_location_when_near_user_true(monkeypatch) -> None:
+    tool = _make_tool()
+    captured: list[str] = []
+
+    async def fake(query: str) -> str:
+        captured.append(query)
+        return "ok"
+
+    monkeypatch.setattr(tool, "_search_duckduckgo", fake)
+    await tool.async_search(
+        "events tonight",
+        near_user=True,
+        location={"city": "Berlin"},
+        language="en",
+    )
+    assert captured == ["events tonight near Berlin"]
+
+
+async def test_async_search_no_inject_when_location_none(monkeypatch) -> None:
+    tool = _make_tool()
+    captured: list[str] = []
+
+    async def fake(query: str) -> str:
+        captured.append(query)
+        return "ok"
+
+    monkeypatch.setattr(tool, "_search_duckduckgo", fake)
+    await tool.async_search(
+        "events near me",
+        near_user=True,
+        location=None,
+        language="en",
+    )
+    assert captured == ["events near me"]
+
+
+async def test_async_search_voice_mode_strips_urls_and_injects(monkeypatch) -> None:
+    tool = _make_tool()
+    captured: list[str] = []
+
+    async def fake(query: str) -> str:
+        captured.append(query)
+        return _format_results("q", [
+            {"title": "T", "url": "https://a.example", "snippet": "s"},
+        ])
+
+    monkeypatch.setattr(tool, "_search_duckduckgo", fake)
+    out = await tool.async_search(
+        "events near me",
+        strip_urls=True,
+        near_user=True,
+        location={"city": "Berlin"},
+        language="en",
+    )
+    assert captured == ["events near me near Berlin"]
+    assert "https://" not in out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LocationProvider
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def test_location_provider_disabled_returns_empty() -> None:
+    from custom_components.ai_plugin.const import (
+        CONF_LOCATION_BIAS,
+    )
+    from custom_components.ai_plugin.orchestrator import LocationProvider
+
+    entry = MagicMock()
+    entry.options = {CONF_LOCATION_BIAS: False}
+    hass = MagicMock()
+    provider = LocationProvider(hass, entry)
+    assert await provider.async_resolve() == {}
+
+
+async def test_location_provider_entity_priority_over_config(monkeypatch) -> None:
+    from custom_components.ai_plugin.const import (
+        CONF_LOCATION_BIAS,
+        CONF_LOCATION_ENTITY,
+    )
+    from custom_components.ai_plugin.orchestrator import LocationProvider
+
+    entry = MagicMock()
+    entry.options = {
+        CONF_LOCATION_BIAS: True,
+        CONF_LOCATION_ENTITY: "person.me",
+    }
+    state = MagicMock()
+    state.attributes = {"latitude": 48.137, "longitude": 11.575}
+
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=state)
+    hass.config.country = "DE"
+    hass.config.time_zone = "Europe/Berlin"
+    hass.config.language = "de"
+    hass.config.latitude = 52.52
+    hass.config.longitude = 13.405
+    hass.config.config_dir = "/tmp"
+
+    async def fake_geo(**kwargs):
+        # Verify the entity coords win, not config.
+        assert kwargs["lat"] == 48.137
+        assert kwargs["lon"] == 11.575
+        from custom_components.ai_plugin.tools._geocode import GeocodeResult
+        return GeocodeResult(
+            city="Munich",
+            region="Bavaria",
+            country_name="Germany",
+            country_iso="DE",
+        )
+
+    monkeypatch.setattr(
+        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        fake_geo,
+    )
+
+    provider = LocationProvider(hass, entry)
+    out = await provider.async_resolve()
+    assert out["source"] == "entity"
+    assert out["city"] == "Munich"
+    assert out["lat"] == 48.137
+    assert out["country_iso"] == "DE"
+    assert out["language"] == "de"
+    assert out["timezone"] == "Europe/Berlin"
+
+
+async def test_location_provider_falls_back_to_config(monkeypatch) -> None:
+    from custom_components.ai_plugin.const import CONF_LOCATION_BIAS
+    from custom_components.ai_plugin.orchestrator import LocationProvider
+
+    entry = MagicMock()
+    entry.options = {CONF_LOCATION_BIAS: True}
+
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=None)
+    hass.config.country = "DE"
+    hass.config.time_zone = "Europe/Berlin"
+    hass.config.language = "de"
+    hass.config.latitude = 52.52
+    hass.config.longitude = 13.405
+    hass.config.config_dir = "/tmp"
+
+    async def fake_geo(**kwargs):
+        from custom_components.ai_plugin.tools._geocode import GeocodeResult
+        return GeocodeResult("Berlin", "Berlin", "Germany", "DE")
+
+    monkeypatch.setattr(
+        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        fake_geo,
+    )
+
+    provider = LocationProvider(hass, entry)
+    out = await provider.async_resolve()
+    assert out["source"] == "config"
+    assert out["city"] == "Berlin"
+
+
+async def test_location_provider_geocode_failure_keeps_country(monkeypatch) -> None:
+    from custom_components.ai_plugin.const import CONF_LOCATION_BIAS
+    from custom_components.ai_plugin.orchestrator import LocationProvider
+
+    entry = MagicMock()
+    entry.options = {CONF_LOCATION_BIAS: True}
+
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=None)
+    hass.config.country = "DE"
+    hass.config.time_zone = "Europe/Berlin"
+    hass.config.language = "de"
+    hass.config.latitude = 52.52
+    hass.config.longitude = 13.405
+    hass.config.config_dir = "/tmp"
+
+    async def fake_geo(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        fake_geo,
+    )
+
+    provider = LocationProvider(hass, entry)
+    out = await provider.async_resolve()
+    assert out["country_iso"] == "DE"
+    assert "city" not in out
+
+
+async def test_location_provider_no_signal_returns_empty(monkeypatch) -> None:
+    from custom_components.ai_plugin.const import CONF_LOCATION_BIAS
+    from custom_components.ai_plugin.orchestrator import LocationProvider
+
+    entry = MagicMock()
+    entry.options = {CONF_LOCATION_BIAS: True}
+
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=None)
+    hass.config.country = ""
+    hass.config.time_zone = ""
+    hass.config.language = ""
+    hass.config.latitude = None
+    hass.config.longitude = None
+    hass.config.config_dir = "/tmp"
+
+    provider = LocationProvider(hass, entry)
+    out = await provider.async_resolve()
+    assert out == {} or out.get("source") is None
+
+
+async def test_location_provider_caches_result(monkeypatch) -> None:
+    from custom_components.ai_plugin.const import CONF_LOCATION_BIAS
+    from custom_components.ai_plugin.orchestrator import LocationProvider
+
+    entry = MagicMock()
+    entry.options = {CONF_LOCATION_BIAS: True}
+
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=None)
+    hass.config.country = "DE"
+    hass.config.time_zone = "Europe/Berlin"
+    hass.config.language = "de"
+    hass.config.latitude = 52.52
+    hass.config.longitude = 13.405
+    hass.config.config_dir = "/tmp"
+
+    calls = 0
+
+    async def fake_geo(**kwargs):
+        nonlocal calls
+        calls += 1
+        from custom_components.ai_plugin.tools._geocode import GeocodeResult
+        return GeocodeResult("Berlin", None, "Germany", "DE")
+
+    monkeypatch.setattr(
+        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        fake_geo,
+    )
+
+    provider = LocationProvider(hass, entry)
+    a = await provider.async_resolve()
+    b = await provider.async_resolve()
+    assert a is b
+    assert calls == 1
 

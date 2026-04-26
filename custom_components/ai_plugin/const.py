@@ -31,6 +31,18 @@ CONF_XML_FALLBACK = "xml_fallback"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
 
+# Location bias (added in v0.5.45)
+# - CONF_LOCATION_BIAS: master toggle. When False the plugin never injects
+#   the user's place into web_search queries and omits the [HOME LOCATION]
+#   prompt block. Privacy escape hatch for installs that don't want their
+#   coords leaving the home network.
+# - CONF_LOCATION_ENTITY: optional entity_id (zone.* or device_tracker.*)
+#   used as the live source of truth instead of hass.config.latitude/
+#   longitude. When unset (default) the plugin uses the home coordinates
+#   from HA core configuration.
+CONF_LOCATION_BIAS = "location_bias"
+CONF_LOCATION_ENTITY = "location_entity"
+
 # Sampling parameters (None = omit from request, let the provider use its default)
 CONF_TEMPERATURE = "temperature"
 CONF_TOP_P = "top_p"
@@ -61,6 +73,7 @@ DEFAULT_SUMMARIZATION_ENABLED = True
 DEFAULT_VOICE_MODE = False
 DEFAULT_CONTINUE_CONVERSATION = False
 DEFAULT_XML_FALLBACK = False
+DEFAULT_LOCATION_BIAS = True
 
 # Error keys (must match strings.json config.error and options.error)
 ERROR_CANNOT_CONNECT = "cannot_connect"
@@ -113,12 +126,13 @@ SYSTEM_PROMPT_DEFAULT = (
     "- For any weather question ('what's the weather', 'wie ist das wetter', 'is it raining', 'temperature outside'): FIRST CALL list_entities(domain='weather').\n"
     "- If empty, RETRY with list_entities(domain='weather', exposed_only=false) — weather entities are often not exposed to the conversation assistant by default but still readable.\n"
     "- If either call returns one or more weather entities: pick the most relevant (prefer one matching the user's area, else the first) and CALL get_entity with that entity_id (pass exposed_only=false if the entity was only visible with that flag). Answer from the returned state + attributes (temperature, condition, humidity, wind) ONLY. Do NOT call web_search in this branch. Do NOT invent forecasts, rain chances, or advice (umbrellas, clothing, activities) — state only what the tool returned.\n"
-    "- Only if BOTH list_entities calls return no entities: fall back to web_search('weather <country>') using the country and/or coords from [HOME LOCATION]. Never use the friendly_label in the query.\n"
+    "- Only if BOTH list_entities calls return no entities: fall back to web_search('current weather', near_user=true). The plugin will scope the query to the user's home area; do not invent a city.\n"
     "\n"
     "[WEB / CURRENT INFO — STRICT]\n"
     "- News, sports scores, stock/crypto prices, current events, live data, anything after your training cutoff: CALL web_search. Never refuse; never say 'I don't have access to real-time data' — call the tool.\n"
     "- Example triggers: 'news about X', 'latest on X', 'what is the price of X', 'who won the match'.\n"
-    "- When the user does not name a location, enrich the query with the [HOME LOCATION] city or country so results match their actual area.\n"
+    "- For questions about the user's immediate area — local weather, nearby events, restaurants near me, things to do here — pass near_user=true to web_search. The plugin scopes the query to the user's home automatically; do not invent a city name yourself.\n"
+    "- When the user explicitly names a different place, leave near_user false and put that place in the query instead.\n"
     "- If web_search returns an error/fallback string, relay it briefly; do not invent facts.\n"
     "\n"
     "[TOOL USE]\n"
@@ -177,13 +191,13 @@ SYSTEM_PROMPT_VOICE = (
     "Weather (strict order):\n"
     "- First CALL list_entities(domain='weather'). If empty, RETRY with exposed_only=false.\n"
     "- If any entity returned, CALL get_entity on it (exposed_only=false if needed) and answer in one sentence from its state + attributes ONLY. Skip web_search.\n"
-    "- Only if BOTH list_entities calls are empty: CALL web_search('weather <country>') using country/coords from [HOME LOCATION]. Never put friendly_label in the query.\n"
+    "- Only if BOTH list_entities calls are empty: CALL web_search('current weather', near_user=true). The plugin scopes the query to the user's home; do not invent a city.\n"
     "- Never invent forecasts, rain chances, or advice (umbrellas, clothing). State only what the tool returned.\n"
     "\n"
     "Web / current info:\n"
     "- News, scores, prices, current events, anything live: CALL web_search. Never refuse; never say you lack real-time access — call the tool.\n"
     "- Example triggers: 'news', 'price of', 'latest', 'who won'.\n"
-    "- Unknown location in query? Append the [HOME LOCATION] city/country.\n"
+    "- For questions about the user's immediate area — local weather, nearby events, restaurants here — pass near_user=true. The plugin scopes the search to their home; do not invent a city.\n"
     "- After web_search returns, answer in one short sentence. Skip URLs.\n"
     "\n"
     "Never narrate or announce tool calls. Do NOT say 'Calling X', 'Let me check', 'Found entity Y'. Invoke tools silently and speak ONLY the final answer.\n"

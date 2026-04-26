@@ -40,6 +40,7 @@ from ..const import (
     DEFAULT_MAX_RESULTS,
     DEFAULT_WEB_SEARCH_BACKEND,
 )
+from ._locality_tokens import matches_locality
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +59,17 @@ TOOL_SCHEMA: dict[str, Any] = {
                 "query": {
                     "type": "string",
                     "description": "The search query to look up.",
-                }
+                },
+                "near_user": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true when the question is about the user's "
+                        "immediate vicinity — local weather, nearby events, "
+                        "restaurants around me, things to do here, etc. "
+                        "The plugin will scope the search to the user's home "
+                        "area automatically. Leave false for global topics."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -81,27 +92,51 @@ class WebSearchTool:
         self._tavily_key: str | None = options.get(CONF_TAVILY_API_KEY) or None
         self._max_results: int = int(options.get(CONF_MAX_RESULTS, DEFAULT_MAX_RESULTS))
 
-    async def async_search(self, query: str, strip_urls: bool = False) -> str:
+    async def async_search(
+        self,
+        query: str,
+        strip_urls: bool = False,
+        near_user: bool = False,
+        location: dict[str, Any] | None = None,
+        language: str | None = None,
+    ) -> str:
         """Run a web search and return a formatted result string.
 
         ``strip_urls`` omits URL lines from the formatted output. Set to
         ``True`` for voice/TTS callers so spoken responses don't include
-        raw web addresses. Never raises — returns a graceful error string
-        on backend failure.
+        raw web addresses.
+
+        ``near_user`` is the LLM-driven location-bias flag (added in the
+        tool schema). When true — or when the query contains a known
+        locality token (``language``-aware fallback) — and ``location``
+        is provided and the query does not already name a place, the
+        best resolved place label is appended to the query before it is
+        sent to the backend. This eliminates the "events nearby →
+        Texas" hallucination class without forcing every install to
+        configure a location.
+
+        Never raises — returns a graceful error string on backend
+        failure.
         """
+        scoped_query = _maybe_inject_location(
+            query=query,
+            near_user=near_user,
+            location=location,
+            language=language,
+        )
         _LOGGER.debug(
-            "WebSearchTool: backend=%s query=%r strip_urls=%s",
-            self._backend, query, strip_urls,
+            "WebSearchTool: backend=%s query=%r scoped=%r near_user=%s strip_urls=%s",
+            self._backend, query, scoped_query, near_user, strip_urls,
         )
         try:
             if self._backend == BACKEND_BRAVE:
-                result = await self._search_brave(query)
+                result = await self._search_brave(scoped_query)
             elif self._backend == BACKEND_SEARXNG:
-                result = await self._search_searxng(query)
+                result = await self._search_searxng(scoped_query)
             elif self._backend == BACKEND_TAVILY:
-                result = await self._search_tavily(query)
+                result = await self._search_tavily(scoped_query)
             else:
-                result = await self._search_duckduckgo(query)
+                result = await self._search_duckduckgo(scoped_query)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("WebSearchTool: search failed (%s): %s", self._backend, exc)
             return _FALLBACK_MSG
@@ -297,3 +332,86 @@ def _format_results(query: str, results: list[dict[str, str]]) -> str:
             lines.append(f"   {r['snippet']}")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+# ── Location-bias helpers ─────────────────────────────────────────────────────
+
+
+# A run of two or more capitalised letters that looks like a proper noun.
+# Anchored to a word boundary, lets through hyphenated names ("New York",
+# "Saint-Étienne"). Used as a heuristic to avoid double-locating queries
+# the user already pinned to a place ("events in Munich").
+_PLACE_TOKEN_RE = re.compile(
+    r"\b(?:in|at|near|around|a|à|en|im|nelle|na|w|i|v)\s+"
+    r"(?:[A-ZÄÖÜÅÆØÉÈÍÓÚÁÑ][\w'’\-]+(?:\s+[A-ZÄÖÜÅÆØÉÈÍÓÚÁÑ][\w'’\-]+)*)",
+    re.UNICODE,
+)
+
+
+def _has_place_token(query: str) -> bool:
+    """Return True when the query already pins itself to a named place.
+
+    Recognises preposition + Capitalised-Token sequences in several
+    languages (English in/at/near/around, German im, Spanish en, French
+    à/en, Italian a/in, Polish w, Czech v, Scandinavian i). Conservative
+    by design: false negatives (we add a redundant place to a query that
+    already had one) are merely noisy; false positives would mask the
+    Texas-class bug we are fixing.
+    """
+    if not query:
+        return False
+    return _PLACE_TOKEN_RE.search(query) is not None
+
+
+def _best_place_label(location: dict[str, Any] | None) -> str | None:
+    """Pick the most specific non-empty field from a resolved location.
+
+    Preference order: city > region > country_name > "lat,lon" coord
+    string. Returns ``None`` when nothing usable is available; callers
+    must treat ``None`` as "do not inject" rather than as a fallback.
+    """
+    if not location:
+        return None
+    for key in ("city", "region", "country_name"):
+        value = location.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    lat = location.get("lat")
+    lon = location.get("lon")
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        return f"{lat:.4f},{lon:.4f}"
+    return None
+
+
+def _maybe_inject_location(
+    query: str,
+    near_user: bool,
+    location: dict[str, Any] | None,
+    language: str | None,
+) -> str:
+    """Append the user's place to the query when locality intent is detected.
+
+    Two-signal gate matches v0.5.44 hallucination-defence pattern:
+
+    * Intent: ``near_user=True`` (LLM flag) OR locality regex match.
+    * Safety: a place is resolved AND the query does not already pin
+      itself to a place.
+
+    Either signal alone is not enough. When neither fires, the query is
+    returned unchanged so global queries ("price of bitcoin") stay
+    global.
+    """
+    if not query:
+        return query
+    intent = bool(near_user) or matches_locality(query, language)
+    if not intent:
+        return query
+    place = _best_place_label(location)
+    if not place:
+        return query
+    if _has_place_token(query):
+        return query
+    # Idempotent: never append twice if the place is already present.
+    if place.lower() in query.lower():
+        return query
+    return f"{query} near {place}"

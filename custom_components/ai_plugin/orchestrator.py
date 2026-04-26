@@ -35,6 +35,8 @@ from .const import (
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_CONTEXT_WINDOW,
+    CONF_LOCATION_BIAS,
+    CONF_LOCATION_ENTITY,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_MODEL,
@@ -48,6 +50,7 @@ from .const import (
     CONF_XML_FALLBACK,
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
@@ -63,6 +66,7 @@ from .shortcuts import try_shortcut
 from .tools.ha_local import HALocalToolRegistry
 from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
+from .tools._geocode import GeocodeResult, reverse_geocode
 
 if TYPE_CHECKING:
     from .providers.base import AbstractProvider
@@ -332,6 +336,136 @@ def _prune_ha_local_schemas(
     return pruned
 
 
+class LocationProvider:
+    """Resolve the user's home location across heterogeneous installs.
+
+    Source priority: configured live entity > hass.config home coords >
+    nothing. Reverse-geocoded once per coordinate pair via OSM Nominatim
+    (cached on disk so we never repeat lookups across HA restarts).
+
+    Designed to fail open: missing internet, missing country, missing
+    coords all degrade to the next available signal. When *no* signal
+    resolves, callers receive an empty payload — the plugin must then
+    skip location injection entirely rather than guess a city.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._hass = hass
+        self._entry = entry
+        self._cached: dict | None = None
+        self._lock = asyncio.Lock()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self._entry.options.get(CONF_LOCATION_BIAS, DEFAULT_LOCATION_BIAS))
+
+    def _read_entity_coords(self) -> tuple[float | None, float | None]:
+        """Return live coords from the configured location entity, if any."""
+        entity_id = self._entry.options.get(CONF_LOCATION_ENTITY)
+        if not entity_id or self._hass is None:
+            return (None, None)
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return (None, None)
+        attrs = state.attributes or {}
+        lat = attrs.get("latitude")
+        lon = attrs.get("longitude")
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            return (float(lat), float(lon))
+        return (None, None)
+
+    def _read_config_coords(self) -> tuple[float | None, float | None]:
+        if self._hass is None:
+            return (None, None)
+        cfg = self._hass.config
+        lat = getattr(cfg, "latitude", None)
+        lon = getattr(cfg, "longitude", None)
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            return (float(lat), float(lon))
+        return (None, None)
+
+    async def async_resolve(self) -> dict:
+        """Return a location dict — possibly empty, never None.
+
+        Result keys (any may be absent):
+          * ``city``, ``region``, ``country_name``, ``country_iso``
+          * ``lat``, ``lon`` (always pair, or both absent)
+          * ``timezone``
+          * ``language`` (BCP-47 from hass.config)
+          * ``source``: "entity" or "config" — None when nothing resolved.
+
+        Cached after first call; cache is invalidated on entry reload
+        because a new Orchestrator (and Provider) is built then.
+        """
+        if not self.enabled:
+            return {}
+        if self._cached is not None:
+            return self._cached
+
+        async with self._lock:
+            if self._cached is not None:
+                return self._cached
+
+            payload: dict = {}
+            cfg = self._hass.config if self._hass is not None else None
+
+            # Coordinates: entity first, then hass.config.
+            lat, lon = self._read_entity_coords()
+            source = "entity" if lat is not None and lon is not None else None
+            if lat is None or lon is None:
+                lat, lon = self._read_config_coords()
+                if lat is not None and lon is not None:
+                    source = "config"
+
+            if lat is not None and lon is not None:
+                payload["lat"] = lat
+                payload["lon"] = lon
+
+            # Country / timezone / language from hass.config — always
+            # available even when geocoding fails.
+            if cfg is not None:
+                country = str(getattr(cfg, "country", "") or "").strip()
+                if country:
+                    payload["country_iso"] = country.upper()
+                tz = str(getattr(cfg, "time_zone", "") or "").strip()
+                if tz:
+                    payload["timezone"] = tz
+                lang = str(getattr(cfg, "language", "") or "").strip()
+                if lang:
+                    payload["language"] = lang
+
+            # Reverse geocode if we have coords. Failure is silent.
+            if lat is not None and lon is not None and cfg is not None:
+                try:
+                    geo: GeocodeResult | None = await reverse_geocode(
+                        lat=lat,
+                        lon=lon,
+                        language=payload.get("language"),
+                        config_dir=cfg.config_dir,
+                    )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "AI Plugin: reverse_geocode raised unexpectedly",
+                        exc_info=True,
+                    )
+                    geo = None
+                if geo is not None:
+                    if geo.city:
+                        payload["city"] = geo.city
+                    if geo.region:
+                        payload["region"] = geo.region
+                    if geo.country_name:
+                        payload["country_name"] = geo.country_name
+                    if geo.country_iso and "country_iso" not in payload:
+                        payload["country_iso"] = geo.country_iso
+
+            if source is not None:
+                payload["source"] = source
+
+            self._cached = payload
+            return payload
+
+
 class Orchestrator:
     """Processes messages: history → system prompt → LLM → reply.
 
@@ -375,6 +509,12 @@ class Orchestrator:
         self._web_search: WebSearchTool | None = (
             WebSearchTool(opts) if opts.get(CONF_WEB_SEARCH_ENABLED, False) else None
         )
+
+        # Resolves the user's home (entity → hass.config → nothing) and
+        # reverse-geocodes coordinates to a city / region label. Lazy:
+        # the first await on async_resolve() does the work; subsequent
+        # calls return the cached payload.
+        self._location: LocationProvider = LocationProvider(hass, entry)
 
         # Per-conversation locks: serialise concurrent requests for the same
         # conversation_id to prevent interleaved history corruption.
@@ -423,7 +563,7 @@ class Orchestrator:
         LLMs that ignore the recall tool still see stored facts.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
-        location_block = self._build_location_block()
+        location_block = await self._build_location_block()
         facts_block = await self._build_user_facts_block(user_id)
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
         parts = [base, location_block, facts_block]
@@ -463,38 +603,53 @@ class Orchestrator:
             f"{numbered}"
         )
 
-    def _build_location_block(self) -> str:
-        """Render hass.config home location as a prompt block.
+    async def _build_location_block(self) -> str:
+        """Render the resolved home location as a prompt block.
 
-        Used by the model to scope web_search queries (weather, news,
-        local events) to the user's actual location instead of guessing.
+        The block is informational only — it does NOT instruct the model
+        to inject the city into queries; that is handled deterministically
+        in ``web_search.async_search`` based on the ``near_user`` flag and
+        a locality regex. The block tells the model where the user lives
+        so it can answer "where am I?" accurately.
+
+        Renders only fields that resolved. When nothing resolves (no
+        coords, no country, no entity, network offline) the block is
+        omitted entirely — better silence than fabricated geography.
         """
         try:
-            cfg = self._hass.config
-            parts: list[str] = []
-            country = str(getattr(cfg, "country", "") or "").strip()
-            tz = str(getattr(cfg, "time_zone", "") or "").strip()
-            lat = getattr(cfg, "latitude", None)
-            lon = getattr(cfg, "longitude", None)
-            if country:
-                parts.append(f"country={country}")
-            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-                parts.append(f"coords={lat:.4f},{lon:.4f}")
-            if tz:
-                parts.append(f"timezone={tz}")
-            if not parts:
-                return ""
-            joined = ", ".join(parts)
-            return (
-                "[HOME LOCATION]\n"
-                f"- {joined}\n"
-                "- For web_search queries use country and/or coords. "
-                "Never invent a city name; if the user asks where they are, "
-                "answer from country and coords only."
-            )
+            data = await self._location.async_resolve()
         except Exception:  # noqa: BLE001
-            _LOGGER.debug("AI Plugin: could not build location block", exc_info=True)
+            _LOGGER.debug("AI Plugin: location resolve failed", exc_info=True)
             return ""
+
+        if not data:
+            return ""
+
+        parts: list[str] = []
+        if data.get("city"):
+            parts.append(f"city={data['city']}")
+        if data.get("region"):
+            parts.append(f"region={data['region']}")
+        if data.get("country_name"):
+            parts.append(f"country={data['country_name']}")
+        elif data.get("country_iso"):
+            parts.append(f"country={data['country_iso']}")
+        if "lat" in data and "lon" in data and "city" not in data:
+            parts.append(f"coords={data['lat']:.4f},{data['lon']:.4f}")
+        if data.get("timezone"):
+            parts.append(f"timezone={data['timezone']}")
+
+        if not parts:
+            return ""
+
+        joined = ", ".join(parts)
+        return (
+            "[HOME LOCATION]\n"
+            f"- {joined}\n"
+            "- For questions about the user's immediate area, set "
+            "near_user=true on web_search. The plugin will scope the "
+            "query to this area; do not invent a city name."
+        )
 
     async def async_process(
         self,
@@ -923,7 +1078,19 @@ class Orchestrator:
             )
         if name == "web_search" and self._web_search is not None:
             query = arguments.get("query", "")
-            return await self._web_search.async_search(query, strip_urls=voice_mode)
+            near_user = bool(arguments.get("near_user", False))
+            try:
+                location = await self._location.async_resolve()
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: location resolve failed", exc_info=True)
+                location = {}
+            return await self._web_search.async_search(
+                query,
+                strip_urls=voice_mode,
+                near_user=near_user,
+                location=location or None,
+                language=(location or {}).get("language"),
+            )
         if self._mcp is not None:
             return await self._mcp.call_tool(name, arguments)
         return f"[Tool {name!r} unavailable — no handler configured]"
