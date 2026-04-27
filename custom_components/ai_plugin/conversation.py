@@ -17,11 +17,31 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import ulid as ulid_util
 
-from .const import CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION, DOMAIN
+from .const import (
+    CONF_CONTINUE_CONVERSATION,
+    CONVERSATION_CLOSE_PHRASES,
+    DEFAULT_CONTINUE_CONVERSATION,
+    DOMAIN,
+)
 from .exceptions import OrchestratorError
 from .orchestrator import Orchestrator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _match_close_phrase(text: str | None) -> str | None:
+    """Return the matched close phrase, or None.
+
+    Matches a phrase if it appears as a whitespace-bounded fragment in the
+    STT text. Avoids spurious matches like "stop" inside "stopwatch".
+    """
+    if not text:
+        return None
+    normalized = f" {text.strip().lower()} "
+    for phrase in CONVERSATION_CLOSE_PHRASES:
+        if f" {phrase} " in normalized:
+            return phrase
+    return None
 
 
 async def async_setup_entry(
@@ -91,6 +111,14 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         continue_conversation = self._entry.options.get(
             CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION
         )
+        if continue_conversation:
+            close_match = _match_close_phrase(user_input.text)
+            if close_match is not None:
+                _LOGGER.info(
+                    "AI Plugin: close phrase '%s' detected in %r — ending conversation",
+                    close_match, user_input.text[:80],
+                )
+                continue_conversation = False
         return ConversationResult(
             response=intent_response,
             conversation_id=conversation_id,

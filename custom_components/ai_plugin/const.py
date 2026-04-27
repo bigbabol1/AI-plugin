@@ -73,6 +73,46 @@ DEFAULT_VOICE_MODE = False
 DEFAULT_CONTINUE_CONVERSATION = False
 DEFAULT_LOCATION_BIAS = True
 
+# Phrases that force-end a conversation regardless of the
+# CONF_CONTINUE_CONVERSATION setting. Matched case-insensitively as
+# whitespace-bounded fragments inside the user's recognised STT text, so
+# "stop" matches "stop" but not "stopwatch".
+CONVERSATION_CLOSE_PHRASES: tuple[str, ...] = (
+    # English
+    "that's all",
+    "thats all",
+    "that is all",
+    "bye",
+    "goodbye",
+    "good bye",
+    "stop",
+    "nevermind",
+    "never mind",
+    "thanks jarvis",
+    "thank you jarvis",
+    "thank you, jarvis",
+    "we're done",
+    "we are done",
+    "i'm done",
+    "im done",
+    # German
+    "tschüss",
+    "tschuess",
+    "tschüs",
+    "auf wiedersehen",
+    "danke jarvis",
+    "danke, jarvis",
+    "danke dir",
+    "das war's",
+    "das wars",
+    "das war es",
+    "fertig",
+    "ende",
+    "beenden",
+    "schluss",
+    "stopp",
+)
+
 # Error keys (must match strings.json config.error and options.error)
 ERROR_CANNOT_CONNECT = "cannot_connect"
 ERROR_INVALID_API_KEY = "invalid_api_key"
