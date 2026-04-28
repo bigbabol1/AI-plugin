@@ -4,6 +4,13 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.6.3] - 2026-04-28
+
+### Added
+
+- **Weather forecast block in `get_entity` for `weather.*` entities** (`tools/ha_local.py`). After reading state + attributes, the tool now calls the `weather.get_forecasts` service (`type=daily`) and appends a `forecast (daily, next 5):` block listing date, condition, hi/lo and precipitation probability. Previously the model only saw current condition + temperature, so questions like "what is the weather going to be today?" or "will it rain tomorrow?" returned only the current state. The forecast comes from the integration HA already polls (DWD, Met.no, AccuWeather, OpenWeatherMap, …); no internet call is added. Entities that do not implement `get_forecasts` silently skip the block. `_get_entity` is now async to make the service call.
+- **Prompt guidance updated** (`const.py`). Default and voice system prompts now tell the model to use the forecast block for "today / tomorrow / this week / will it rain / umbrella" style questions, and drop the older "never invent forecasts" wording (no longer needed because the data is now in the tool result).
+
 ## [0.5.47] - 2026-04-26
 
 ### Fixed

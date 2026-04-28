@@ -315,7 +315,7 @@ class HALocalToolRegistry:
                     exposed_only=exposed_only,
                 )
             if name == "get_entity":
-                return self._get_entity(
+                return await self._get_entity(
                     _s(arguments.get("name_or_id")).strip(),
                     exposed_only=exposed_only,
                 )
@@ -416,7 +416,7 @@ class HALocalToolRegistry:
             header += f" state={state}"
         return _cap(lines, header=header + ":\n")
 
-    def _get_entity(self, name_or_id: str, exposed_only: bool = True) -> str:
+    async def _get_entity(self, name_or_id: str, exposed_only: bool = True) -> str:
         if not name_or_id:
             return "get_entity: empty name_or_id."
         hass = self._hass
@@ -499,7 +499,49 @@ class HALocalToolRegistry:
         if attrs:
             lines.append("attributes:")
             lines.extend(attrs)
+        if entity_id.startswith("weather."):
+            forecast_block = await self._fetch_weather_forecast(entity_id)
+            if forecast_block:
+                lines.append(forecast_block)
         return "\n".join(lines)
+
+    async def _fetch_weather_forecast(self, entity_id: str) -> str:
+        """Call weather.get_forecasts service and format daily forecast block.
+
+        Returns "" if entity does not support forecast service or call errors.
+        """
+        try:
+            resp = await self._hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": entity_id, "type": "daily"},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("weather.get_forecasts failed for %s: %s", entity_id, exc)
+            return ""
+        data = (resp or {}).get(entity_id) or {}
+        forecast = data.get("forecast") or []
+        if not forecast:
+            return ""
+        out = ["forecast (daily, next 5):"]
+        for item in forecast[:5]:
+            dt = item.get("datetime", "?")
+            date = dt.split("T")[0] if isinstance(dt, str) else "?"
+            cond = item.get("condition", "?")
+            parts = [f"  {date} {cond}"]
+            hi = item.get("temperature")
+            lo = item.get("templow")
+            precip = item.get("precipitation_probability")
+            if hi is not None:
+                parts.append(f"hi:{hi}°")
+            if lo is not None:
+                parts.append(f"lo:{lo}°")
+            if precip is not None:
+                parts.append(f"precip:{precip}%")
+            out.append(" ".join(parts))
+        return "\n".join(out)
 
     def _search_entities(
         self, query: str, limit: int = 10, exposed_only: bool = True
