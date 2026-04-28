@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from homeassistant.components import conversation
 from homeassistant.components.conversation import (
@@ -29,17 +30,26 @@ from .orchestrator import Orchestrator
 _LOGGER = logging.getLogger(__name__)
 
 
+# Collapse runs of non-word chars (punctuation, multiple spaces) into a single
+# space so phrase matching survives STT trailing periods, commas, and so on.
+# Unicode flag keeps umlauts (ü, ö, ä, ß) inside word characters.
+_WORD_BREAK_RE = re.compile(r"\W+", re.UNICODE)
+
+
 def _match_close_phrase(text: str | None) -> str | None:
     """Return the matched close phrase, or None.
 
-    Matches a phrase if it appears as a whitespace-bounded fragment in the
-    STT text. Avoids spurious matches like "stop" inside "stopwatch".
+    Matches a phrase if it appears as a word-bounded fragment in the STT
+    text. Punctuation is normalised to whitespace before matching so that
+    "Thanks Jarvis." and "thanks, Jarvis" both still match "thanks jarvis".
+    Avoids spurious matches like "stop" inside "stopwatch".
     """
     if not text:
         return None
-    normalized = f" {text.strip().lower()} "
+    normalized = f" {_WORD_BREAK_RE.sub(' ', text.lower()).strip()} "
     for phrase in CONVERSATION_CLOSE_PHRASES:
-        if f" {phrase} " in normalized:
+        norm_phrase = f" {_WORD_BREAK_RE.sub(' ', phrase.lower()).strip()} "
+        if norm_phrase in normalized:
             return phrase
     return None
 

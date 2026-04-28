@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.6.4] - 2026-04-28
+
+### Fixed
+
+- **Conversation close-phrases failed when followed by punctuation** (`conversation.py`). `_match_close_phrase` did a whitespace-bounded substring check (`" {phrase} " in normalized`), so STT outputs like `"Thanks Jarvis."` (trailing period) or `"thanks, Jarvis"` (comma) never matched any entry of `CONVERSATION_CLOSE_PHRASES` and the conversation kept the mic open even when `CONF_CONTINUE_CONVERSATION` was on. The matcher now collapses runs of non-word characters to single spaces (Unicode-aware so German umlauts stay intact) before comparing, so common end-of-utterance punctuation no longer blocks the match. Phrases themselves are normalised the same way so apostrophes (e.g. `that's all`) keep matching.
+
 ## [0.6.3] - 2026-04-28
 
 ### Added
