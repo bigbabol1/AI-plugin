@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [0.6.5] - 2026-04-28
+
+### Changed
+
+- **`continue_conversation` now defaults to True** (`const.py` `DEFAULT_CONTINUE_CONVERSATION = True`) and the close-phrase check no longer requires the option to be enabled (`conversation.py`). Previously, the AI Plugin only emitted `continue_conversation=True` when the advanced option was toggled on; this caused the satellite-side persistent-conversation flow (SmartMic + mic_to_mediaplayer ≥ v1.4.2) to receive `False` after every reply and end the conversation immediately. With this change, every non-close-phrase reply emits `True`, so the ESP `Persistent Conversation` switch and `end_persistent` routing in mic_to_mediaplayer now behave as intended (stay listening until close phrase). Existing users who explicitly set the option keep their override.
+
 ## [0.6.4] - 2026-04-28
 
 ### Fixed

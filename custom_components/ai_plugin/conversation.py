@@ -121,14 +121,13 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         continue_conversation = self._entry.options.get(
             CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION
         )
-        if continue_conversation:
-            close_match = _match_close_phrase(user_input.text)
-            if close_match is not None:
-                _LOGGER.info(
-                    "AI Plugin: close phrase '%s' detected in %r — ending conversation",
-                    close_match, user_input.text[:80],
-                )
-                continue_conversation = False
+        close_match = _match_close_phrase(user_input.text)
+        if close_match is not None:
+            _LOGGER.info(
+                "AI Plugin: close phrase '%s' detected in %r — ending conversation",
+                close_match, user_input.text[:80],
+            )
+            continue_conversation = False
         return ConversationResult(
             response=intent_response,
             conversation_id=conversation_id,
