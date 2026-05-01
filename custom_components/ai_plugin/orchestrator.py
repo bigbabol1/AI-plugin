@@ -761,7 +761,10 @@ class Orchestrator:
             #    completion otherwise.
             try:
                 if tool_schemas:
-                    reply, tool_msgs = await self._tool_loop(messages, tool_schemas, user_id, voice_mode, message)
+                    reply, tool_msgs = await self._tool_loop(
+                        messages, tool_schemas, user_id, voice_mode, message,
+                        device_id=device_id, language=language,
+                    )
                 else:
                     reply = await self._provider.async_complete(messages)
                     tool_msgs = []
@@ -794,7 +797,8 @@ class Orchestrator:
                 })
                 try:
                     reply2, tool_msgs2 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode, message
+                        messages, tool_schemas, user_id, voice_mode, message,
+                        device_id=device_id, language=language,
                     )
                     if _any_list_entities_call(tool_msgs2):
                         reply = reply2
@@ -834,7 +838,8 @@ class Orchestrator:
                 })
                 try:
                     reply3, tool_msgs3 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode, message
+                        messages, tool_schemas, user_id, voice_mode, message,
+                        device_id=device_id, language=language,
                     )
                     if _any_tool_call(tool_msgs3, "search_entities"):
                         reply = reply3
@@ -890,6 +895,8 @@ class Orchestrator:
         user_id: str | None = None,
         voice_mode: bool = False,
         user_message: str = "",
+        device_id: str | None = None,
+        language: str | None = None,
     ) -> tuple[str, list[dict]]:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
@@ -941,7 +948,8 @@ class Orchestrator:
                     messages.append(assistant_msg)
                     history_messages.append(assistant_msg)
                     result = await self._dispatch_tool(
-                        rec_name, rec_args, user_id, voice_mode, user_message
+                        rec_name, rec_args, user_id, voice_mode, user_message,
+                        device_id=device_id, language=language,
                     )
                     tool_msg = {
                         "role": "tool",
@@ -967,7 +975,10 @@ class Orchestrator:
                 history_messages.append(msg)
 
             for tc in response.tool_calls:
-                result = await self._dispatch_tool(tc.name, tc.arguments, user_id, voice_mode, user_message)
+                result = await self._dispatch_tool(
+                    tc.name, tc.arguments, user_id, voice_mode, user_message,
+                    device_id=device_id, language=language,
+                )
                 msg = tc.to_tool_result_message(result)
                 messages.append(msg)
                 history_messages.append(msg)
@@ -982,10 +993,14 @@ class Orchestrator:
         user_id: str | None = None,
         voice_mode: bool = False,
         user_message: str = "",
+        device_id: str | None = None,
+        language: str | None = None,
     ) -> str:
         """Route a tool call to ha_local, memory, web search, or MCP. Never raises."""
         if self._ha_local is not None and name in self._ha_local.tool_names:
-            return await self._ha_local.call_tool(name, arguments)
+            return await self._ha_local.call_tool(
+                name, arguments, device_id=device_id, language=language
+            )
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             return await self._memory.call_tool(
                 name, arguments, user_id=user_id, user_message=user_message

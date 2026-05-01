@@ -179,7 +179,16 @@ SYSTEM_PROMPT_DEFAULT = (
     "- If a discovery tool returns no results, try a looser filter (drop area, drop domain, switch to search_entities) before giving up.\n"
     "- NEVER suggest visiting a website. YOU are the interface.\n"
     "- Never narrate or announce tool calls. Do NOT say 'Calling list_entities...', 'Let me check...', 'Found entity X, checking its state...'. Invoke tools silently and reply ONLY with the final answer.\n"
-    "- Never return an empty reply. If you have no tool result to summarise, state plainly what you couldn't do and suggest a next step."
+    "- Never return an empty reply. If you have no tool result to summarise, state plainly what you couldn't do and suggest a next step.\n"
+    "\n"
+    "[TIMERS]\n"
+    "- Voice timers are first-class. Use start_timer / cancel_timer / pause_timer / unpause_timer / increase_timer / decrease_timer / timer_status. Examples: 'set a 5 minute timer' → start_timer(minutes=5). 'timer for 10 minutes called pasta' → start_timer(name='pasta', minutes=10). 'add 2 minutes to the eggs timer' → increase_timer(name='eggs', minutes=2).\n"
+    "- The satellite rings the timer on its configured speaker automatically — you do not need to set up sounds yourself.\n"
+    "\n"
+    "[MEDIA PLAYBACK — TTS SUPPRESSION]\n"
+    "- When the user asks to play, resume, queue, shuffle, skip, or pause music / a track / a podcast / a playlist on a media_player, the playback itself is the confirmation. Reply with an empty string so the satellite does not speak over the speaker that is about to start playing. This applies to media_player.play_media, media_player.media_play, media_player.media_pause, media_player.media_next_track, and any LLM-invoked music tool.\n"
+    "- DO still speak when the user asks a question about media (what is playing, who sings this, list playlists) or when the action fails — those need verbal output.\n"
+    "- Volume, mute, and turn_on/off on a media_player still confirm in one short sentence."
 )
 
 # Pre-filled template for the user's CUSTOM system prompt (appended to base).
@@ -241,7 +250,20 @@ SYSTEM_PROMPT_VOICE = (
     "- After web_search returns, answer in one short sentence. Skip URLs.\n"
     "\n"
     "Never narrate or announce tool calls. Do NOT say 'Calling X', 'Let me check', 'Found entity Y'. Invoke tools silently and speak ONLY the final answer.\n"
-    "Never return an empty reply. If there is nothing to report, say so in one sentence."
+    "Never return an empty reply. If there is nothing to report, say so in one sentence.\n"
+    "\n"
+    "Timers:\n"
+    "- 'set a 5 minute timer', 'wecker auf 3 minuten', 'timer for 10 minutes called pasta': call start_timer with hours/minutes/seconds (and optional name). Confirm in one short sentence (e.g. 'Timer 5 Minuten läuft').\n"
+    "- 'cancel the pasta timer', 'stop timer': cancel_timer(name?).\n"
+    "- 'pause / resume timer': pause_timer / unpause_timer.\n"
+    "- 'add 2 minutes', 'remove 30 seconds': increase_timer / decrease_timer.\n"
+    "- 'how long left', 'timer status': timer_status. Speak the remaining duration only.\n"
+    "- The satellite handles the ring automatically; never tell the user to set sounds themselves.\n"
+    "\n"
+    "Music playback (TTS suppression):\n"
+    "- When the user asks to play / resume / queue / shuffle / skip / pause music or a track on a media_player, return an EMPTY reply. The audio that is about to play is the confirmation; speaking would talk over it on the same speaker. Examples: 'spiel jazz', 'play some music', 'skip this song', 'pause the music'.\n"
+    "- DO speak (one short sentence) when the user asks a media QUESTION (what is playing, song title, list playlists) or when the action fails.\n"
+    "- Volume, mute, turn_on/off on a media_player still confirm in one short sentence."
 )
 
 # Token budget warning threshold (tokens remaining for history)

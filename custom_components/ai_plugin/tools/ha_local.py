@@ -23,11 +23,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import (
     area_registry as ar,
     device_registry as dr,
     entity_registry as er,
+    intent,
 )
 
 try:
@@ -247,7 +248,191 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
-TOOL_NAMES = {"list_areas", "list_entities", "get_entity", "search_entities", "set_area_state"}
+_TIMER_DURATION_PROPS = {
+    "hours": {
+        "type": "integer",
+        "description": "Hours portion of the duration (optional, default 0).",
+    },
+    "minutes": {
+        "type": "integer",
+        "description": "Minutes portion of the duration (optional, default 0).",
+    },
+    "seconds": {
+        "type": "integer",
+        "description": "Seconds portion of the duration (optional, default 0).",
+    },
+}
+
+TOOL_SCHEMAS.extend(
+    [
+        {
+            "type": "function",
+            "function": {
+                "name": "start_timer",
+                "description": (
+                    "Start a voice timer on the calling assist_satellite device. "
+                    "Use for 'set a 5 minute timer', 'timer for 10 minutes called pasta', "
+                    "'wecker auf 3 minuten'. Provide at least one of hours / minutes / "
+                    "seconds. The optional name lets the user reference this specific "
+                    "timer later (cancel, status). When the timer ends, the satellite "
+                    "fires its on_timer_finished hook which speaks the announcement on "
+                    "the configured Mic2MP speaker."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Optional human label for this timer (e.g. 'pasta', "
+                                "'eggs', 'workout'). Used by the user to refer to the "
+                                "timer later."
+                            ),
+                        },
+                        **_TIMER_DURATION_PROPS,
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "cancel_timer",
+                "description": (
+                    "Cancel a running voice timer on the calling assist_satellite. "
+                    "Provide the timer name if multiple are running; omit to cancel "
+                    "the only / most recent one."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Optional name of the timer to cancel.",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "pause_timer",
+                "description": "Pause a running voice timer on the calling satellite.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Optional name of the timer to pause.",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "unpause_timer",
+                "description": "Resume a paused voice timer on the calling satellite.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Optional name of the timer to resume.",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "increase_timer",
+                "description": (
+                    "Add time to a running voice timer (e.g. 'add 2 minutes to the "
+                    "pasta timer')."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Optional name of the timer to extend.",
+                        },
+                        **_TIMER_DURATION_PROPS,
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "decrease_timer",
+                "description": (
+                    "Subtract time from a running voice timer (e.g. 'take 30 seconds "
+                    "off the eggs timer')."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Optional name of the timer to shorten.",
+                        },
+                        **_TIMER_DURATION_PROPS,
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "timer_status",
+                "description": (
+                    "Report status of voice timers on the calling satellite "
+                    "('how much time on the pasta timer', 'wie lange noch')."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Optional name of the timer to report on.",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
+    ]
+)
+
+_TIMER_INTENTS = {
+    "start_timer": "HassStartTimer",
+    "cancel_timer": "HassCancelTimer",
+    "pause_timer": "HassPauseTimer",
+    "unpause_timer": "HassUnpauseTimer",
+    "increase_timer": "HassIncreaseTimer",
+    "decrease_timer": "HassDecreaseTimer",
+    "timer_status": "HassTimerStatus",
+}
+
+TOOL_NAMES = {
+    "list_areas",
+    "list_entities",
+    "get_entity",
+    "search_entities",
+    "set_area_state",
+    *_TIMER_INTENTS.keys(),
+}
 
 
 def _s(val: object) -> str:
@@ -298,12 +483,23 @@ class HALocalToolRegistry:
         except Exception:  # noqa: BLE001
             return True  # Fail open — never silently hide entities on error.
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        device_id: str | None = None,
+        language: str | None = None,
+    ) -> str:
         """Dispatch one tool call. Never raises; errors become string replies."""
         try:
             exposed_only = arguments.get("exposed_only", True)
             if not isinstance(exposed_only, bool):
                 exposed_only = True
+
+            if name in _TIMER_INTENTS:
+                return await self._call_timer_intent(
+                    name, arguments, device_id=device_id, language=language
+                )
 
             if name == "list_areas":
                 return self._list_areas()
@@ -670,3 +866,85 @@ class HALocalToolRegistry:
             f"OK — {action} {len(ids)} {domain}(s) in {scope_label}: "
             f"{preview}{more}"
         )
+
+    async def _call_timer_intent(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        device_id: str | None = None,
+        language: str | None = None,
+    ) -> str:
+        """Invoke a HA built-in voice-timer intent.
+
+        Voice timers are bound to the calling assist_satellite via ``device_id``.
+        Without a device_id HA cannot ring the timer on the right satellite, so
+        we refuse early with a useful message rather than letting the intent
+        return an opaque error.
+        """
+        intent_type = _TIMER_INTENTS.get(tool_name)
+        if intent_type is None:
+            return f"[Unknown timer tool: {tool_name!r}]"
+
+        if not device_id:
+            return (
+                "[Timer requires a satellite device — this tool is only available "
+                "when the request comes from a voice pipeline. Try again from the "
+                "voice satellite.]"
+            )
+
+        slots: dict[str, Any] = {}
+        for key in ("name", "hours", "minutes", "seconds"):
+            if key not in arguments:
+                continue
+            val = arguments[key]
+            if val is None:
+                continue
+            if key == "name":
+                name_val = _s(val).strip()
+                if name_val:
+                    slots["name"] = {"value": name_val}
+            else:
+                try:
+                    int_val = int(val)
+                except (TypeError, ValueError):
+                    continue
+                slots[key] = {"value": int_val}
+
+        if tool_name == "start_timer":
+            has_duration = any(k in slots for k in ("hours", "minutes", "seconds"))
+            if not has_duration:
+                return (
+                    "[start_timer needs a duration — provide at least one of "
+                    "hours / minutes / seconds.]"
+                )
+
+        try:
+            response = await intent.async_handle(
+                self._hass,
+                "ai_plugin",
+                intent_type,
+                slots=slots,
+                text_input=None,
+                context=Context(),
+                language=language or self._hass.config.language,
+                assistant="conversation",
+                device_id=device_id,
+            )
+        except intent.IntentHandleError as exc:
+            return f"[{intent_type} failed: {exc}]"
+        except intent.UnknownIntent:
+            return (
+                f"[{intent_type} is not registered in this Home Assistant version. "
+                "Voice timers require HA 2024.7 or newer.]"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin timer intent %s failed", intent_type)
+            return f"[{intent_type} error: {exc}]"
+
+        speech = ""
+        try:
+            speech_block = response.speech.get("plain", {}) if response.speech else {}
+            speech = _s(speech_block.get("speech", "")).strip()
+        except Exception:  # noqa: BLE001
+            pass
+        return speech or f"OK — {intent_type} dispatched."
