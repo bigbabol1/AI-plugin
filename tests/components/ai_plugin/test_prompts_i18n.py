@@ -1,10 +1,12 @@
 """Tests for multilingual prompt hint resolution."""
 from __future__ import annotations
 
+import asyncio
 import re
 from types import SimpleNamespace
 
 from custom_components.ai_plugin.const import (
+    CONF_TRIGGER_LANGUAGES,
     PROMPT_HINTS_I18N,
     SUPPORTED_TRIGGER_LANGUAGES,
     SYSTEM_PROMPT_DEFAULT,
@@ -114,3 +116,80 @@ def test_default_prompt_keeps_english_examples():
     assert "list_entities" in base
     assert "play_music" in base
     assert "media_command" in base
+
+
+class _FakeOrchestrator:
+    """Minimal stand-in for Orchestrator that exposes _build_system_prompt
+    behavior with a controllable options dict and language."""
+
+    def __init__(self, options: dict, hass_lang: str | None):
+        from custom_components.ai_plugin.orchestrator import Orchestrator
+        self._build_system_prompt = Orchestrator._build_system_prompt.__get__(self)
+        # _build_system_prompt delegates to two sibling helpers; bind the
+        # real implementations so the stubbed _location / _memory below
+        # are actually consulted. _build_user_facts_block short-circuits
+        # on self._memory is None; _build_location_block awaits
+        # self._location.async_resolve() and returns "" when it yields None.
+        self._build_location_block = (
+            Orchestrator._build_location_block.__get__(self)
+        )
+        self._build_user_facts_block = (
+            Orchestrator._build_user_facts_block.__get__(self)
+        )
+        self._entry = SimpleNamespace(options=options)
+        self._hass = SimpleNamespace(config=SimpleNamespace(language=hass_lang))
+        # Stub the LocationProvider context-block builder used inside
+        # _build_system_prompt; tests focus on language-hint plumbing only.
+
+        async def _no_location():
+            return None
+
+        self._location = SimpleNamespace(async_resolve=_no_location)
+        self._memory = None  # short-circuits _build_user_facts_block
+
+
+async def _run_build(opts, hass_lang, voice_mode):
+    fake = _FakeOrchestrator(opts, hass_lang)
+    return await fake._build_system_prompt(voice_mode=voice_mode, user_id=None)
+
+
+def test_build_prompt_no_langs_omits_all_hint_blocks():
+    prompt = asyncio.run(_run_build({CONF_TRIGGER_LANGUAGES: []}, "en-US", False))
+    assert "GERMAN TRIGGER HINTS" not in prompt
+    assert "FRENCH TRIGGER HINTS" not in prompt
+    assert "POLISH TRIGGER HINTS" not in prompt
+
+
+def test_build_prompt_with_de_appends_german_default_block():
+    prompt = asyncio.run(_run_build({CONF_TRIGGER_LANGUAGES: ["de"]}, "en-US", False))
+    assert PROMPT_HINTS_I18N["de"]["default"] in prompt
+
+
+def test_build_prompt_voice_mode_uses_voice_variant():
+    prompt = asyncio.run(_run_build({CONF_TRIGGER_LANGUAGES: ["de"]}, "en-US", True))
+    assert PROMPT_HINTS_I18N["de"]["voice"] in prompt
+    assert PROMPT_HINTS_I18N["de"]["default"] not in prompt
+
+
+def test_build_prompt_with_two_langs_appends_both_in_order():
+    prompt = asyncio.run(
+        _run_build({CONF_TRIGGER_LANGUAGES: ["pl", "fr"]}, "en-US", False)
+    )
+    assert PROMPT_HINTS_I18N["pl"]["default"] in prompt
+    assert PROMPT_HINTS_I18N["fr"]["default"] in prompt
+    # Order matches input list.
+    assert prompt.index(PROMPT_HINTS_I18N["pl"]["default"]) < prompt.index(
+        PROMPT_HINTS_I18N["fr"]["default"]
+    )
+
+
+def test_build_prompt_unknown_lang_silently_skipped():
+    prompt = asyncio.run(_run_build({CONF_TRIGGER_LANGUAGES: ["xx"]}, "en-US", False))
+    # No crash. No xx block (none exists). No DE block fallback.
+    assert "GERMAN TRIGGER HINTS" not in prompt
+
+
+def test_build_prompt_missing_option_falls_through_to_auto_detect():
+    # No CONF_TRIGGER_LANGUAGES key, German HA → DE block auto-injected.
+    prompt = asyncio.run(_run_build({}, "de-DE", False))
+    assert PROMPT_HINTS_I18N["de"]["default"] in prompt

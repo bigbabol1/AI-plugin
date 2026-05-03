@@ -44,6 +44,7 @@ from .const import (
     CONF_SYSTEM_PROMPT,
     CONF_TEMPERATURE,
     CONF_TOP_P,
+    CONF_TRIGGER_LANGUAGES,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_BASE_URL,
@@ -54,8 +55,10 @@ from .const import (
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
     DOMAIN,
+    PROMPT_HINTS_I18N,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
+    default_trigger_langs,
 )
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
@@ -556,6 +559,30 @@ class Orchestrator:
         LLMs that ignore the recall tool still see stored facts.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
+        # Append per-household-language trigger-word hint blocks. English is
+        # the implicit base; selected langs come from CONF_TRIGGER_LANGUAGES
+        # (max 2, validated in config_flow). Falls through to
+        # default_trigger_langs(hass) when the option is absent so legacy
+        # entries auto-detect from hass.config.language.
+        opts = self._entry.options
+        selected = opts.get(
+            CONF_TRIGGER_LANGUAGES,
+            default_trigger_langs(getattr(self, "_hass", None)),
+        )
+        if not isinstance(selected, list):
+            selected = []
+        mode_key = "voice" if voice_mode else "default"
+        for lang in selected:
+            block = PROMPT_HINTS_I18N.get(lang, {}).get(mode_key)
+            if block:
+                base = f"{base}\n\n{block}"
+            elif lang:
+                _LOGGER.warning(
+                    "AI Plugin: ignoring unknown trigger language %r "
+                    "(supported: %s)",
+                    lang,
+                    list(PROMPT_HINTS_I18N),
+                )
         location_block = await self._build_location_block()
         facts_block = await self._build_user_facts_block(user_id)
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
