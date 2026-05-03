@@ -293,14 +293,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "media_command",
             "description": (
-                "Control playback on the speaker in an area: pause, resume, "
-                "skip to next track, go back to previous track, or stop. Use "
-                "for 'pause the music', 'resume', 'skip this song', 'next "
-                "track', 'previous', 'stop the music', 'pause hobby room', "
-                "'weiter', 'überspringen', 'stop'. Targets the currently-"
-                "playing media_player in the area when one exists; otherwise "
-                "falls back to the area's primary speaker. The audio change "
-                "IS the confirmation — reply with an empty string."
+                "Control playback: pause, resume, skip to next track, go "
+                "back to previous track, or stop. Examples: 'pause' / 'pause "
+                "the music' → media_command('pause'). 'next track' / 'skip "
+                "this song' → media_command('next'). 'previous' → "
+                "media_command('previous'). 'resume' / 'continue' / 'weiter' "
+                "→ media_command('resume'). 'stop the music' → media_command"
+                "('stop'). Pass area only when the user names a room ('pause "
+                "hobby room', 'next track in the kitchen'); otherwise the "
+                "plugin auto-targets whichever media_player is currently in "
+                "the matching state. The audio change IS the confirmation — "
+                "reply with an empty string."
             ),
             "parameters": {
                 "type": "object",
@@ -317,14 +320,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "area": {
                         "type": "string",
                         "description": (
-                            "Area name (e.g. 'hobby room'). Required so the "
-                            "plugin can pick the right speaker. Call "
-                            "list_areas if unsure."
+                            "Optional area name (e.g. 'hobby room'). Omit for "
+                            "global commands like bare 'pause' or 'next "
+                            "track' — the plugin will find the currently-"
+                            "playing speaker automatically."
                         ),
                     },
                     **_EXPOSED_ONLY_PROP,
                 },
-                "required": ["command", "area"],
+                "required": ["command"],
             },
         },
     },
@@ -1118,34 +1122,22 @@ class HALocalToolRegistry:
         area: str | None,
         exposed_only: bool = True,
     ) -> str:
-        """Pause, resume, skip, or stop playback on the area's speaker.
+        """Pause, resume, skip, or stop playback.
 
-        Targets the currently-playing media_player in the area when one
-        exists. For 'resume' a paused player is also accepted. Falls back
-        to all media_players in the area if nothing is in a relevant state.
+        With ``area``: targets media_players in that area, preferring those
+        already in a state the command applies to (playing for pause/next/
+        previous/stop, paused/idle for resume).
+
+        Without ``area``: scans every media_player and acts on the ones
+        currently in the relevant state. This covers terse phrasings like
+        bare "pause" or "next track" where the LLM has no area to pass —
+        the plugin finds whatever is actually playing right now.
         """
         if command not in _MEDIA_COMMAND_SERVICES:
             allowed = ", ".join(sorted(_MEDIA_COMMAND_SERVICES))
             return f"Unknown media command {command!r}. Use: {allowed}."
 
-        if not area:
-            return (
-                "[media_command needs an area — say which speaker, e.g. "
-                "'in the hobby room'. Call list_areas to see options.]"
-            )
-
-        target_area = self._resolve_area(area)
-        if target_area is None:
-            return f"Unknown area {area!r}. Try list_areas."
-
-        candidates = self._media_players_in_area(target_area, exposed_only)
-        if not candidates:
-            scope = "exposed " if exposed_only else ""
-            return f"No {scope}media_player in {target_area.name}."
-
-        # Prefer entities in a state the command actually applies to. For
-        # 'resume' paused/idle players are valid; everything else needs the
-        # player to be currently playing.
+        # Prefer entities in a state the command actually applies to.
         relevant_states = {
             "pause": {"playing"},
             "resume": {"paused", "idle"},
@@ -1153,12 +1145,40 @@ class HALocalToolRegistry:
             "previous": {"playing", "paused"},
             "stop": {"playing", "paused"},
         }[command]
-        active = [
-            eid
-            for eid in candidates
-            if (st := self._hass.states.get(eid)) and st.state in relevant_states
-        ]
-        target_ids = sorted(active or candidates)
+
+        if area:
+            target_area = self._resolve_area(area)
+            if target_area is None:
+                return f"Unknown area {area!r}. Try list_areas."
+            candidates = self._media_players_in_area(target_area, exposed_only)
+            if not candidates:
+                scope = "exposed " if exposed_only else ""
+                return f"No {scope}media_player in {target_area.name}."
+            active = [
+                eid
+                for eid in candidates
+                if (st := self._hass.states.get(eid)) and st.state in relevant_states
+            ]
+            target_ids = sorted(active or candidates)
+        else:
+            # No area — find every media_player in the relevant state.
+            ent_reg = er.async_get(self._hass)
+            target_ids = []
+            for eid in ent_reg.entities:
+                if not eid.startswith("media_player."):
+                    continue
+                if exposed_only and not self._is_exposed(eid):
+                    continue
+                st = self._hass.states.get(eid)
+                if st and st.state in relevant_states:
+                    target_ids.append(eid)
+            if not target_ids:
+                state_label = " / ".join(sorted(relevant_states))
+                return (
+                    f"Nothing is {state_label} right now — pass an area to "
+                    f"target a specific speaker."
+                )
+            target_ids.sort()
 
         service = _MEDIA_COMMAND_SERVICES[command]
         try:
