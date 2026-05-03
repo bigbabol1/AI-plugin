@@ -1,4 +1,4 @@
-"""Tests for the AI Hub config flow and options flow.
+"""Tests for the AI Plugin config flow and options flow.
 
 These tests exercise HA's config-flow runner and require a real
 homeassistant installation (Python ≥ 3.13 + pytest-homeassistant-
@@ -106,7 +106,7 @@ async def test_full_config_flow_with_models(
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["title"] == "AI Hub (llama3.2:3b)"
+    assert result["title"] == "AI Plugin (llama3.2:3b)"
     assert result["data"] == {CONF_PROVIDER: PROVIDER_OPENAI_COMPAT}
     assert result["options"][CONF_MODEL] == "llama3.2:3b"
     assert result["options"][CONF_BASE_URL] == "http://localhost:11434/v1"
@@ -329,7 +329,7 @@ def _create_mock_entry(hass: HomeAssistant) -> config_entries.ConfigEntry:
         version=1,
         minor_version=1,
         domain=DOMAIN,
-        title="AI Hub (llama3.2:3b)",
+        title="AI Plugin (llama3.2:3b)",
         data={CONF_PROVIDER: PROVIDER_OPENAI_COMPAT},
         options={
             CONF_BASE_URL: "http://localhost:11434/v1",

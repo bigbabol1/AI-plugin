@@ -1,4 +1,4 @@
-"""Tests for the AI Hub conversation entity and orchestrator."""
+"""Tests for the AI Plugin conversation entity and orchestrator."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def _make_mock_entry(options: dict | None = None) -> MagicMock:
     """Build a minimal mock ConfigEntry."""
     entry = MagicMock()
     entry.entry_id = "test-entry-id"
-    entry.title = "AI Hub (llama3.2:3b)"
+    entry.title = "AI Plugin (llama3.2:3b)"
     entry.options = options or {
         CONF_BASE_URL: "http://localhost:11434/v1",
         CONF_MODEL: "llama3.2:3b",
