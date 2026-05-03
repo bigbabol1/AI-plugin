@@ -63,6 +63,7 @@ class OpenAICompatProvider(AbstractProvider):
         top_p: float | None = None,
         max_tokens: int | None = None,
         context_window: int | None = None,
+        enable_thinking: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._server_root = _strip_v1(self._base_url)
@@ -73,6 +74,7 @@ class OpenAICompatProvider(AbstractProvider):
         self._top_p = top_p
         self._max_tokens = max_tokens
         self._context_window = context_window
+        self._enable_thinking = enable_thinking
         self._session: aiohttp.ClientSession | None = None
         self._is_ollama: bool | None = None
         self._probe_lock = asyncio.Lock()
@@ -250,13 +252,14 @@ class OpenAICompatProvider(AbstractProvider):
             "model": self._model,
             "messages": messages,
             "stream": False,
-            # Disable qwen3-style chain-of-thought. Reasoning models
-            # (qwen3, deepseek-r1) emit CoT into a separate `thinking`
-            # field and sometimes leave `content` empty. Assist needs
-            # final answers, not scratchpads. Harmless for non-thinking
-            # models: Ollama ignores the flag if the model doesn't
-            # support it.
-            "think": False,
+            # Toggle qwen3-style chain-of-thought via the integration option.
+            # Reasoning models (qwen3, deepseek-r1) emit CoT into a separate
+            # `thinking` field and may also wrap it in <think>...</think>
+            # blocks inside `content`. We always strip the latter via
+            # _strip_think regardless of this flag — "in any configuration the
+            # thinking blocks should always be hidden". Ollama silently
+            # ignores the flag for models that don't support it.
+            "think": self._enable_thinking,
         }
         if tools:
             payload["tools"] = tools

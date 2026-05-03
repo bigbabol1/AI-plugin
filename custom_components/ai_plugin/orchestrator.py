@@ -33,6 +33,7 @@ from .const import (
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_CONTEXT_WINDOW,
+    CONF_ENABLE_THINKING,
     CONF_LOCATION_BIAS,
     CONF_LOCATION_ENTITY,
     CONF_MAX_TOKENS,
@@ -47,6 +48,7 @@ from .const import (
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_ENABLE_THINKING,
     DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_RESPONSE_TIMEOUT,
@@ -537,6 +539,7 @@ class Orchestrator:
             top_p=float(raw_top_p) if raw_top_p is not None else None,
             max_tokens=int(raw_max_tokens) if raw_max_tokens else None,
             context_window=int(opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW)),
+            enable_thinking=bool(opts.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING)),
         )
 
     async def _build_system_prompt(

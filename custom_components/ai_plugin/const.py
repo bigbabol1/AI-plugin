@@ -29,6 +29,7 @@ CONF_VOICE_MODE = "voice_mode"
 CONF_CONTINUE_CONVERSATION = "continue_conversation"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
+CONF_ENABLE_THINKING = "enable_thinking"
 
 # Location bias (added in v0.5.45)
 # - CONF_LOCATION_BIAS: master toggle. When False the plugin never injects
@@ -72,6 +73,7 @@ DEFAULT_SUMMARIZATION_ENABLED = True
 DEFAULT_VOICE_MODE = False
 DEFAULT_CONTINUE_CONVERSATION = True
 DEFAULT_LOCATION_BIAS = True
+DEFAULT_ENABLE_THINKING = False
 
 # Phrases that force-end a conversation regardless of the
 # CONF_CONTINUE_CONVERSATION setting. Matched case-insensitively as

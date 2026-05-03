@@ -46,6 +46,7 @@ from .const import (
     CONF_BRAVE_API_KEY,
     CONF_CONTEXT_WINDOW,
     CONF_CONTINUE_CONVERSATION,
+    CONF_ENABLE_THINKING,
     CONF_LOCATION_BIAS,
     CONF_LOCATION_ENTITY,
     CONF_MAX_RESULTS,
@@ -67,6 +68,7 @@ from .const import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_CONTINUE_CONVERSATION,
+    DEFAULT_ENABLE_THINKING,
     DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_RESULTS,
     DEFAULT_MAX_TOOL_ITERATIONS,
@@ -203,6 +205,10 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_CONTINUE_CONVERSATION,
                 default=current.get(CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_ENABLE_THINKING,
+                default=current.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_MAX_TOOL_ITERATIONS,
