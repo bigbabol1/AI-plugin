@@ -4,6 +4,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from custom_components.ai_plugin.const import (
+    PROMPT_HINTS_I18N,
     SUPPORTED_TRIGGER_LANGUAGES,
     default_trigger_langs,
 )
@@ -44,9 +45,6 @@ def test_default_trigger_langs_none_is_empty():
 
 def test_default_trigger_langs_empty_string_is_empty():
     assert default_trigger_langs(_hass_with_lang("")) == []
-
-
-from custom_components.ai_plugin.const import PROMPT_HINTS_I18N
 
 
 def test_prompt_hints_has_all_supported_languages():

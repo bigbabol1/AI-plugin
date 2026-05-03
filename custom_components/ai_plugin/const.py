@@ -152,7 +152,7 @@ PROMPT_HINTS_I18N: dict[str, dict[str, str]] = {
             "- 'météo à <ville>' → web_search('weather in <ville>'). 'quel temps' → list_entities(domain='weather').\n"
             "- 'souviens-toi' → remember. 'oublie' → forget.\n"
             "- 'joue <X> dans <pièce>' → play_music. 'pause' / 'suivante' / 'précédente' / 'stop' → media_command.\n"
-            "- 'minuteur de N minutes' → start_timer(minutes=N)."
+            "- 'minuteur de N minutes' → start_timer(minutes=N). 'combien reste' → timer_status."
         ),
     },
     "es": {
@@ -175,7 +175,7 @@ PROMPT_HINTS_I18N: dict[str, dict[str, str]] = {
             "- 'tiempo en <ciudad>' → web_search('weather in <ciudad>'). 'qué tiempo' → list_entities(domain='weather').\n"
             "- 'recuerda' → remember. 'olvida' → forget.\n"
             "- 'pon <X> en <habitación>' → play_music. 'pausa' / 'siguiente' / 'anterior' / 'para' → media_command.\n"
-            "- 'temporizador de N minutos' → start_timer(minutes=N)."
+            "- 'temporizador de N minutos' → start_timer(minutes=N). 'cuánto queda' → timer_status."
         ),
     },
     "pt": {
@@ -198,7 +198,7 @@ PROMPT_HINTS_I18N: dict[str, dict[str, str]] = {
             "- 'tempo em <cidade>' → web_search('weather in <cidade>'). 'que tempo' → list_entities(domain='weather').\n"
             "- 'lembra-te' → remember. 'esquece' → forget.\n"
             "- 'põe <X> no <quarto>' → play_music. 'pausa' / 'próxima' / 'anterior' / 'para' → media_command.\n"
-            "- 'temporizador de N minutos' → start_timer(minutes=N)."
+            "- 'temporizador de N minutos' → start_timer(minutes=N). 'quanto falta' → timer_status."
         ),
     },
     "pl": {
@@ -221,7 +221,7 @@ PROMPT_HINTS_I18N: dict[str, dict[str, str]] = {
             "- 'pogoda w <mieście>' → web_search('weather in <mieście>'). 'jaka pogoda' → list_entities(domain='weather').\n"
             "- 'zapamiętaj' → remember. 'zapomnij' → forget.\n"
             "- 'puść <X> w <pokoju>' → play_music. 'pauza' / 'następny' / 'poprzedni' / 'stop' → media_command.\n"
-            "- 'minutnik na N minut' → start_timer(minutes=N)."
+            "- 'minutnik na N minut' → start_timer(minutes=N). 'ile zostało' → timer_status."
         ),
     },
 }
