@@ -39,6 +39,12 @@ Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/pro
 > 8192 only works for chat-only setups with no entity discovery. The integration default is **16384** for this reason.
 > Avoid values above ~24 000 on an 8 GB card with 7–8B models.
 
+### 12 GB VRAM (e.g. RTX 3060 12GB, RTX 4070)
+
+| Model | GGUF | Weights | Notes |
+|-------|------|---------|-------|
+| **Qwen3.5 9B (Q4_K_M)** | [`bartowski/Qwen_Qwen3.5-9B-GGUF`](https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF) | ~5.6 GB | User-reported good results via llama.cpp / Ollama (`ollama create` from the GGUF). Tight on 8 GB at num_ctx 16384 (KV cache pushes total past 8 GB) — comfortable on 12 GB. Same Qwen3 reasoning behaviour as `qwen3:8b`; plugin's `think: false` flag still applies. |
+
 ### 24 GB VRAM (e.g. RTX 3090, RTX 4090)
 
 | Model | Size | Tool calling | Notes |
@@ -120,6 +126,35 @@ Ollama unloads models from VRAM after 5 minutes of inactivity by default. If you
 ```bash
 OLLAMA_KEEP_ALIVE=-1 ollama serve
 ```
+
+## Conversation continuity (`Listen for follow-up after voice replies`)
+
+The integration's **Listen for follow-up after voice replies** option (Settings → Devices & Services → AI Plugin → Configure → Advanced) controls whether the satellite re-arms its microphone after every spoken reply, so the user can continue the conversation without saying the wake word again.
+
+### How it works end-to-end
+
+When enabled (default), `AIPluginConversationEntity._async_handle_message` returns `ConversationResult(continue_conversation=True)` ([`conversation.py`](custom_components/ai_plugin/conversation.py)). HA Core's `assist_pipeline` reads that flag and instructs the bound voice satellite to start a fresh STT/VAD listen window without triggering the wake word — this is the standard HA mechanism shared by every conversation agent, so the behaviour is identical with Whisper / Piper / Wyoming / external satellites.
+
+A **close-phrase detector** (`_match_close_phrase`, see `const.py` `CLOSE_PHRASES`) overrides the flag to `False` whenever the user's input matches a closing utterance (`thanks`, `bye`, `done`, `okay that's all`, German `tschüss` / `danke das war's`, etc.) so the loop ends cleanly without an awkward extra listen.
+
+### Companion satellite switch — `Persistent Conversation`
+
+If you pair AI Plugin with the [SmartMic](https://github.com/bigbabol1/SmartMic) ESPHome firmware (or any satellite that exposes a similar option), the satellite has its own `Persistent Conversation` switch. The two settings stack rather than duplicate:
+
+| Setting | Owns | Triggers when |
+|---------|------|---------------|
+| **AI Plugin → Listen for follow-up** | The next *speech* turn | After every successful reply (`continue_conversation=True`) — HA pipeline re-arms STT once. |
+| **SmartMic → Persistent Conversation** | The follow-up *silence* recovery | Only fires inside `voice_assistant.on_error` when STT returns `stt-no-text-recognized`. If on, it silently re-arms STT instead of dropping back to wake-word mode after the 5 s error timeout. |
+
+Practical combinations:
+
+| AI Plugin follow-up | Satellite persistent | Behaviour |
+|---|---|---|
+| ON | ON | Most natural — chained turns, tolerant of pauses, only the wake word or a close phrase ends the session. |
+| ON | OFF | One follow-up window per reply; if the user is silent the satellite drops back to wake-required after ~5 s. |
+| OFF | (any) | Wake word required for every turn; the satellite switch is a no-op for this path. |
+
+The satellite-side `on_end` handler also detects `voice_assistant.is_running()` and skips its wake-restart branch so the two `voice_assistant.start` cycles never fight each other.
 
 ## Requirements
 
