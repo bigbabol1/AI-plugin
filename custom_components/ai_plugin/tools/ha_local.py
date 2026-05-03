@@ -67,7 +67,7 @@ _INTERESTING_ATTRS = (
     "unit_of_measurement",
 )
 
-_ACTION_DOMAINS = {"light", "switch", "fan", "media_player", "cover", "climate"}
+_ACTION_DOMAINS = {"light", "switch", "fan", "cover", "climate"}
 
 # Magic values that set_area_state treats as "every area".
 _SWEEP_ALL_KEYWORDS = {
@@ -93,7 +93,6 @@ _DOMAIN_SERVICE_MAP: dict[str, dict[str, str]] = {
     "light":        {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
     "switch":       {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
     "fan":          {"turn_on": "turn_on", "turn_off": "turn_off", "toggle": "toggle"},
-    "media_player": {"turn_on": "turn_on", "turn_off": "turn_off"},
     "cover":        {"turn_on": "open_cover", "turn_off": "close_cover", "toggle": "toggle"},
     "climate":      {"turn_on": "turn_on", "turn_off": "turn_off"},
 }
@@ -243,6 +242,49 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["domain", "action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_music",
+            "description": (
+                "Search and play music on the speaker in an area via Music "
+                "Assistant. Use for 'play music in hobby room', 'play Enya in "
+                "kitchen', 'spiel jazz im wohnzimmer', 'shuffle my workout "
+                "playlist in the living room'. The plugin resolves the area's "
+                "primary Music-Assistant speaker automatically. The audio "
+                "starting on the speaker IS the confirmation — reply with an "
+                "empty string so the satellite does not talk over it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "What to play — track, album, artist, playlist, "
+                            "or genre. Free text. Examples: 'Enya', 'Hotel "
+                            "California', 'jazz', 'workout playlist'."
+                        ),
+                    },
+                    "area": {
+                        "type": "string",
+                        "description": (
+                            "Area name (e.g. 'hobby room'). Required — the "
+                            "plugin picks the area's primary media_player. "
+                            "Call list_areas if unsure."
+                        ),
+                    },
+                    "media_type": {
+                        "type": "string",
+                        "enum": ["track", "album", "artist", "playlist", "radio"],
+                        "description": "Optional. Default 'track'.",
+                    },
+                    **_EXPOSED_ONLY_PROP,
+                },
+                "required": ["query", "area"],
             },
         },
     },
@@ -431,8 +473,11 @@ TOOL_NAMES = {
     "get_entity",
     "search_entities",
     "set_area_state",
+    "play_music",
     *_TIMER_INTENTS.keys(),
 }
+
+_MUSIC_MEDIA_TYPES = {"track", "album", "artist", "playlist", "radio"}
 
 
 def _s(val: object) -> str:
@@ -533,6 +578,13 @@ class HALocalToolRegistry:
                     area=area_val or None,
                     domain=_s(arguments.get("domain")).strip(),
                     action=_s(arguments.get("action")).strip(),
+                    exposed_only=exposed_only,
+                )
+            if name == "play_music":
+                return await self._play_music(
+                    query=_s(arguments.get("query")).strip(),
+                    area=_s(arguments.get("area")).strip() or None,
+                    media_type=_s(arguments.get("media_type")).strip() or "track",
                     exposed_only=exposed_only,
                 )
             return f"[Unknown local tool: {name!r}]"
@@ -866,6 +918,106 @@ class HALocalToolRegistry:
             f"OK — {action} {len(ids)} {domain}(s) in {scope_label}: "
             f"{preview}{more}"
         )
+
+    async def _play_music(
+        self,
+        query: str,
+        area: str | None,
+        media_type: str = "track",
+        exposed_only: bool = True,
+    ) -> str:
+        """Search and play music in an area via Music Assistant.
+
+        Replaces the long-broken ``set_area_state(media_player, turn_on)`` path:
+        Music-Assistant entities don't support the generic turn_on action, and
+        even when they did it would just power on the speaker without any
+        media — which is what happens when the LLM "confirms" but nothing
+        plays. This tool calls ``music_assistant.play_media`` with the user's
+        free-text query, which MA resolves against its providers (Spotify,
+        Tidal, local library, etc.).
+        """
+        query = (query or "").strip()
+        if not query:
+            return "[play_music needs a query — what should I play?]"
+
+        if not area:
+            return (
+                "[play_music needs an area — say which speaker, e.g. "
+                "'in the hobby room'. Call list_areas to see options.]"
+            )
+
+        media_type = (media_type or "track").lower().strip()
+        if media_type not in _MUSIC_MEDIA_TYPES:
+            media_type = "track"
+
+        if not self._hass.services.has_service("music_assistant", "play_media"):
+            return (
+                "[Music Assistant integration not installed. play_music "
+                "requires Music Assistant to resolve free-text queries against "
+                "music providers.]"
+            )
+
+        # Resolve area
+        needle = area.strip().lower()
+        area_reg = ar.async_get(self._hass)
+        target_area = None
+        for a in area_reg.async_list_areas():
+            if _s(a.name).lower() == needle:
+                target_area = a
+                break
+            aliases = getattr(a, "aliases", None) or ()
+            if any(_s(al).lower() == needle for al in aliases):
+                target_area = a
+                break
+        if target_area is None:
+            return f"Unknown area {area!r}. Try list_areas."
+
+        # Pick the area's primary Music-Assistant media_player. Prefer
+        # entities whose state.attributes.app_id == "music_assistant"
+        # (native MA player) over generic media_players in the same area.
+        ent_reg = er.async_get(self._hass)
+        dev_reg = dr.async_get(self._hass)
+        ma_native: list[str] = []
+        other: list[str] = []
+        for eid, entry in ent_reg.entities.items():
+            if not eid.startswith("media_player."):
+                continue
+            area_id = entry.area_id
+            if not area_id and entry.device_id:
+                dev = dev_reg.async_get(entry.device_id)
+                if dev:
+                    area_id = dev.area_id
+            if area_id != target_area.id:
+                continue
+            if exposed_only and not self._is_exposed(eid):
+                continue
+            state = self._hass.states.get(eid)
+            app_id = state.attributes.get("app_id") if state else None
+            if app_id == "music_assistant":
+                ma_native.append(eid)
+            else:
+                other.append(eid)
+
+        candidates = ma_native or other
+        if not candidates:
+            scope = "exposed " if exposed_only else ""
+            return f"No {scope}media_player in {target_area.name}."
+
+        entity_id = sorted(candidates)[0]
+
+        try:
+            await self._hass.services.async_call(
+                "music_assistant",
+                "play_media",
+                target={"entity_id": entity_id},
+                service_data={"media_id": query, "media_type": media_type},
+                blocking=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin play_music failed")
+            return f"[play_music failed: {exc}]"
+
+        return f"OK — playing {query!r} ({media_type}) on {entity_id}."
 
     async def _call_timer_intent(
         self,

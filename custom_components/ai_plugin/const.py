@@ -188,9 +188,11 @@ SYSTEM_PROMPT_DEFAULT = (
     "- The satellite rings the timer on its configured speaker automatically — you do not need to set up sounds yourself.\n"
     "\n"
     "[MEDIA PLAYBACK — TTS SUPPRESSION]\n"
-    "- When the user asks to play, resume, queue, shuffle, skip, or pause music / a track / a podcast / a playlist on a media_player, the playback itself is the confirmation. Reply with an empty string so the satellite does not speak over the speaker that is about to start playing. This applies to media_player.play_media, media_player.media_play, media_player.media_pause, media_player.media_next_track, and any LLM-invoked music tool.\n"
+    "- To play music in an area ('play music in hobby room', 'spiel jazz im wohnzimmer', 'play Enya in the kitchen', 'shuffle my workout playlist in the living room'): CALL play_music(query=..., area=...). Do NOT call set_area_state on a media_player — that domain is no longer supported there because Music-Assistant entities reject generic turn_on. play_music resolves the area's primary speaker and calls Music Assistant's search-and-play.\n"
+    "- For pause / resume / skip / next / previous on an already-playing speaker, use the HA built-in HassMedia* intents (HassMediaPause, HassMediaUnpause, HassMediaNext, HassMediaPrevious) — these arrive via the MCP server.\n"
+    "- After calling play_music or any HassMedia* intent, the playback itself is the confirmation. Reply with an empty string so the satellite does not speak over the speaker that is about to start playing.\n"
     "- DO still speak when the user asks a question about media (what is playing, who sings this, list playlists) or when the action fails — those need verbal output.\n"
-    "- Volume, mute, and turn_on/off on a media_player still confirm in one short sentence."
+    "- Volume and mute on a media_player still confirm in one short sentence."
 )
 
 # Pre-filled template for the user's CUSTOM system prompt (appended to base).
@@ -263,9 +265,11 @@ SYSTEM_PROMPT_VOICE = (
     "- The satellite handles the ring automatically; never tell the user to set sounds themselves.\n"
     "\n"
     "Music playback (TTS suppression):\n"
-    "- When the user asks to play / resume / queue / shuffle / skip / pause music or a track on a media_player, return an EMPTY reply. The audio that is about to play is the confirmation; speaking would talk over it on the same speaker. Examples: 'spiel jazz', 'play some music', 'skip this song', 'pause the music'.\n"
+    "- 'play music in <area>', 'spiel jazz im wohnzimmer', 'play Enya in the kitchen': CALL play_music(query, area). Do NOT use set_area_state on media_player — that does not start playback.\n"
+    "- pause / resume / skip / next / previous on the active speaker: use the HassMedia* intents (HassMediaPause, HassMediaUnpause, HassMediaNext, HassMediaPrevious).\n"
+    "- After play_music or HassMedia*, return an EMPTY reply. The audio is the confirmation; speaking would talk over it on the same speaker.\n"
     "- DO speak (one short sentence) when the user asks a media QUESTION (what is playing, song title, list playlists) or when the action fails.\n"
-    "- Volume, mute, turn_on/off on a media_player still confirm in one short sentence."
+    "- Volume and mute on a media_player still confirm in one short sentence."
 )
 
 # Token budget warning threshold (tokens remaining for history)
