@@ -880,10 +880,23 @@ class Orchestrator:
             stored_reply = _strip_narration(reply) or reply
             stored_reply = _strip_emoji(stored_reply) or stored_reply
 
-            # Defensive: small models occasionally return empty content with no
-            # tool calls (prompt/tool confusion). Surface a user-facing fallback
-            # so TTS doesn't play silence.
-            if not stored_reply.strip():
+            # TTS suppression for media-playback tool calls. The audio that
+            # starts/stops on the speaker IS the confirmation; speaking would
+            # talk over the same speaker. Force-blank the reply when
+            # play_music or media_command was invoked, regardless of what the
+            # model produced — some models echo the system-prompt instruction
+            # ("Empty reply. Audio is the confirmation.") instead of returning
+            # empty content.
+            music_tool_invoked = _any_tool_call(
+                tool_msgs, "play_music"
+            ) or _any_tool_call(tool_msgs, "media_command")
+            if music_tool_invoked:
+                stored_reply = ""
+                reply = ""
+            elif not stored_reply.strip():
+                # Defensive: small models occasionally return empty content
+                # with no tool calls (prompt/tool confusion). Surface a
+                # user-facing fallback so TTS doesn't play silence.
                 _LOGGER.warning(
                     "AI Plugin: empty reply from model (conv=%s, tools_called=%d) — substituting fallback",
                     conversation_id, len(tool_msgs),
