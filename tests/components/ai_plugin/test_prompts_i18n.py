@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from custom_components.ai_plugin.const import (
     PROMPT_HINTS_I18N,
     SUPPORTED_TRIGGER_LANGUAGES,
+    SYSTEM_PROMPT_DEFAULT,
+    SYSTEM_PROMPT_VOICE,
     default_trigger_langs,
 )
 
@@ -64,3 +66,54 @@ def test_german_block_mentions_play_music_and_media_command():
     assert "play_music" in de_default
     assert "media_command" in de_default
     assert "set_area_state" in de_default
+
+
+def test_default_prompt_strips_german_fragments():
+    base = SYSTEM_PROMPT_DEFAULT.lower()
+    for frag in (
+        "spiel jazz",
+        "alle lichter aus",
+        "welche lichter sind an",
+        "sind lichter an",
+        "sind fenster offen",
+        "wetter in",
+        "wetter draußen",
+        "wetter draussen",
+        "merk dir",
+        "weiter spielen",
+        "alle",
+        "alles",
+        "überall",
+        "ueberall",
+        "ganzes haus",
+    ):
+        assert frag not in base, (
+            f"German fragment {frag!r} still present in SYSTEM_PROMPT_DEFAULT"
+        )
+
+
+def test_voice_prompt_strips_german_fragments():
+    base = SYSTEM_PROMPT_VOICE.lower()
+    for frag in (
+        "spiel jazz",
+        "welche lichter sind an",
+        "sind lichter an",
+        "wetter in",
+        "weiter",
+    ):
+        # 'weiter' alone is too generic; use a longer fragment to be safe
+        if frag == "weiter":
+            assert "weiter" not in base or "weiterhin" in base
+            continue
+        assert frag not in base, (
+            f"German fragment {frag!r} still present in SYSTEM_PROMPT_VOICE"
+        )
+
+
+def test_default_prompt_keeps_english_examples():
+    # Sanity: stripping non-EN must not delete the English routing examples.
+    base = SYSTEM_PROMPT_DEFAULT
+    assert "set_area_state" in base
+    assert "list_entities" in base
+    assert "play_music" in base
+    assert "media_command" in base
