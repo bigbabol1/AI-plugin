@@ -30,6 +30,10 @@ CONF_CONTINUE_CONVERSATION = "continue_conversation"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
 CONF_ENABLE_THINKING = "enable_thinking"
+# Trigger-word hint languages: which household languages should the
+# plugin pin tool-routing hints for in the system prompt. Up to 2.
+# English is the implicit base — never selectable, never excludable.
+CONF_TRIGGER_LANGUAGES = "trigger_languages"
 
 # Location bias (added in v0.5.45)
 # - CONF_LOCATION_BIAS: master toggle. When False the plugin never injects
@@ -74,6 +78,26 @@ DEFAULT_VOICE_MODE = False
 DEFAULT_CONTINUE_CONVERSATION = True
 DEFAULT_LOCATION_BIAS = True
 DEFAULT_ENABLE_THINKING = False
+
+# Trigger-language defaults are resolved at runtime from
+# hass.config.language via _default_trigger_langs(); the literal default
+# stored in options is an empty list so a missing key falls through to
+# auto-detect on every prompt build.
+SUPPORTED_TRIGGER_LANGUAGES: list[str] = ["de", "fr", "es", "pt", "pl"]
+
+
+def _default_trigger_langs(hass) -> list[str]:
+    """Return the auto-detected default selection for trigger languages.
+
+    Uses ``hass.config.language``, stripping any region (e.g. ``de-DE`` →
+    ``de``). Returns ``[lang]`` if the bare language code is in
+    SUPPORTED_TRIGGER_LANGUAGES, else ``[]``. English-locale HA returns
+    ``[]`` because English is the prompt base anyway.
+    """
+    sys_lang = (getattr(getattr(hass, "config", None), "language", None) or "")
+    code = sys_lang.split("-")[0].lower()
+    return [code] if code in SUPPORTED_TRIGGER_LANGUAGES else []
+
 
 # Phrases that force-end a conversation regardless of the
 # CONF_CONTINUE_CONVERSATION setting. Matched case-insensitively as
