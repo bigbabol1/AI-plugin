@@ -189,8 +189,8 @@ SYSTEM_PROMPT_DEFAULT = (
     "\n"
     "[MEDIA PLAYBACK — TTS SUPPRESSION]\n"
     "- To play music in an area ('play music in hobby room', 'spiel jazz im wohnzimmer', 'play Enya in the kitchen', 'shuffle my workout playlist in the living room'): CALL play_music(query=..., area=...). Do NOT call set_area_state on a media_player — that domain is no longer supported there because Music-Assistant entities reject generic turn_on. play_music resolves the area's primary speaker and calls Music Assistant's search-and-play.\n"
-    "- For pause / resume / skip / next / previous on an already-playing speaker, use the HA built-in HassMedia* intents (HassMediaPause, HassMediaUnpause, HassMediaNext, HassMediaPrevious) — these arrive via the MCP server.\n"
-    "- After calling play_music or any HassMedia* intent, the playback itself is the confirmation. Reply with an empty string so the satellite does not speak over the speaker that is about to start playing.\n"
+    "- For pause / resume / skip / previous / stop on the currently-playing speaker: CALL media_command(command, area). Examples: 'pause the music' / 'pause hobby room' → media_command('pause', '<area>'). 'next track' / 'skip this song' → media_command('next', '<area>'). 'resume' / 'unpause' / 'continue' → media_command('resume', '<area>'). 'stop the music' → media_command('stop', '<area>').\n"
+    "- After calling play_music or media_command, the playback change itself is the confirmation. Reply with an empty string so the satellite does not speak over the speaker that is about to start playing.\n"
     "- DO still speak when the user asks a question about media (what is playing, who sings this, list playlists) or when the action fails — those need verbal output.\n"
     "- Volume and mute on a media_player still confirm in one short sentence."
 )
@@ -266,8 +266,8 @@ SYSTEM_PROMPT_VOICE = (
     "\n"
     "Music playback (TTS suppression):\n"
     "- 'play music in <area>', 'spiel jazz im wohnzimmer', 'play Enya in the kitchen': CALL play_music(query, area). Do NOT use set_area_state on media_player — that does not start playback.\n"
-    "- pause / resume / skip / next / previous on the active speaker: use the HassMedia* intents (HassMediaPause, HassMediaUnpause, HassMediaNext, HassMediaPrevious).\n"
-    "- After play_music or HassMedia*, return an EMPTY reply. The audio is the confirmation; speaking would talk over it on the same speaker.\n"
+    "- pause / resume / skip / previous / stop on the active speaker: CALL media_command(command, area). Examples: 'pause' → media_command('pause', area). 'next' / 'skip' → media_command('next', area). 'weiter' / 'resume' / 'unpause' → media_command('resume', area). 'stop' → media_command('stop', area).\n"
+    "- After play_music or media_command, return an EMPTY reply. The audio is the confirmation; speaking would talk over it on the same speaker.\n"
     "- DO speak (one short sentence) when the user asks a media QUESTION (what is playing, song title, list playlists) or when the action fails.\n"
     "- Volume and mute on a media_player still confirm in one short sentence."
 )

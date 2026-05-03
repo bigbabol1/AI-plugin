@@ -288,6 +288,46 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "media_command",
+            "description": (
+                "Control playback on the speaker in an area: pause, resume, "
+                "skip to next track, go back to previous track, or stop. Use "
+                "for 'pause the music', 'resume', 'skip this song', 'next "
+                "track', 'previous', 'stop the music', 'pause hobby room', "
+                "'weiter', 'überspringen', 'stop'. Targets the currently-"
+                "playing media_player in the area when one exists; otherwise "
+                "falls back to the area's primary speaker. The audio change "
+                "IS the confirmation — reply with an empty string."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": ["pause", "resume", "next", "previous", "stop"],
+                        "description": (
+                            "Playback action. 'resume' un-pauses; 'next' / "
+                            "'previous' move within the current queue; 'stop' "
+                            "halts and clears."
+                        ),
+                    },
+                    "area": {
+                        "type": "string",
+                        "description": (
+                            "Area name (e.g. 'hobby room'). Required so the "
+                            "plugin can pick the right speaker. Call "
+                            "list_areas if unsure."
+                        ),
+                    },
+                    **_EXPOSED_ONLY_PROP,
+                },
+                "required": ["command", "area"],
+            },
+        },
+    },
 ]
 
 _TIMER_DURATION_PROPS = {
@@ -474,10 +514,19 @@ TOOL_NAMES = {
     "search_entities",
     "set_area_state",
     "play_music",
+    "media_command",
     *_TIMER_INTENTS.keys(),
 }
 
 _MUSIC_MEDIA_TYPES = {"track", "album", "artist", "playlist", "radio"}
+
+_MEDIA_COMMAND_SERVICES = {
+    "pause": "media_pause",
+    "resume": "media_play",
+    "next": "media_next_track",
+    "previous": "media_previous_track",
+    "stop": "media_stop",
+}
 
 
 def _s(val: object) -> str:
@@ -585,6 +634,12 @@ class HALocalToolRegistry:
                     query=_s(arguments.get("query")).strip(),
                     area=_s(arguments.get("area")).strip() or None,
                     media_type=_s(arguments.get("media_type")).strip() or "track",
+                    exposed_only=exposed_only,
+                )
+            if name == "media_command":
+                return await self._media_command(
+                    command=_s(arguments.get("command")).strip().lower(),
+                    area=_s(arguments.get("area")).strip() or None,
                     exposed_only=exposed_only,
                 )
             return f"[Unknown local tool: {name!r}]"
@@ -1018,6 +1073,108 @@ class HALocalToolRegistry:
             return f"[play_music failed: {exc}]"
 
         return f"OK — playing {query!r} ({media_type}) on {entity_id}."
+
+    def _resolve_area(self, area: str):
+        """Match an area by exact name or alias (case-insensitive). Returns
+        the AreaEntry or None."""
+        needle = (area or "").strip().lower()
+        if not needle:
+            return None
+        area_reg = ar.async_get(self._hass)
+        for a in area_reg.async_list_areas():
+            if _s(a.name).lower() == needle:
+                return a
+            aliases = getattr(a, "aliases", None) or ()
+            if any(_s(al).lower() == needle for al in aliases):
+                return a
+        return None
+
+    def _media_players_in_area(
+        self, target_area, exposed_only: bool = True
+    ) -> list[str]:
+        """Return media_player entity_ids assigned to ``target_area`` (directly
+        or via the parent device)."""
+        ent_reg = er.async_get(self._hass)
+        dev_reg = dr.async_get(self._hass)
+        out: list[str] = []
+        for eid, entry in ent_reg.entities.items():
+            if not eid.startswith("media_player."):
+                continue
+            area_id = entry.area_id
+            if not area_id and entry.device_id:
+                dev = dev_reg.async_get(entry.device_id)
+                if dev:
+                    area_id = dev.area_id
+            if area_id != target_area.id:
+                continue
+            if exposed_only and not self._is_exposed(eid):
+                continue
+            out.append(eid)
+        return out
+
+    async def _media_command(
+        self,
+        command: str,
+        area: str | None,
+        exposed_only: bool = True,
+    ) -> str:
+        """Pause, resume, skip, or stop playback on the area's speaker.
+
+        Targets the currently-playing media_player in the area when one
+        exists. For 'resume' a paused player is also accepted. Falls back
+        to all media_players in the area if nothing is in a relevant state.
+        """
+        if command not in _MEDIA_COMMAND_SERVICES:
+            allowed = ", ".join(sorted(_MEDIA_COMMAND_SERVICES))
+            return f"Unknown media command {command!r}. Use: {allowed}."
+
+        if not area:
+            return (
+                "[media_command needs an area — say which speaker, e.g. "
+                "'in the hobby room'. Call list_areas to see options.]"
+            )
+
+        target_area = self._resolve_area(area)
+        if target_area is None:
+            return f"Unknown area {area!r}. Try list_areas."
+
+        candidates = self._media_players_in_area(target_area, exposed_only)
+        if not candidates:
+            scope = "exposed " if exposed_only else ""
+            return f"No {scope}media_player in {target_area.name}."
+
+        # Prefer entities in a state the command actually applies to. For
+        # 'resume' paused/idle players are valid; everything else needs the
+        # player to be currently playing.
+        relevant_states = {
+            "pause": {"playing"},
+            "resume": {"paused", "idle"},
+            "next": {"playing", "paused"},
+            "previous": {"playing", "paused"},
+            "stop": {"playing", "paused"},
+        }[command]
+        active = [
+            eid
+            for eid in candidates
+            if (st := self._hass.states.get(eid)) and st.state in relevant_states
+        ]
+        target_ids = sorted(active or candidates)
+
+        service = _MEDIA_COMMAND_SERVICES[command]
+        try:
+            await self._hass.services.async_call(
+                "media_player",
+                service,
+                target={"entity_id": target_ids},
+                blocking=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin media_command %s failed", command)
+            return f"[media_command {command} failed: {exc}]"
+
+        preview = ", ".join(target_ids[:3])
+        more = f" (+{len(target_ids) - 3} more)" if len(target_ids) > 3 else ""
+        return f"OK — {command} on {preview}{more}."
 
     async def _call_timer_intent(
         self,
