@@ -342,3 +342,73 @@ def _create_mock_entry(hass: HomeAssistant) -> config_entries.ConfigEntry:
     )
     hass.config_entries._entries[entry.entry_id] = entry  # noqa: SLF001 — test helper
     return entry
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Trigger-language SelectSelector (Task 5)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+from custom_components.ai_plugin.const import (
+    CONF_TRIGGER_LANGUAGES,
+    ERROR_TOO_MANY_TRIGGER_LANGUAGES,
+)
+
+
+async def test_options_flow_rejects_three_trigger_languages(
+    hass: HomeAssistant, mock_setup_entry,
+) -> None:
+    """Selecting > 2 trigger languages must surface a form error and stay on the advanced step."""
+    entry = _create_mock_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"next_step_id": "advanced"}
+    )
+    assert result["step_id"] == "advanced"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            "system_prompt": "",
+            "context_window": 4096,
+            "summarization_enabled": True,
+            "voice_mode": False,
+            "continue_conversation": True,
+            "enable_thinking": False,
+            "max_tool_iterations": 3,
+            "response_timeout": 20,
+            CONF_TRIGGER_LANGUAGES: ["de", "fr", "es"],
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "advanced"
+    assert result["errors"] == {CONF_TRIGGER_LANGUAGES: ERROR_TOO_MANY_TRIGGER_LANGUAGES}
+
+
+async def test_options_flow_accepts_two_trigger_languages(
+    hass: HomeAssistant, mock_setup_entry,
+) -> None:
+    """Two trigger languages should pass validation and persist."""
+    entry = _create_mock_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"next_step_id": "advanced"}
+    )
+    assert result["step_id"] == "advanced"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            "system_prompt": "",
+            "context_window": 4096,
+            "summarization_enabled": True,
+            "voice_mode": False,
+            "continue_conversation": True,
+            "enable_thinking": False,
+            "max_tool_iterations": 3,
+            "response_timeout": 20,
+            CONF_TRIGGER_LANGUAGES: ["de", "pl"],
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_TRIGGER_LANGUAGES] == ["de", "pl"]

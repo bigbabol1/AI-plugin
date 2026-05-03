@@ -62,6 +62,7 @@ from .const import (
     CONF_TAVILY_API_KEY,
     CONF_TEMPERATURE,
     CONF_TOP_P,
+    CONF_TRIGGER_LANGUAGES,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
@@ -82,7 +83,10 @@ from .const import (
     ERROR_INVALID_URL,
     ERROR_MODEL_REQUIRED,
     ERROR_SEARXNG_UNREACHABLE,
+    ERROR_TOO_MANY_TRIGGER_LANGUAGES,
     PROVIDER_OPENAI_COMPAT,
+    SUPPORTED_TRIGGER_LANGUAGES,
+    default_trigger_langs,
 )
 from .exceptions import CannotConnect
 from .providers.openai_compat import async_fetch_models
@@ -175,7 +179,7 @@ def _web_search_schema(current: dict[str, Any]) -> vol.Schema:
     )
 
 
-def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
+def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
     """Build the advanced settings vol.Schema with current values as defaults."""
     schema: dict[Any, Any] = {
             vol.Optional(
@@ -210,6 +214,24 @@ def _advanced_schema(current: dict[str, Any]) -> vol.Schema:
                 CONF_ENABLE_THINKING,
                 default=current.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING),
             ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_TRIGGER_LANGUAGES,
+                default=current.get(
+                    CONF_TRIGGER_LANGUAGES, default_trigger_langs(hass)
+                ),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": "de", "label": "Deutsch"},
+                        {"value": "fr", "label": "Français"},
+                        {"value": "es", "label": "Español"},
+                        {"value": "pt", "label": "Português"},
+                        {"value": "pl", "label": "Polski"},
+                    ],
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Optional(
                 CONF_MAX_TOOL_ITERATIONS,
                 default=current.get(CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS),
@@ -507,6 +529,26 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.FlowResult:
         """Step 4: Advanced settings + optional HA MCP quick-connect."""
         if user_input is not None:
+            errors: dict[str, str] = {}
+            trig = user_input.get(CONF_TRIGGER_LANGUAGES)
+            if isinstance(trig, list) and len(trig) > 2:
+                errors[CONF_TRIGGER_LANGUAGES] = ERROR_TOO_MANY_TRIGGER_LANGUAGES
+            if errors:
+                schema = vol.Schema(
+                    {
+                        **_advanced_schema(user_input, self.hass).schema,
+                        vol.Optional("use_ha_mcp", default=False): selector.BooleanSelector(),
+                        vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
+                            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                        ),
+                    }
+                )
+                return self.async_show_form(
+                    step_id="advanced",
+                    data_schema=schema,
+                    errors=errors,
+                    last_step=True,
+                )
             # Coerce number selector outputs to their correct types
             for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS, CONF_MAX_TOKENS):
                 if key in user_input:
@@ -532,7 +574,7 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Merge the standard advanced schema with the HA MCP quick-connect fields.
         schema = vol.Schema(
             {
-                **_advanced_schema(self._options).schema,
+                **_advanced_schema(self._options, self.hass).schema,
                 vol.Optional("use_ha_mcp", default=False): selector.BooleanSelector(),
                 vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
@@ -739,6 +781,16 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Edit advanced settings."""
         if user_input is not None:
+            errors: dict[str, str] = {}
+            trig = user_input.get(CONF_TRIGGER_LANGUAGES)
+            if isinstance(trig, list) and len(trig) > 2:
+                errors[CONF_TRIGGER_LANGUAGES] = ERROR_TOO_MANY_TRIGGER_LANGUAGES
+            if errors:
+                return self.async_show_form(
+                    step_id="advanced",
+                    data_schema=_advanced_schema(user_input, self.hass),
+                    errors=errors,
+                )
             for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS, CONF_MAX_TOKENS):
                 if key in user_input:
                     user_input[key] = int(user_input[key])
@@ -750,7 +802,7 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="advanced",
-            data_schema=_advanced_schema(self._options),
+            data_schema=_advanced_schema(self._options, self.hass),
         )
 
     # ── MCP servers ──────────────────────────────────────────────────────────
