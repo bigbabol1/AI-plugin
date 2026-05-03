@@ -336,7 +336,7 @@ SYSTEM_PROMPT_DEFAULT = (
     "- Never return an empty reply. If you have no tool result to summarise, state plainly what you couldn't do and suggest a next step.\n"
     "\n"
     "[TIMERS]\n"
-    "- Voice timers are first-class. Use start_timer / cancel_timer / pause_timer / unpause_timer / increase_timer / decrease_timer / timer_status. Examples: 'set a 5 minute timer' → start_timer(minutes=5). 'pasta timer for 10 minutes' → start_timer(name='pasta', minutes=10). 'add 2 minutes to the eggs timer' → increase_timer(name='eggs', minutes=2).\n"
+    "- Voice timers are first-class. Use start_timer / cancel_timer / pause_timer / unpause_timer / increase_timer / decrease_timer / timer_status. Examples: 'set a 5 minute timer' → start_timer(minutes=5). 'timer for 10 minutes called pasta' → start_timer(name='pasta', minutes=10). 'add 2 minutes to the eggs timer' → increase_timer(name='eggs', minutes=2).\n"
     "- The satellite rings the timer on its configured speaker automatically — you do not need to set up sounds yourself.\n"
     "\n"
     "[MEDIA PLAYBACK — STRICT]\n"

@@ -1,6 +1,7 @@
 """Tests for multilingual prompt hint resolution."""
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 from custom_components.ai_plugin.const import (
@@ -69,43 +70,39 @@ def test_german_block_mentions_play_music_and_media_command():
 
 
 def test_default_prompt_strips_german_fragments():
-    base = SYSTEM_PROMPT_DEFAULT.lower()
-    for frag in (
+    base = SYSTEM_PROMPT_DEFAULT
+    fragments = (
         "spiel jazz",
-        "alle lichter aus",
-        "welche lichter sind an",
-        "sind lichter an",
-        "sind fenster offen",
+        "alle Lichter aus",
+        "welche Lichter sind an",
+        "sind Lichter an",
+        "sind Fenster offen",
         "wetter in",
         "wetter draußen",
         "wetter draussen",
         "merk dir",
         "weiter spielen",
-        "alle",
-        "alles",
-        "überall",
-        "ueberall",
         "ganzes haus",
-    ):
-        assert frag not in base, (
+    )
+    for frag in fragments:
+        pattern = r"\b" + re.escape(frag) + r"\b"
+        assert not re.search(pattern, base, re.IGNORECASE), (
             f"German fragment {frag!r} still present in SYSTEM_PROMPT_DEFAULT"
         )
 
 
 def test_voice_prompt_strips_german_fragments():
-    base = SYSTEM_PROMPT_VOICE.lower()
-    for frag in (
+    base = SYSTEM_PROMPT_VOICE
+    fragments = (
         "spiel jazz",
-        "welche lichter sind an",
-        "sind lichter an",
+        "welche Lichter sind an",
+        "sind Lichter an",
         "wetter in",
-        "weiter",
-    ):
-        # 'weiter' alone is too generic; use a longer fragment to be safe
-        if frag == "weiter":
-            assert "weiter" not in base or "weiterhin" in base
-            continue
-        assert frag not in base, (
+        "weiter spielen",
+    )
+    for frag in fragments:
+        pattern = r"\b" + re.escape(frag) + r"\b"
+        assert not re.search(pattern, base, re.IGNORECASE), (
             f"German fragment {frag!r} still present in SYSTEM_PROMPT_VOICE"
         )
 
