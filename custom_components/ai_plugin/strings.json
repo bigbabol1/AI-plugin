@@ -66,6 +66,7 @@
           "voice_mode": "Use compact prompts for voice",
           "continue_conversation": "Listen for follow-up after voice replies",
           "enable_thinking": "Enable model reasoning (chain-of-thought)",
+          "trigger_languages": "Trigger-word hint languages",
           "max_tool_iterations": "Tool call limit",
           "response_timeout": "Timeout (seconds)",
           "temperature": "Temperature",
@@ -83,6 +84,7 @@
           "voice_mode": "Shorter responses optimized for text-to-speech. Enabled by default for voice assistant interactions.",
           "continue_conversation": "After each spoken reply, the satellite reopens its microphone for a follow-up without needing the wake word. Listen duration is set on the satellite (silence/VAD timeout).",
           "enable_thinking": "Let reasoning models (qwen3, deepseek-r1) generate chain-of-thought before answering. Off by default — Assist needs final answers, not scratchpads. Internal reasoning blocks are always stripped from the displayed reply regardless of this setting.",
+          "trigger_languages": "Adds tool-routing hints for the selected languages so small models reliably map phrases like 'alle Lichter aus' or 'puść muzykę w pokoju' to the right tool. English instructions stay in the prompt regardless. Pick up to two.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "response_timeout": "How long to wait for the AI before giving up.",
           "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
@@ -100,7 +102,8 @@
       "invalid_api_key": "Invalid API key. Check your credentials.",
       "model_required": "Enter a model name.",
       "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
-      "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL."
+      "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL.",
+      "too_many_trigger_languages": "Pick at most two languages."
     },
     "abort": {
       "already_configured": "AI Plugin is already configured."
@@ -172,6 +175,7 @@
           "voice_mode": "Use compact prompts for voice",
           "continue_conversation": "Listen for follow-up after voice replies",
           "enable_thinking": "Enable model reasoning (chain-of-thought)",
+          "trigger_languages": "Trigger-word hint languages",
           "max_tool_iterations": "Tool call limit",
           "response_timeout": "Timeout (seconds)",
           "temperature": "Temperature",
@@ -187,6 +191,7 @@
           "voice_mode": "Shorter responses optimized for text-to-speech.",
           "continue_conversation": "After each spoken reply, the satellite reopens its microphone for a follow-up without needing the wake word. Listen duration is set on the satellite (silence/VAD timeout).",
           "enable_thinking": "Let reasoning models (qwen3, deepseek-r1) generate chain-of-thought before answering. Off by default — Assist needs final answers, not scratchpads. Internal reasoning blocks are always stripped from the displayed reply regardless of this setting.",
+          "trigger_languages": "Adds tool-routing hints for the selected languages so small models reliably map phrases like 'alle Lichter aus' or 'puść muzykę w pokoju' to the right tool. English instructions stay in the prompt regardless. Pick up to two.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "response_timeout": "How long to wait for the AI before giving up.",
           "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
@@ -298,6 +303,7 @@
       "model_required": "Enter a model name.",
       "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
       "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL.",
+      "too_many_trigger_languages": "Pick at most two languages.",
       "command_required": "Enter a command to run."
     },
     "abort": {}
