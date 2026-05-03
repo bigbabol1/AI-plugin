@@ -36,11 +36,13 @@ from custom_components.ai_plugin.const import (
     CONF_MODEL,
     CONF_PROVIDER,
     CONF_SEARXNG_URL,
+    CONF_TRIGGER_LANGUAGES,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_BASE_URL,
     DOMAIN,
+    ERROR_TOO_MANY_TRIGGER_LANGUAGES,
     PROVIDER_OPENAI_COMPAT,
 )
 from custom_components.ai_plugin.exceptions import CannotConnect
@@ -347,12 +349,6 @@ def _create_mock_entry(hass: HomeAssistant) -> config_entries.ConfigEntry:
 # ══════════════════════════════════════════════════════════════════════════════
 # Trigger-language SelectSelector (Task 5)
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-from custom_components.ai_plugin.const import (
-    CONF_TRIGGER_LANGUAGES,
-    ERROR_TOO_MANY_TRIGGER_LANGUAGES,
-)
 
 
 async def test_options_flow_rejects_three_trigger_languages(

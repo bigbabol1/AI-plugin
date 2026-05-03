@@ -303,6 +303,21 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
     return vol.Schema(schema)
 
 
+def _validate_advanced_input(user_input: dict[str, Any]) -> dict[str, str]:
+    """Per-field validation for the advanced step.
+
+    Returns a dict suitable for the ``errors`` arg of ``async_show_form``;
+    empty when input is acceptable. Keep this in sync with the schema in
+    ``_advanced_schema`` — currently the only check is that the user did
+    not pick more than two trigger languages.
+    """
+    errors: dict[str, str] = {}
+    trig = user_input.get(CONF_TRIGGER_LANGUAGES)
+    if isinstance(trig, list) and len(trig) > 2:
+        errors[CONF_TRIGGER_LANGUAGES] = ERROR_TOO_MANY_TRIGGER_LANGUAGES
+    return errors
+
+
 class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the AI Plugin config flow (first-time setup)."""
 
@@ -529,17 +544,22 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.FlowResult:
         """Step 4: Advanced settings + optional HA MCP quick-connect."""
         if user_input is not None:
-            errors: dict[str, str] = {}
-            trig = user_input.get(CONF_TRIGGER_LANGUAGES)
-            if isinstance(trig, list) and len(trig) > 2:
-                errors[CONF_TRIGGER_LANGUAGES] = ERROR_TOO_MANY_TRIGGER_LANGUAGES
+            errors = _validate_advanced_input(user_input)
             if errors:
                 schema = vol.Schema(
                     {
                         **_advanced_schema(user_input, self.hass).schema,
-                        vol.Optional("use_ha_mcp", default=False): selector.BooleanSelector(),
-                        vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
-                            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                        vol.Optional(
+                            "use_ha_mcp",
+                            default=bool(user_input.get("use_ha_mcp", False)),
+                        ): selector.BooleanSelector(),
+                        vol.Optional(
+                            "ha_mcp_token",
+                            default=str(user_input.get("ha_mcp_token", "")),
+                        ): selector.TextSelector(
+                            selector.TextSelectorConfig(
+                                type=selector.TextSelectorType.PASSWORD
+                            )
                         ),
                     }
                 )
@@ -781,10 +801,7 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Edit advanced settings."""
         if user_input is not None:
-            errors: dict[str, str] = {}
-            trig = user_input.get(CONF_TRIGGER_LANGUAGES)
-            if isinstance(trig, list) and len(trig) > 2:
-                errors[CONF_TRIGGER_LANGUAGES] = ERROR_TOO_MANY_TRIGGER_LANGUAGES
+            errors = _validate_advanced_input(user_input)
             if errors:
                 return self.async_show_form(
                     step_id="advanced",
