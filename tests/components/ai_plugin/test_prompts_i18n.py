@@ -44,3 +44,25 @@ def test_default_trigger_langs_none_is_empty():
 
 def test_default_trigger_langs_empty_string_is_empty():
     assert default_trigger_langs(_hass_with_lang("")) == []
+
+
+from custom_components.ai_plugin.const import PROMPT_HINTS_I18N
+
+
+def test_prompt_hints_has_all_supported_languages():
+    assert set(PROMPT_HINTS_I18N) == set(SUPPORTED_TRIGGER_LANGUAGES)
+
+
+def test_prompt_hints_each_lang_has_default_and_voice():
+    for lang in SUPPORTED_TRIGGER_LANGUAGES:
+        assert "default" in PROMPT_HINTS_I18N[lang], f"{lang} missing default"
+        assert "voice" in PROMPT_HINTS_I18N[lang], f"{lang} missing voice"
+        assert PROMPT_HINTS_I18N[lang]["default"].strip(), f"{lang} default empty"
+        assert PROMPT_HINTS_I18N[lang]["voice"].strip(), f"{lang} voice empty"
+
+
+def test_german_block_mentions_play_music_and_media_command():
+    de_default = PROMPT_HINTS_I18N["de"]["default"]
+    assert "play_music" in de_default
+    assert "media_command" in de_default
+    assert "set_area_state" in de_default

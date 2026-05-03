@@ -99,6 +99,134 @@ def default_trigger_langs(hass) -> list[str]:
     return [code] if code in SUPPORTED_TRIGGER_LANGUAGES else []
 
 
+# Per-language trigger-word hint blocks. Each block is a terse,
+# keyword-driven section pinning common phrasings to the plugin's tools
+# so small models (qwen3.5-9b tier) route reliably without spilling
+# fragments into the English base prompt for every household.
+#
+# Tool names stay English (function identifiers, not user copy). Both
+# "default" and "voice" variants exist; the voice variant drops
+# parenthetical explanations to keep the spoken-mode prompt tight.
+
+PROMPT_HINTS_I18N: dict[str, dict[str, str]] = {
+    "de": {
+        "default": (
+            "[GERMAN TRIGGER HINTS]\n"
+            "- 'welche Lichter sind an' / 'sind Lichter an' → list_entities(domain='light', state='on'). Liste jede Zeile, niemals nur eine Lampe.\n"
+            "- 'sind Fenster offen' → list_entities(domain='binary_sensor', state='open').\n"
+            "- 'alle Lichter aus' / 'alles aus' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'Lichter in der Küche aus' / 'Licht im Schlafzimmer an' → set_area_state(area='<Raum>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'Wetter in <Ort>' → web_search('weather in <Ort>', near_user=false). 'Wetter draußen' → list_entities(domain='weather') zuerst.\n"
+            "- 'erinnere dich' / 'merk dir' → remember. 'vergiss' → forget. 'was weißt du über mich' → recall.\n"
+            "- 'spiel <X> in <Raum>' / 'musik in <Raum>' → play_music. 'pausiere' / 'weiter' / 'überspring' / 'stopp' → media_command.\n"
+            "- 'stell einen Timer für N Minuten' → start_timer(minutes=N). 'wie lange noch' → timer_status."
+        ),
+        "voice": (
+            "Deutsche Trigger:\n"
+            "- 'welche Lichter sind an' → list_entities(domain='light', state='on').\n"
+            "- 'alle Lichter aus' / 'alles aus' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'Licht im <Raum> an/aus' → set_area_state(area='<Raum>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'Wetter in <Ort>' → web_search('weather in <Ort>'). 'Wetter draußen' → list_entities(domain='weather').\n"
+            "- 'merk dir' → remember. 'vergiss' → forget.\n"
+            "- 'spiel <X> in <Raum>' → play_music. 'pausiere' / 'weiter' / 'überspring' / 'stopp' → media_command.\n"
+            "- 'Timer für N Minuten' → start_timer(minutes=N). 'wie lange noch' → timer_status."
+        ),
+    },
+    "fr": {
+        "default": (
+            "[FRENCH TRIGGER HINTS]\n"
+            "- 'quelles lumières sont allumées' → list_entities(domain='light', state='on'). Liste chaque ligne, jamais une seule lampe.\n"
+            "- 'des fenêtres sont ouvertes' → list_entities(domain='binary_sensor', state='open').\n"
+            "- 'éteins tout' / 'toutes les lumières éteintes' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'allume / éteins les lumières dans la <pièce>' → set_area_state(area='<pièce>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'météo à <ville>' → web_search('weather in <ville>', near_user=false). 'quel temps fait-il' → list_entities(domain='weather') d'abord.\n"
+            "- 'souviens-toi' / 'rappelle-toi' → remember. 'oublie' → forget. 'que sais-tu de moi' → recall.\n"
+            "- 'mets de la musique dans <pièce>' / 'joue <X> dans <pièce>' → play_music. 'pause' / 'suivante' / 'précédente' / 'stop' → media_command.\n"
+            "- 'minuteur de N minutes' → start_timer(minutes=N). 'combien de temps reste-t-il' → timer_status."
+        ),
+        "voice": (
+            "Déclencheurs français:\n"
+            "- 'quelles lumières sont allumées' → list_entities(domain='light', state='on').\n"
+            "- 'éteins tout' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'allume / éteins dans la <pièce>' → set_area_state(area='<pièce>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'météo à <ville>' → web_search('weather in <ville>'). 'quel temps' → list_entities(domain='weather').\n"
+            "- 'souviens-toi' → remember. 'oublie' → forget.\n"
+            "- 'joue <X> dans <pièce>' → play_music. 'pause' / 'suivante' / 'précédente' / 'stop' → media_command.\n"
+            "- 'minuteur de N minutes' → start_timer(minutes=N)."
+        ),
+    },
+    "es": {
+        "default": (
+            "[SPANISH TRIGGER HINTS]\n"
+            "- 'qué luces están encendidas' → list_entities(domain='light', state='on'). Lista cada fila, nunca solo una lámpara.\n"
+            "- 'hay ventanas abiertas' → list_entities(domain='binary_sensor', state='open').\n"
+            "- 'apaga todo' / 'apagar todas las luces' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'enciende / apaga las luces de la <habitación>' → set_area_state(area='<habitación>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'tiempo en <ciudad>' / 'qué tiempo hace en <ciudad>' → web_search('weather in <ciudad>', near_user=false). 'qué tiempo hace' → list_entities(domain='weather') primero.\n"
+            "- 'recuerda' / 'apunta' → remember. 'olvida' → forget. 'qué sabes de mí' → recall.\n"
+            "- 'pon música en <habitación>' / 'reproduce <X> en <habitación>' → play_music. 'pausa' / 'siguiente' / 'anterior' / 'para' → media_command.\n"
+            "- 'temporizador de N minutos' → start_timer(minutes=N). 'cuánto queda' → timer_status."
+        ),
+        "voice": (
+            "Disparadores en español:\n"
+            "- 'qué luces están encendidas' → list_entities(domain='light', state='on').\n"
+            "- 'apaga todo' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'enciende / apaga la <habitación>' → set_area_state(area='<habitación>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'tiempo en <ciudad>' → web_search('weather in <ciudad>'). 'qué tiempo' → list_entities(domain='weather').\n"
+            "- 'recuerda' → remember. 'olvida' → forget.\n"
+            "- 'pon <X> en <habitación>' → play_music. 'pausa' / 'siguiente' / 'anterior' / 'para' → media_command.\n"
+            "- 'temporizador de N minutos' → start_timer(minutes=N)."
+        ),
+    },
+    "pt": {
+        "default": (
+            "[PORTUGUESE TRIGGER HINTS]\n"
+            "- 'que luzes estão ligadas' → list_entities(domain='light', state='on'). Liste cada linha, nunca só uma lâmpada.\n"
+            "- 'há janelas abertas' → list_entities(domain='binary_sensor', state='open').\n"
+            "- 'desliga tudo' / 'apaga todas as luzes' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'liga / desliga as luzes do <quarto>' → set_area_state(area='<quarto>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'tempo em <cidade>' / 'qual o tempo em <cidade>' → web_search('weather in <cidade>', near_user=false). 'que tempo está' → list_entities(domain='weather') primeiro.\n"
+            "- 'lembra-te' / 'anota' → remember. 'esquece' → forget. 'o que sabes sobre mim' → recall.\n"
+            "- 'põe música no <quarto>' / 'toca <X> no <quarto>' → play_music. 'pausa' / 'próxima' / 'anterior' / 'para' → media_command.\n"
+            "- 'temporizador de N minutos' → start_timer(minutes=N). 'quanto falta' → timer_status."
+        ),
+        "voice": (
+            "Gatilhos em português:\n"
+            "- 'que luzes estão ligadas' → list_entities(domain='light', state='on').\n"
+            "- 'desliga tudo' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'liga / desliga o <quarto>' → set_area_state(area='<quarto>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'tempo em <cidade>' → web_search('weather in <cidade>'). 'que tempo' → list_entities(domain='weather').\n"
+            "- 'lembra-te' → remember. 'esquece' → forget.\n"
+            "- 'põe <X> no <quarto>' → play_music. 'pausa' / 'próxima' / 'anterior' / 'para' → media_command.\n"
+            "- 'temporizador de N minutos' → start_timer(minutes=N)."
+        ),
+    },
+    "pl": {
+        "default": (
+            "[POLISH TRIGGER HINTS]\n"
+            "- 'które światła są włączone' → list_entities(domain='light', state='on'). Wymień każdy wiersz, nigdy tylko jedną lampę.\n"
+            "- 'czy są otwarte okna' → list_entities(domain='binary_sensor', state='open').\n"
+            "- 'wyłącz wszystko' / 'wyłącz wszystkie światła' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'włącz / wyłącz światła w <pokoju>' → set_area_state(area='<pokój>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'pogoda w <mieście>' / 'jaka pogoda w <mieście>' → web_search('weather in <mieście>', near_user=false). 'jaka jest pogoda' → list_entities(domain='weather') najpierw.\n"
+            "- 'zapamiętaj' / 'zanotuj' → remember. 'zapomnij' → forget. 'co o mnie wiesz' → recall.\n"
+            "- 'puść muzykę w <pokoju>' / 'odtwórz <X> w <pokoju>' → play_music. 'pauza' / 'następny' / 'poprzedni' / 'stop' → media_command.\n"
+            "- 'minutnik na N minut' → start_timer(minutes=N). 'ile jeszcze zostało' → timer_status."
+        ),
+        "voice": (
+            "Polskie wyzwalacze:\n"
+            "- 'które światła są włączone' → list_entities(domain='light', state='on').\n"
+            "- 'wyłącz wszystko' → set_area_state(area='all', domain='light', action='turn_off').\n"
+            "- 'włącz / wyłącz <pokój>' → set_area_state(area='<pokój>', domain='light', action='turn_on'|'turn_off').\n"
+            "- 'pogoda w <mieście>' → web_search('weather in <mieście>'). 'jaka pogoda' → list_entities(domain='weather').\n"
+            "- 'zapamiętaj' → remember. 'zapomnij' → forget.\n"
+            "- 'puść <X> w <pokoju>' → play_music. 'pauza' / 'następny' / 'poprzedni' / 'stop' → media_command.\n"
+            "- 'minutnik na N minut' → start_timer(minutes=N)."
+        ),
+    },
+}
+
+
 # Phrases that force-end a conversation regardless of the
 # CONF_CONTINUE_CONVERSATION setting. Matched case-insensitively as
 # whitespace-bounded fragments inside the user's recognised STT text, so
