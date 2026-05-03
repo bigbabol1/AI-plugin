@@ -368,3 +368,169 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
             return f"The {spec['label']} is {val}{unit}."
 
     return None
+
+
+# ── media playback shortcut ────────────────────────────────────────────────
+
+_MEDIA_TRIGGERS: list[tuple[str, re.Pattern[str]]] = [
+    # Order matters: match more specific phrases first so bare "weiter"
+    # doesn't shadow "weiter spielen" — though both map to resume anyway.
+    (
+        "resume",
+        re.compile(
+            r"\b(?:resume|unpause|continue|fortsetzen|weiter\s*(?:spiel\w*|h[öo]r\w*|machen)?|spiel(?:e)?\s+weiter)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "next",
+        re.compile(
+            r"\b(?:next(?:\s+(?:track|song))?|skip(?:\s+(?:this\s+)?(?:song|track))?|"
+            r"n[äa]chst(?:er|es)?(?:\s+(?:song|titel|track|st[üu]ck))?|"
+            r"[üu]berspring(?:e|en)?|skippen)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "previous",
+        re.compile(
+            r"\b(?:previous(?:\s+(?:track|song))?|prev|go\s+back|"
+            r"zur[üu]ck(?:\s+zum\s+vorherig\w*)?|vorherig(?:er|es)?(?:\s+(?:song|titel|track))?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "pause",
+        re.compile(r"\b(?:paus(?:e|ier\w*))\b", re.IGNORECASE),
+    ),
+    (
+        "stop",
+        re.compile(
+            r"\b(?:stop(?:\s+(?:the\s+)?music)?|stopp(?:\s+die\s+musik)?|halt(?:\s+die\s+musik)?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+]
+
+_AREA_SUFFIX_RE = re.compile(
+    r"\b(?:in\s+(?:the\s+)?|im\s+|in\s+der\s+|in\s+dem\s+|in\s+der\s+the\s+)"
+    r"(?P<area>[\w\s\-]+?)\s*[.!?]?\s*$",
+    re.IGNORECASE,
+)
+
+_MEDIA_SERVICE_MAP = {
+    "pause": "media_pause",
+    "resume": "media_play",
+    "next": "media_next_track",
+    "previous": "media_previous_track",
+    "stop": "media_stop",
+}
+
+_MEDIA_RELEVANT_STATES = {
+    "pause": {"playing"},
+    "resume": {"paused", "idle"},
+    "next": {"playing", "paused"},
+    "previous": {"playing", "paused"},
+    "stop": {"playing", "paused"},
+}
+
+
+def _detect_media_command(message: str) -> str | None:
+    for cmd, rx in _MEDIA_TRIGGERS:
+        if rx.search(message):
+            return cmd
+    return None
+
+
+def _extract_area_from_media_message(hass: HomeAssistant, message: str):
+    """Find an area mentioned via 'in <area>' / 'im <area>' suffix."""
+    m = _AREA_SUFFIX_RE.search(message)
+    if not m:
+        return None
+    raw = m.group("area").strip().lower()
+    area_reg = ar.async_get(hass)
+    for a in area_reg.async_list_areas():
+        if (a.name or "").lower() == raw:
+            return a
+        for al in (getattr(a, "aliases", None) or ()):
+            if (al or "").lower() == raw:
+                return a
+    return None
+
+
+async def async_try_media_shortcut(
+    hass: HomeAssistant, message: str
+) -> tuple[bool, str] | None:
+    """Pre-LLM shortcut for media playback commands.
+
+    Small LLMs (qwen3.5-9b on the 8 GB tier) won't reliably translate
+    terse phrasings like "next track" or "pause music" into a
+    media_command tool call — they tend to produce a confident-sounding
+    prose reply ("Skipping to the next track in the hobby room") with
+    zero actual playback change. This shortcut pattern-matches common
+    English/German playback verbs and dispatches the matching
+    media_player service directly, bypassing the LLM.
+
+    Return value: ``(handled, reply)`` when the message was consumed
+    (``reply=""`` for TTS suppression), or ``None`` to fall through to
+    the normal LLM path.
+    """
+    if not message:
+        return None
+    msg = message.strip()
+    if not msg or len(msg.split()) > 8:
+        return None
+
+    cmd = _detect_media_command(msg)
+    if cmd is None:
+        return None
+
+    area = _extract_area_from_media_message(hass, msg)
+
+    relevant_states = _MEDIA_RELEVANT_STATES[cmd]
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    target_ids: list[str] = []
+    for eid, entry in ent_reg.entities.items():
+        if not eid.startswith("media_player."):
+            continue
+        if area is not None:
+            area_id = entry.area_id
+            if not area_id and entry.device_id:
+                dev = dev_reg.async_get(entry.device_id)
+                if dev:
+                    area_id = dev.area_id
+            if area_id != area.id:
+                continue
+        st = hass.states.get(eid)
+        if st and st.state in relevant_states:
+            target_ids.append(eid)
+
+    if not target_ids:
+        # Nothing matching — fall through so the LLM can produce a
+        # useful "nothing is playing" reply rather than a silent no-op.
+        return None
+
+    target_ids.sort()
+    service = _MEDIA_SERVICE_MAP[cmd]
+    try:
+        await hass.services.async_call(
+            "media_player",
+            service,
+            target={"entity_id": target_ids},
+            blocking=True,
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception(
+            "AI Plugin media shortcut: %s on %s failed", cmd, target_ids
+        )
+        return None
+
+    _LOGGER.info(
+        "AI Plugin media shortcut: %s → %s on %s",
+        cmd,
+        service,
+        ", ".join(target_ids),
+    )
+    return (True, "")

@@ -60,7 +60,7 @@ from .const import (
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
 from .providers.openai_compat import OpenAICompatProvider
-from .shortcuts import try_shortcut
+from .shortcuts import async_try_media_shortcut, try_shortcut
 from .tools.ha_local import HALocalToolRegistry
 from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
@@ -713,6 +713,28 @@ class Orchestrator:
                     conversation_id, "assistant", shortcut_reply
                 )
                 return shortcut_reply
+
+            # 1c. Pre-LLM shortcut for media playback commands (pause, next,
+            # skip, resume, stop). Small models hallucinate prose
+            # confirmations without invoking media_command; this bypass
+            # dispatches the service call deterministically and returns an
+            # empty reply for TTS suppression.
+            try:
+                media_result = await async_try_media_shortcut(self._hass, message)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: media shortcut raised", exc_info=True)
+                media_result = None
+            if media_result is not None:
+                handled, media_reply = media_result
+                if handled:
+                    _LOGGER.info(
+                        "AI Plugin: media shortcut hit for conv=%s",
+                        conversation_id,
+                    )
+                    await self._context_mgr.add_turn(
+                        conversation_id, "assistant", media_reply
+                    )
+                    return media_reply
 
             # 2. Summarize old turns if we're approaching the soft token limit.
             if self._summarization_enabled:
