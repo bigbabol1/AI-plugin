@@ -4,7 +4,7 @@
 
 **Goal:** Replace the hard-coded English+German trigger fragments in `SYSTEM_PROMPT_DEFAULT` / `SYSTEM_PROMPT_VOICE` with a configurable per-integration list (max 2 of de/fr/es/pt/pl) of trigger-word hint blocks injected at request time, default-resolved from `hass.config.language`.
 
-**Architecture:** New constants `SUPPORTED_TRIGGER_LANGUAGES`, `CONF_TRIGGER_LANGUAGES`, `PROMPT_HINTS_I18N`, plus a pure helper `_default_trigger_langs(hass) -> list[str]`. `orchestrator._build_system_prompt` reads the option and appends per-language hint blocks to the English base. `config_flow` exposes a `SelectSelector(multiple=True, max=2)` in the advanced options form. English remains the implicit prompt base — never selectable, never excludable.
+**Architecture:** New constants `SUPPORTED_TRIGGER_LANGUAGES`, `CONF_TRIGGER_LANGUAGES`, `PROMPT_HINTS_I18N`, plus a pure helper `default_trigger_langs(hass) -> list[str]`. `orchestrator._build_system_prompt` reads the option and appends per-language hint blocks to the English base. `config_flow` exposes a `SelectSelector(multiple=True, max=2)` in the advanced options form. English remains the implicit prompt base — never selectable, never excludable.
 
 **Tech Stack:** Python 3.13+ on Home Assistant 2025.7+. `voluptuous` for config schema. `homeassistant.helpers.selector.SelectSelector`. `pytest` + `pytest-asyncio` for tests.
 
@@ -14,13 +14,13 @@
 
 | File | Role |
 |---|---|
-| `custom_components/ai_plugin/const.py` | New constants + `_default_trigger_langs` helper + `PROMPT_HINTS_I18N` dict + cleaned `SYSTEM_PROMPT_DEFAULT`/`SYSTEM_PROMPT_VOICE` (German fragments stripped). |
+| `custom_components/ai_plugin/const.py` | New constants + `default_trigger_langs` helper + `PROMPT_HINTS_I18N` dict + cleaned `SYSTEM_PROMPT_DEFAULT`/`SYSTEM_PROMPT_VOICE` (German fragments stripped). |
 | `custom_components/ai_plugin/orchestrator.py` | `_build_system_prompt` reads `CONF_TRIGGER_LANGUAGES`, appends per-language blocks. |
 | `custom_components/ai_plugin/config_flow.py` | Adds `SelectSelector` to advanced schema; validates `len ≤ 2`. |
 | `custom_components/ai_plugin/strings.json` | Adds option label, description, and `too_many_trigger_languages` error key. |
 | `custom_components/ai_plugin/translations/en.json` | Same additions as strings.json. |
 | `custom_components/ai_plugin/manifest.json` | 0.7.7 → 0.8.0 |
-| `tests/components/ai_plugin/test_prompts_i18n.py` | New: unit tests for `_default_trigger_langs` + `_build_system_prompt`. |
+| `tests/components/ai_plugin/test_prompts_i18n.py` | New: unit tests for `default_trigger_langs` + `_build_system_prompt`. |
 | `tests/components/ai_plugin/test_config_flow.py` | Extended: 3-element list rejection, persistence round-trip. |
 
 Tests run via `python3 -m pytest tests/components/ai_plugin/<file>.py -v` from repo root. Local environment may lack `httpx`; if pytest collection fails with `ModuleNotFoundError: No module named 'httpx'`, run `pip install --user -r requirements_test.txt` first or rely on CI.
@@ -45,7 +45,7 @@ from types import SimpleNamespace
 
 from custom_components.ai_plugin.const import (
     SUPPORTED_TRIGGER_LANGUAGES,
-    _default_trigger_langs,
+    default_trigger_langs,
 )
 
 
@@ -58,27 +58,27 @@ def test_supported_languages_is_canonical():
 
 
 def test_default_trigger_langs_de_de():
-    assert _default_trigger_langs(_hass_with_lang("de-DE")) == ["de"]
+    assert default_trigger_langs(_hass_with_lang("de-DE")) == ["de"]
 
 
 def test_default_trigger_langs_pl_pl():
-    assert _default_trigger_langs(_hass_with_lang("pl-PL")) == ["pl"]
+    assert default_trigger_langs(_hass_with_lang("pl-PL")) == ["pl"]
 
 
 def test_default_trigger_langs_en_us_is_empty():
-    assert _default_trigger_langs(_hass_with_lang("en-US")) == []
+    assert default_trigger_langs(_hass_with_lang("en-US")) == []
 
 
 def test_default_trigger_langs_unsupported_is_empty():
-    assert _default_trigger_langs(_hass_with_lang("zh-CN")) == []
+    assert default_trigger_langs(_hass_with_lang("zh-CN")) == []
 
 
 def test_default_trigger_langs_none_is_empty():
-    assert _default_trigger_langs(_hass_with_lang(None)) == []
+    assert default_trigger_langs(_hass_with_lang(None)) == []
 
 
 def test_default_trigger_langs_empty_string_is_empty():
-    assert _default_trigger_langs(_hass_with_lang("")) == []
+    assert default_trigger_langs(_hass_with_lang("")) == []
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -108,13 +108,13 @@ Find the line `DEFAULT_ENABLE_THINKING = False` and add directly below:
 DEFAULT_ENABLE_THINKING = False
 
 # Trigger-language defaults are resolved at runtime from
-# hass.config.language via _default_trigger_langs(); the literal default
+# hass.config.language via default_trigger_langs(); the literal default
 # stored in options is an empty list so a missing key falls through to
 # auto-detect on every prompt build.
 SUPPORTED_TRIGGER_LANGUAGES: list[str] = ["de", "fr", "es", "pt", "pl"]
 
 
-def _default_trigger_langs(hass) -> list[str]:
+def default_trigger_langs(hass) -> list[str]:
     """Return the auto-detected default selection for trigger languages.
 
     Uses ``hass.config.language``, stripping any region (e.g. ``de-DE`` →
@@ -137,7 +137,7 @@ Expected: 6 passed.
 
 ```bash
 git -C /home/arndtg/AI-plugin add custom_components/ai_plugin/const.py tests/components/ai_plugin/test_prompts_i18n.py
-git -C /home/arndtg/AI-plugin commit -m "feat(const): add SUPPORTED_TRIGGER_LANGUAGES + _default_trigger_langs"
+git -C /home/arndtg/AI-plugin commit -m "feat(const): add SUPPORTED_TRIGGER_LANGUAGES + default_trigger_langs"
 ```
 
 ---
@@ -145,7 +145,7 @@ git -C /home/arndtg/AI-plugin commit -m "feat(const): add SUPPORTED_TRIGGER_LANG
 ## Task 2: Add German hint block + completeness invariant
 
 **Files:**
-- Modify: `custom_components/ai_plugin/const.py` (after `_default_trigger_langs`)
+- Modify: `custom_components/ai_plugin/const.py` (after `default_trigger_langs`)
 - Test: `tests/components/ai_plugin/test_prompts_i18n.py` (extend)
 
 - [ ] **Step 1: Append failing tests**
@@ -183,7 +183,7 @@ Expected: 3 new failures with `ImportError` for `PROMPT_HINTS_I18N`.
 
 - [ ] **Step 3: Implement German block in `const.py`**
 
-In `const.py`, immediately after the `_default_trigger_langs` function definition, add:
+In `const.py`, immediately after the `default_trigger_langs` function definition, add:
 
 ```python
 # Per-language trigger-word hint blocks. Each block is a terse,
@@ -654,7 +654,7 @@ In the same import block, also add:
 
 ```python
     PROMPT_HINTS_I18N,
-    _default_trigger_langs,
+    default_trigger_langs,
 ```
 
 (They live next to other `*_PROMPT_*` symbols and helpers.)
@@ -673,11 +673,11 @@ Directly **after** that line and before the next assignment / return path, inser
         # Append per-household-language trigger-word hint blocks. English is
         # the implicit base; selected langs come from CONF_TRIGGER_LANGUAGES
         # (max 2, validated in config_flow). Falls through to
-        # _default_trigger_langs(hass) when the option is absent so legacy
+        # default_trigger_langs(hass) when the option is absent so legacy
         # entries auto-detect from hass.config.language.
         opts = self._entry.options
         selected = opts.get(
-            CONF_TRIGGER_LANGUAGES, _default_trigger_langs(self._hass)
+            CONF_TRIGGER_LANGUAGES, default_trigger_langs(self._hass)
         )
         if not isinstance(selected, list):
             selected = []
@@ -802,7 +802,7 @@ a. In the const-imports block, add:
     CONF_TRIGGER_LANGUAGES,
     ERROR_TOO_MANY_TRIGGER_LANGUAGES,
     SUPPORTED_TRIGGER_LANGUAGES,
-    _default_trigger_langs,
+    default_trigger_langs,
 ```
 
 b. Find `_advanced_schema` (~line 176). Inside its schema dict, after the `CONF_ENABLE_THINKING` entry (or any stable anchor), append a new key:
@@ -811,7 +811,7 @@ b. Find `_advanced_schema` (~line 176). Inside its schema dict, after the `CONF_
             vol.Optional(
                 CONF_TRIGGER_LANGUAGES,
                 default=current.get(
-                    CONF_TRIGGER_LANGUAGES, _default_trigger_langs(_hass_for_default())
+                    CONF_TRIGGER_LANGUAGES, default_trigger_langs(_hass_for_default())
                 ),
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -828,7 +828,7 @@ b. Find `_advanced_schema` (~line 176). Inside its schema dict, after the `CONF_
             ),
 ```
 
-c. The default lambda needs `hass` access. If `_advanced_schema` already takes `hass` as an argument, call `_default_trigger_langs(hass)` directly. Otherwise, change `_advanced_schema(current)` to `_advanced_schema(current, hass)` and update both definition site and call sites accordingly. Replace the `_default_trigger_langs(_hass_for_default())` placeholder above with `_default_trigger_langs(hass)`.
+c. The default lambda needs `hass` access. If `_advanced_schema` already takes `hass` as an argument, call `default_trigger_langs(hass)` directly. Otherwise, change `_advanced_schema(current)` to `_advanced_schema(current, hass)` and update both definition site and call sites accordingly. Replace the `default_trigger_langs(_hass_for_default())` placeholder above with `default_trigger_langs(hass)`.
 
 d. Find the advanced-step submission handler (the function that consumes the user's input from this schema, e.g. `async_step_advanced` or wherever the result is validated). Before the success path (entry update / next step), insert:
 
@@ -969,11 +969,11 @@ v0.8.0: configurable trigger-word hint languages
 Replace hard-coded English+German trigger fragments in the system prompt
 with a per-integration option (CONF_TRIGGER_LANGUAGES) that injects
 hint blocks for up to two of de/fr/es/pt/pl. English remains the
-implicit base; missing option falls through to _default_trigger_langs
+implicit base; missing option falls through to default_trigger_langs
 (auto-detected from hass.config.language).
 
 - const.py: SUPPORTED_TRIGGER_LANGUAGES, CONF_TRIGGER_LANGUAGES,
-  ERROR_TOO_MANY_TRIGGER_LANGUAGES, _default_trigger_langs,
+  ERROR_TOO_MANY_TRIGGER_LANGUAGES, default_trigger_langs,
   PROMPT_HINTS_I18N (de/fr/es/pt/pl × default+voice). German fragments
   removed from SYSTEM_PROMPT_DEFAULT and SYSTEM_PROMPT_VOICE.
 - orchestrator.py: _build_system_prompt appends hint blocks based on
@@ -1032,12 +1032,12 @@ Pull v0.8.0 in HACS, reload the AI Plugin integration. Then:
 - §3 Hint block contents (de + fr + es + pt + pl × default + voice) → Task 2 ✓
 - §4 Testing (unit + manual smoke + edge cases) → Tasks 1–4 unit, Task 7 manual ✓
 - §5 Rollout (manifest, version, single PR) → Tasks 6, 7 ✓
-- Backward compatibility (missing option → `_default_trigger_langs`) → Task 4 step 4 explicit fallback ✓
+- Backward compatibility (missing option → `default_trigger_langs`) → Task 4 step 4 explicit fallback ✓
 - Edge cases (`hass.config.language=None`, unsupported lang code) → Task 1 + Task 4 unknown-lang test ✓
 
 **Placeholder scan:** none — every step shows the exact code or exact diff.
 
 **Type consistency:**
-- `CONF_TRIGGER_LANGUAGES` (str), `SUPPORTED_TRIGGER_LANGUAGES` (list[str]), `PROMPT_HINTS_I18N` (dict[str, dict[str, str]]), `_default_trigger_langs(hass) -> list[str]`, `ERROR_TOO_MANY_TRIGGER_LANGUAGES = "too_many_trigger_languages"` — all referenced consistently across const, orchestrator, config_flow, strings, tests.
+- `CONF_TRIGGER_LANGUAGES` (str), `SUPPORTED_TRIGGER_LANGUAGES` (list[str]), `PROMPT_HINTS_I18N` (dict[str, dict[str, str]]), `default_trigger_langs(hass) -> list[str]`, `ERROR_TOO_MANY_TRIGGER_LANGUAGES = "too_many_trigger_languages"` — all referenced consistently across const, orchestrator, config_flow, strings, tests.
 - `mode_key` strings `"default"` / `"voice"` match `PROMPT_HINTS_I18N` inner dict keys exactly.
 - `selector.SelectSelectorMode.DROPDOWN`, `multiple=True` — matches HA helper API used elsewhere in `config_flow.py`.

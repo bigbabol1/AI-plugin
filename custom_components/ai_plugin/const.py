@@ -80,13 +80,13 @@ DEFAULT_LOCATION_BIAS = True
 DEFAULT_ENABLE_THINKING = False
 
 # Trigger-language defaults are resolved at runtime from
-# hass.config.language via _default_trigger_langs(); the literal default
+# hass.config.language via default_trigger_langs(); the literal default
 # stored in options is an empty list so a missing key falls through to
 # auto-detect on every prompt build.
 SUPPORTED_TRIGGER_LANGUAGES: list[str] = ["de", "fr", "es", "pt", "pl"]
 
 
-def _default_trigger_langs(hass) -> list[str]:
+def default_trigger_langs(hass) -> list[str]:
     """Return the auto-detected default selection for trigger languages.
 
     Uses ``hass.config.language``, stripping any region (e.g. ``de-DE`` →
