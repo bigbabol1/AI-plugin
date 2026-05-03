@@ -557,6 +557,14 @@ class Orchestrator:
         model can enrich web_search queries with the user's real location.
         A [USER FACTS] block is auto-injected from the memory file so small
         LLMs that ignore the recall tool still see stored facts.
+
+        When ``CONF_TRIGGER_LANGUAGES`` is configured, per-language
+        trigger-word hint blocks from ``PROMPT_HINTS_I18N`` are appended to
+        the base prompt — one block per selected language, in the order the
+        user picked them. Falls through to ``default_trigger_langs(hass)``
+        when the option is absent so legacy entries auto-detect from
+        ``hass.config.language``. English is the implicit base; never
+        selectable, never excludable.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
         # Append per-household-language trigger-word hint blocks. English is
@@ -570,12 +578,21 @@ class Orchestrator:
             default_trigger_langs(getattr(self, "_hass", None)),
         )
         if not isinstance(selected, list):
+            _LOGGER.warning(
+                "AI Plugin: %s option is not a list (got %s); ignoring",
+                CONF_TRIGGER_LANGUAGES,
+                type(selected).__name__,
+            )
             selected = []
         mode_key = "voice" if voice_mode else "default"
         for lang in selected:
             block = PROMPT_HINTS_I18N.get(lang, {}).get(mode_key)
             if block:
                 base = f"{base}\n\n{block}"
+            # Empty strings are skipped silently — they're list-slot
+            # artifacts (e.g. SelectSelector serialization), not user
+            # misconfiguration. Truthy unknown codes (typos, removed
+            # languages, hand-edited storage) get a single warning.
             elif lang:
                 _LOGGER.warning(
                     "AI Plugin: ignoring unknown trigger language %r "
