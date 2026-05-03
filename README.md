@@ -28,6 +28,7 @@ Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/pro
 | **Qwen2.5 7B** | `qwen2.5:7b` | ~4.7 GB | **88.2 %** (45/51) | 2.6 s (median 0.7 s, max **37.8 s**) | 0 | Tied at the top by score, slightly higher tail latency on multi-step tool loops. No reasoning-mode quirks. Pick this if you want lower VRAM headroom or non-think behaviour. |
 | Mistral 7B | `mistral:7b` | ~4.1 GB | 82.4 % (42/51) | 1.3 s (median 0.4 s, max 10.0 s) | **1** (fabricated *"das Wetter in Berlin ist regnerisch und kühl"* with no tool call) | Fast and decisive on lights/climate/web (perfect on all three), but takes some commands literally wrong (`volume up bedroom` → tried to switch on bedroom lights) and dumps the system prompt verbatim on bare nouns like `weather` / `events` / `temperature`. Acceptable for English text; not the safe pick for German voice. |
 | Hermes 3 8B | `hermes3:8b` | ~4.7 GB | 74.5 % (38/51) | 2.1 s (median 1.5 s, max 23.5 s) | **1** (returned a Super Bowl LA Rams story to "events") | Llama-3.1 base, tool-calling FT. Weak on weather (2/5 — refuses or asks for location), weak on light entity resolution (6/10). Not recommended for HA. |
+| **Qwen3.5 9B (Q4_K_M)** | [`bartowski/Qwen_Qwen3.5-9B-GGUF`](https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF) — load via llama.cpp or `ollama create` from the GGUF | ~5.6 GB | _user-reported, no formal bench yet_ | _n/a_ | _n/a_ | Tighter than the 7–8B picks above: weights 5.6 GB + KV cache at num_ctx 16384 ≈ 0.2 GB/1k = 3.2 GB → ~8.8 GB total, exceeds 8 GB. Drop num_ctx to **8192** (cuts KV to 1.6 GB → ~7.2 GB total, fits) or stay at 16384 with partial CPU offload (slower). Same Qwen3 reasoning behaviour — plugin's `think: false` flag still applies. |
 
 **Headline:** Qwen2.5 7B has the highest raw score, Qwen3 8B has the most consistent latency and the cleanest voice output. Mistral 7B is the fastest of the bunch but is the only model in this round that fabricated a weather answer instead of calling a tool — a hard fail for an HA agent. Qwen3 8B remains the safer pick for voice TTS because Qwen2.5 7B occasionally leaks raw tool-call syntax (`Calling list_entities(domain='weather')...`) into the reply on short prompts; Qwen3 never did this.
 
@@ -38,12 +39,6 @@ Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/pro
 > **Minimum recommended context: 16384.** Multi-step tool loops (discovery → state → confirm) routinely emit 6–10 K of intermediate tokens, and 8192 starves them — most of the false-negatives in the 8B sweep that *did* call the right tool then ran out of context to summarise the result.
 > 8192 only works for chat-only setups with no entity discovery. The integration default is **16384** for this reason.
 > Avoid values above ~24 000 on an 8 GB card with 7–8B models.
-
-### 12 GB VRAM (e.g. RTX 3060 12GB, RTX 4070)
-
-| Model | GGUF | Weights | Notes |
-|-------|------|---------|-------|
-| **Qwen3.5 9B (Q4_K_M)** | [`bartowski/Qwen_Qwen3.5-9B-GGUF`](https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF) | ~5.6 GB | User-reported good results via llama.cpp / Ollama (`ollama create` from the GGUF). Tight on 8 GB at num_ctx 16384 (KV cache pushes total past 8 GB) — comfortable on 12 GB. Same Qwen3 reasoning behaviour as `qwen3:8b`; plugin's `think: false` flag still applies. |
 
 ### 24 GB VRAM (e.g. RTX 3090, RTX 4090)
 
