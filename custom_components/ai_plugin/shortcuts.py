@@ -596,7 +596,7 @@ def _extract_area_from_media_message(hass: HomeAssistant, message: str):
 
 
 async def async_try_media_shortcut(
-    hass: HomeAssistant, message: str
+    hass: HomeAssistant, message: str, *, lang: str = "en"
 ) -> tuple[bool, str] | None:
     """Pre-LLM shortcut for media playback commands.
 
