@@ -44,7 +44,6 @@ from .const import (
     CONF_SYSTEM_PROMPT,
     CONF_TEMPERATURE,
     CONF_TOP_P,
-    CONF_TRIGGER_LANGUAGES,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_BASE_URL,
@@ -55,10 +54,8 @@ from .const import (
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
     DOMAIN,
-    PROMPT_HINTS_I18N,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
-    default_trigger_langs,
 )
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
@@ -552,56 +549,12 @@ class Orchestrator:
     ) -> str:
         """Return the system prompt for this request.
 
-        Base prompt (voice-compact or default) is always sent so the plugin's
-        entity-discovery, grounding, and speech rules apply. User's custom
-        instructions are appended on top — persona, location, etc. A
-        [HOME LOCATION] block is always injected from hass.config so the
-        model can enrich web_search queries with the user's real location.
-        A [USER FACTS] block is auto-injected from the memory file so small
-        LLMs that ignore the recall tool still see stored facts.
-
-        When ``CONF_TRIGGER_LANGUAGES`` is configured, per-language
-        trigger-word hint blocks from ``PROMPT_HINTS_I18N`` are appended to
-        the base prompt — one block per selected language, in the order the
-        user picked them. Falls through to ``default_trigger_langs(hass)``
-        when the option is absent so legacy entries auto-detect from
-        ``hass.config.language``. English is the implicit base; never
-        selectable, never excludable.
+        v0.9.0: per-language trigger hints removed. Modern multilingual
+        LLMs route non-English utterances correctly without pinned hints,
+        and deterministic shortcuts in shortcuts.py handle the
+        load-bearing language-specific behaviour.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
-        # Append per-household-language trigger-word hint blocks. English is
-        # the implicit base; selected langs come from CONF_TRIGGER_LANGUAGES
-        # (max 2, validated in config_flow). Falls through to
-        # default_trigger_langs(hass) when the option is absent so legacy
-        # entries auto-detect from hass.config.language.
-        opts = self._entry.options
-        selected = opts.get(
-            CONF_TRIGGER_LANGUAGES,
-            default_trigger_langs(getattr(self, "_hass", None)),
-        )
-        if not isinstance(selected, list):
-            _LOGGER.warning(
-                "AI Plugin: %s option is not a list (got %s); ignoring",
-                CONF_TRIGGER_LANGUAGES,
-                type(selected).__name__,
-            )
-            selected = []
-        mode_key = "voice" if voice_mode else "default"
-        for lang in selected:
-            block = PROMPT_HINTS_I18N.get(lang, {}).get(mode_key)
-            if block:
-                base = f"{base}\n\n{block}"
-            # Empty strings are skipped silently — they're list-slot
-            # artifacts (e.g. SelectSelector serialization), not user
-            # misconfiguration. Truthy unknown codes (typos, removed
-            # languages, hand-edited storage) get a single warning.
-            elif lang:
-                _LOGGER.warning(
-                    "AI Plugin: ignoring unknown trigger language %r "
-                    "(supported: %s)",
-                    lang,
-                    list(PROMPT_HINTS_I18N),
-                )
         time_block = self._build_time_block()
         location_block = await self._build_location_block()
         facts_block = await self._build_user_facts_block(user_id)
