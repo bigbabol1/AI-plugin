@@ -1,0 +1,37 @@
+meta:
+  code: "pl"
+  name: "Polski"
+  contributors: []
+
+labels:
+  temperature: "temperatura"
+  humidity: "wilgotność"
+  co2: "CO₂"
+  illuminance: "natężenie światła"
+  pressure: "ciśnienie"
+  power: "moc"
+  energy: "zużycie"
+  battery: "bateria"
+  brightness: "jasność"
+
+templates:
+  attr_state:        "{label} wynosi {val}{unit}."
+  attr_pct:          "{label} jest na poziomie {val}%."
+  attr_humidity_fb:  "{label} wynosi {val}%."
+  sun_set_at:        "Słońce zachodzi o {time}."
+  sun_rise_at:       "Słońce wschodzi o {time}."
+  sun_is_up:         "Słońce jest w górze. Zachód o {time}."
+  sun_is_down:       "Słońce jest pod horyzontem. Wschód o {time}."
+  fallback_no_sensor: "Nie mam czujnika {label} w {area}."
+
+keywords:
+  sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]
+  sun_rise:      ["wschód słońca", "kiedy wschodzi słońce", "o której wschodzi słońce"]
+  sun_dark:      ["jest ciemno", "jest jasno"]
+  sun_is_up:     ["czy słońce jest"]
+  narration:     ["sprawdzam", "szukam", "patrzę", "zaraz sprawdzę", "zaraz poszukam"]
+  area_prefixes: ["w", "na"]
+
+patterns:
+  narration_full: []
+  sun_full:       []

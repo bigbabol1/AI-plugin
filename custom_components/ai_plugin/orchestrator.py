@@ -44,7 +44,6 @@ from .const import (
     CONF_SYSTEM_PROMPT,
     CONF_TEMPERATURE,
     CONF_TOP_P,
-    CONF_TRIGGER_LANGUAGES,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_BASE_URL,
@@ -55,13 +54,12 @@ from .const import (
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
     DOMAIN,
-    PROMPT_HINTS_I18N,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
-    default_trigger_langs,
 )
 from .context_manager import ContextManager
 from .exceptions import OrchestratorError
+from .i18n import L
 from .providers.openai_compat import OpenAICompatProvider
 from .shortcuts import async_try_media_shortcut, try_shortcut
 from .tools.ha_local import HALocalToolRegistry
@@ -74,37 +72,6 @@ if TYPE_CHECKING:
     from .tools.mcp_client import MCPToolRegistry
 
 _LOGGER = logging.getLogger(__name__)
-
-# Strip narration sentences like "Calling list_entities(...)..." that small
-# models emit even when the system prompt forbids it. Matches a full line
-# or a leading sentence up to the next newline / sentence break.
-_NARRATION_PATTERNS = [
-    r"^\s*Calling\s+\w+\([^\n]*?\)\s*\.{0,6}\s*$",
-    r"^\s*(?:Let me|I will|I'll|I am going to|Let's)\s+(?:call|check|see|look|run|use|try|invoke)[^\n]*$",
-    r"^\s*(?:Checking|Searching|Looking up|Querying)[^\n]*\.{0,6}\s*$",
-    r"^\s*Found\s+(?:a\s+|the\s+|one\s+)?\w+\s+entit(?:y|ies)[^\n]*$",
-    r"^\s*No\s+\w+\s+entit(?:y|ies)\s+found[^\n]*$",
-    # qwen3.5-9b style narration:
-    # "I found a light named Gustav. I'll turn it red for you."
-    r"^\s*I'?(?:ve)?\s+found\s+(?:a|the|one)?\s*[\w\- ]+?\.\s*I'?ll[^\n]*$",
-    # "I'm checking the humidity in the bedroom."
-    # "I'm checking the air pressure outside for you."
-    r"^\s*I'?(?:m|\s+am)\s+(?:checking|looking|finding|searching|querying|fetching|getting)[^\n]*$",
-    # "I'll turn off Gustav and tell you the time." — future-tense action narration
-    # WITHOUT actually having done it. Includes 'tell|give|let'.
-    r"^\s*I'?ll\s+(?:turn|switch|set|dim|adjust|play|pause|skip|stop|start|cancel|tell|give|let|find|fetch|get|search|look|check)[^\n]*$",
-    # German narration: "Ich prüfe ...", "Ich überprüfe ...", "Ich suche ...",
-    # "Ich schaue ..." — same pattern as English "I'm checking" but in DE.
-    # Stops at line end. Restricted to verbs that are tool-call narration in
-    # German voice-assistant contexts.
-    r"^\s*Ich\s+(?:prüfe|überprüfe|checke|suche\s+nach|schaue|sehe\s+nach|frage)[^\n]*$",
-    # French narration: "Je vérifie ...", "Je cherche ...", "Je regarde ...",
-    # "Je consulte ...". Same pattern, French verbs. Includes "Je vais
-    # vérifier" / "Je vais chercher".
-    r"^\s*Je\s+(?:vérifie|vérifier|cherche|regarde|consulte|recherche|vais\s+(?:vérifier|chercher|regarder|consulter))[^\n]*$",
-]
-_NARRATION_RE = re.compile("|".join(_NARRATION_PATTERNS), re.MULTILINE | re.IGNORECASE)
-
 
 # Trigger phrases for questions that MUST be grounded in list_entities.
 # "any X on", "which X are off", "welche X sind an", etc. — used by the
@@ -243,15 +210,29 @@ def _parse_raw_tool_call(text: str, valid_names: set[str]) -> tuple[str, dict] |
     return (name, {"name": val})
 
 
-def _strip_narration(text: str) -> str:
-    """Remove tool-call narration lines from a model reply.
+def _strip_narration(text: str, lang: str = "en") -> str:
+    """Remove tool-call narration lines from a model reply, in any
+    supported language.
 
-    Small models (qwen2.5:7B and similar) sometimes ignore the
-    "don't narrate" prompt rule and prefix their real answer with
-    progress chatter. Strip those lines before handing the reply to
-    the user / TTS.
+    Reads keyword + raw-pattern lists from L (i18n module). When the
+    entire reply is narration, the empty result triggers the
+    'I couldn't produce' fallback in async_process — see the empty-reply
+    branch downstream of this call.
     """
-    cleaned = _NARRATION_RE.sub("", text)
+    if not text:
+        return text
+    cleaned = text
+    keyword_re = L.keyword_re("narration", lang)
+    if keyword_re is not None:
+        # Strip any line containing a narration keyword.
+        cleaned = re.sub(
+            rf"^.*(?:{keyword_re.pattern}).*$",
+            "",
+            cleaned,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+    for pattern in L.pattern_list("narration_full", lang):
+        cleaned = pattern.sub("", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
@@ -568,56 +549,12 @@ class Orchestrator:
     ) -> str:
         """Return the system prompt for this request.
 
-        Base prompt (voice-compact or default) is always sent so the plugin's
-        entity-discovery, grounding, and speech rules apply. User's custom
-        instructions are appended on top — persona, location, etc. A
-        [HOME LOCATION] block is always injected from hass.config so the
-        model can enrich web_search queries with the user's real location.
-        A [USER FACTS] block is auto-injected from the memory file so small
-        LLMs that ignore the recall tool still see stored facts.
-
-        When ``CONF_TRIGGER_LANGUAGES`` is configured, per-language
-        trigger-word hint blocks from ``PROMPT_HINTS_I18N`` are appended to
-        the base prompt — one block per selected language, in the order the
-        user picked them. Falls through to ``default_trigger_langs(hass)``
-        when the option is absent so legacy entries auto-detect from
-        ``hass.config.language``. English is the implicit base; never
-        selectable, never excludable.
+        v0.9.0: per-language trigger hints removed. Modern multilingual
+        LLMs route non-English utterances correctly without pinned hints,
+        and deterministic shortcuts in shortcuts.py handle the
+        load-bearing language-specific behaviour.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
-        # Append per-household-language trigger-word hint blocks. English is
-        # the implicit base; selected langs come from CONF_TRIGGER_LANGUAGES
-        # (max 2, validated in config_flow). Falls through to
-        # default_trigger_langs(hass) when the option is absent so legacy
-        # entries auto-detect from hass.config.language.
-        opts = self._entry.options
-        selected = opts.get(
-            CONF_TRIGGER_LANGUAGES,
-            default_trigger_langs(getattr(self, "_hass", None)),
-        )
-        if not isinstance(selected, list):
-            _LOGGER.warning(
-                "AI Plugin: %s option is not a list (got %s); ignoring",
-                CONF_TRIGGER_LANGUAGES,
-                type(selected).__name__,
-            )
-            selected = []
-        mode_key = "voice" if voice_mode else "default"
-        for lang in selected:
-            block = PROMPT_HINTS_I18N.get(lang, {}).get(mode_key)
-            if block:
-                base = f"{base}\n\n{block}"
-            # Empty strings are skipped silently — they're list-slot
-            # artifacts (e.g. SelectSelector serialization), not user
-            # misconfiguration. Truthy unknown codes (typos, removed
-            # languages, hand-edited storage) get a single warning.
-            elif lang:
-                _LOGGER.warning(
-                    "AI Plugin: ignoring unknown trigger language %r "
-                    "(supported: %s)",
-                    lang,
-                    list(PROMPT_HINTS_I18N),
-                )
         time_block = self._build_time_block()
         location_block = await self._build_location_block()
         facts_block = await self._build_user_facts_block(user_id)
@@ -763,6 +700,8 @@ class Orchestrator:
         voice_mode: bool = (device_id is not None) or bool(
             self._entry.options.get(CONF_VOICE_MODE, False)
         )
+        # Normalize HA's BCP-47 language ("de-DE", "fr-CA") to bare ISO 639-1.
+        lang = (language or "en").split("-")[0].lower()
         base_prompt = await self._build_system_prompt(voice_mode, user_id)
 
         # v0.5.15: no more [HOME CONTEXT] YAML dump. Small LLMs drown in it and
@@ -787,7 +726,7 @@ class Orchestrator:
             # avoids fuzzy-resolve misses on multi-sensor rooms. Falls through
             # on any miss so the LLM still handles ambiguous/novel phrasings.
             try:
-                shortcut_reply = try_shortcut(self._hass, message)
+                shortcut_reply = try_shortcut(self._hass, message, lang=lang)
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("AI Plugin: shortcut raised", exc_info=True)
                 shortcut_reply = None
@@ -806,7 +745,7 @@ class Orchestrator:
             # dispatches the service call deterministically and returns an
             # empty reply for TTS suppression.
             try:
-                media_result = await async_try_media_shortcut(self._hass, message)
+                media_result = await async_try_media_shortcut(self._hass, message, lang=lang)
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("AI Plugin: media shortcut raised", exc_info=True)
                 media_result = None
@@ -963,7 +902,7 @@ class Orchestrator:
             # 6. Append tool call/result messages then the assistant reply to history.
             for msg in tool_msgs:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
-            narration_stripped = _strip_narration(reply)
+            narration_stripped = _strip_narration(reply, lang=lang)
             # When the entire reply was narration, prefer surfacing the
             # "couldn't produce" fallback (handled below in the empty-reply
             # branch) over playing back useless filler like "I'm checking

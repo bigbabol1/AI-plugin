@@ -149,7 +149,18 @@ _helpers = _make_module(
 import uuid as _uuid
 
 _make_module("homeassistant.util.ulid", ulid_now=lambda: str(_uuid.uuid4()))
-_make_module("homeassistant.util", ulid=sys.modules["homeassistant.util.ulid"])
+
+# homeassistant.util.logging — needed by pytest-homeassistant-custom-component
+# autouse fixture `fail_on_log_exception`.
+def _log_exception_noop(format_err, *args):  # noqa: ANN001
+    pass
+
+_make_module("homeassistant.util.logging", log_exception=_log_exception_noop)
+_util_mod = _make_module(
+    "homeassistant.util",
+    ulid=sys.modules["homeassistant.util.ulid"],
+    logging=sys.modules["homeassistant.util.logging"],
+)
 
 # ── homeassistant.data_entry_flow ─────────────────────────────────────────────
 
@@ -171,6 +182,7 @@ _ha = _make_module(
     const=sys.modules["homeassistant.const"],
     components=sys.modules["homeassistant.components"],
     helpers=sys.modules["homeassistant.helpers"],
+    util=sys.modules["homeassistant.util"],
 )
 
 # hass fixture used by a few tests — minimal stand-in
