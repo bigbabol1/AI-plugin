@@ -44,6 +44,8 @@ def _load_one(path: Path) -> LangData:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise LocalizationError(f"{path}: malformed YAML: {exc}") from None
+    if raw is None:
+        raise LocalizationError(f"{path}: YAML file is empty")
     try:
         raw = SCHEMA(raw)
     except vol.Invalid as exc:

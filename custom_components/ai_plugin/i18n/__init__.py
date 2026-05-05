@@ -7,8 +7,6 @@ the universal fallback for missing keys or unknown lang codes.
 """
 from __future__ import annotations
 
-import re
-
 from ._loader import LangData, load_all
 from ._schema import LocalizationError
 
@@ -30,7 +28,12 @@ class _Lookup:
         if data is not None and key in data.templates:
             tmpl = data.templates[key]
         else:
-            tmpl = LOCALIZATIONS["en"].templates[key]
+            tmpl = LOCALIZATIONS["en"].templates.get(key)
+            if tmpl is None:
+                raise LocalizationError(
+                    f"template {key!r} not found in any language (including en); "
+                    f"add it to en.yaml as the canonical reference"
+                )
         return tmpl.format(**fmt)
 
     def keyword_re(self, key: str, lang: str) -> "re.Pattern[str] | None":
