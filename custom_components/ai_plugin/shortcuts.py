@@ -230,73 +230,34 @@ def _round_numeric(val: Any, decimals: int = 1) -> Any:
     return round(f, decimals)
 
 
-_DE_LABEL = {
-    "temperature": "Temperatur",
-    "humidity": "Luftfeuchtigkeit",
-    "co2": "CO₂",
-    "illuminance": "Helligkeit",
-    "pressure": "Luftdruck",
-    "power": "Leistung",
-    "energy": "Energieverbrauch",
-    "battery": "Batterieladung",
-    "brightness": "Helligkeit",
-}
-
-_FR_LABEL = {
-    "temperature": "température",
-    "humidity": "humidité",
-    "co2": "CO₂",
-    "illuminance": "luminosité",
-    "pressure": "pression",
-    "power": "puissance",
-    "energy": "consommation",
-    "battery": "batterie",
-    "brightness": "luminosité",
-}
-
-
 def _format_state(state_obj: Any, spec: dict, lang: str = "en") -> str | None:
-    """Render a state object into a short speech string per spec."""
+    """Render a state object into a localized speech string."""
     if state_obj is None:
         return None
-    label = spec["label"]
-    de_label = _DE_LABEL.get(label, label)
-    fr_label = _FR_LABEL.get(label, label)
+    label_key = spec["label"]
+    label = L.label(label_key, lang)
     transform = spec.get("transform")
+
     if "attribute" in spec:
-        attr_key = spec["attribute"]
-        val = state_obj.attributes.get(attr_key)
+        val = state_obj.attributes.get(spec["attribute"])
         if val is None:
             return None
         if transform == "brightness_pct":
             try:
                 pct = round(int(val) / 255 * 100)
-                if lang == "de":
-                    return f"Die {de_label} liegt bei {pct}%."
-                if lang == "fr":
-                    return f"La {fr_label} est à {pct}%."
-                return f"The {label} is {pct}%."
+                return L.template("attr_pct", lang, label=label, val=pct)
             except Exception:  # noqa: BLE001
-                if lang == "de":
-                    return f"Die {de_label} ist {_round_numeric(val)}."
-                if lang == "fr":
-                    return f"La {fr_label} est de {_round_numeric(val)}."
-                return f"The {label} is {_round_numeric(val)}."
-        if lang == "de":
-            return f"Die {de_label} ist {_round_numeric(val)}."
-        if lang == "fr":
-            return f"La {fr_label} est de {_round_numeric(val)}."
-        return f"The {label} is {_round_numeric(val)}."
-    # state-based (sensors)
+                return L.template("attr_state", lang, label=label,
+                                  val=_round_numeric(val), unit="")
+        return L.template("attr_state", lang, label=label,
+                          val=_round_numeric(val), unit="")
+
     raw = state_obj.state
     if raw in (None, "", "unknown", "unavailable", "none"):
         return None
     unit = state_obj.attributes.get("unit_of_measurement") or spec.get("unit_fallback") or ""
-    if lang == "de":
-        return f"Die {de_label} ist {_round_numeric(raw)}{unit}."
-    if lang == "fr":
-        return f"La {fr_label} est de {_round_numeric(raw)}{unit}."
-    return f"The {label} is {_round_numeric(raw)}{unit}."
+    return L.template("attr_state", lang, label=label,
+                      val=_round_numeric(raw), unit=unit)
 
 
 def _pick_best_sensor(entities: list[Any], hass: HomeAssistant, spec: dict) -> Any | None:
@@ -444,39 +405,6 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str, lang: str = "en") -> st
     return None
 
 
-_DE_HINT_RE = re.compile(
-    r"\b(?:wie|ist|im|der|die|das|wieviel|luftfeucht|temperatur|luftdruck|"
-    r"stromverbrauch|schlafzimmer|wohnzimmer|küche|kueche|badezimmer|flur|"
-    r"hobbyraum|warm|kalt|feucht|hell|dunkel|wieso|wann)\b",
-    re.IGNORECASE,
-)
-
-_FR_HINT_RE = re.compile(
-    r"\b(?:quelle|quel|fait-il|est-ce|combien|y\s+a-t-il|chambre|salon|cuisine|"
-    r"salle\s+de\s+bain|couloir|humidit[ée]|temp[ée]rature|pression|luminosit[ée]|"
-    r"électricit[ée]|electricite|d'[ée]lectricit[ée]|d'eau|allumées|"
-    r"éteins|allume|baisse|d[ée]hors|dans\s+la|dans\s+le|dans\s+l'|"
-    r"taux\s+d')\b",
-    re.IGNORECASE,
-)
-
-
-def _detect_lang(message: str) -> str:
-    """Return 'fr' / 'de' / 'en' based on keyword heuristics.
-
-    Used to localize deterministic-shortcut output strings. French is
-    checked before German because their accented characters can collide
-    with German vowel mutations in some encodings. Defaults to 'en' when
-    neither matches.
-    """
-    msg = message or ""
-    if _FR_HINT_RE.search(msg):
-        return "fr"
-    if _DE_HINT_RE.search(msg):
-        return "de"
-    return "en"
-
-
 def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str | None:
     """Return a deterministic reply for supported patterns, else None.
 
@@ -514,10 +442,6 @@ def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str 
     entities = _entities_in_area(hass, area.id)
     if not entities:
         return None
-
-    lang = _detect_lang(message)
-    de_label = _DE_LABEL.get(spec["label"], spec["label"])
-    fr_label = _FR_LABEL.get(spec["label"], spec["label"])
 
     # For light brightness we target the brightest-on light, else any.
     if attr_key == "brightness":
@@ -559,11 +483,11 @@ def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str 
                 "AI Plugin shortcut hit: temperature in %s → %s (climate fallback)",
                 area.name, state.entity_id,
             )
-            if lang == "de":
-                return f"Die {de_label} ist {_round_numeric(val)}{unit}."
-            if lang == "fr":
-                return f"La {fr_label} est de {_round_numeric(val)}{unit}."
-            return f"The {spec['label']} is {_round_numeric(val)}{unit}."
+            return L.template(
+                "attr_state", lang,
+                label=L.label("temperature", lang),
+                val=_round_numeric(val), unit=unit,
+            )
 
     # Humidity fallback: same pattern, climate.* current_humidity.
     if attr_key == "humidity":
@@ -574,11 +498,11 @@ def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str 
                 "AI Plugin shortcut hit: humidity in %s → %s (climate fallback)",
                 area.name, state.entity_id,
             )
-            if lang == "de":
-                return f"Die {de_label} ist {_round_numeric(val)}%."
-            if lang == "fr":
-                return f"La {fr_label} est de {_round_numeric(val)}%."
-            return f"The {spec['label']} is {_round_numeric(val)}%."
+            return L.template(
+                "attr_humidity_fb", lang,
+                label=L.label("humidity", lang),
+                val=_round_numeric(val),
+            )
 
     return None
 

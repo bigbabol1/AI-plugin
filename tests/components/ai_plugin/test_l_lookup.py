@@ -58,3 +58,18 @@ def test_sun_keyword_re_matches_fr_phrase():
     pat = L.keyword_re("sun_set", "fr")
     assert pat is not None
     assert pat.search("à quelle heure se couche le soleil") is not None
+
+
+def test_format_state_uses_de_template_and_label():
+    # Round-trip a fake state via L; this also exercises template substitution.
+    label = L.label("temperature", "de")
+    assert label == "Temperatur"
+    out = L.template("attr_state", "de", label=label, val=25.0, unit="°C")
+    assert out == "Die Temperatur ist 25.0°C."
+
+
+def test_format_state_uses_fr_template_and_label():
+    label = L.label("temperature", "fr")
+    assert label == "température"
+    out = L.template("attr_state", "fr", label=label, val=25.0, unit="°C")
+    assert out == "La température est de 25.0°C."
