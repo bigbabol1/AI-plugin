@@ -98,6 +98,10 @@ _NARRATION_PATTERNS = [
     # Stops at line end. Restricted to verbs that are tool-call narration in
     # German voice-assistant contexts.
     r"^\s*Ich\s+(?:prüfe|überprüfe|checke|suche\s+nach|schaue|sehe\s+nach|frage)[^\n]*$",
+    # French narration: "Je vérifie ...", "Je cherche ...", "Je regarde ...",
+    # "Je consulte ...". Same pattern, French verbs. Includes "Je vais
+    # vérifier" / "Je vais chercher".
+    r"^\s*Je\s+(?:vérifie|vérifier|cherche|regarde|consulte|recherche|vais\s+(?:vérifier|chercher|regarder|consulter))[^\n]*$",
 ]
 _NARRATION_RE = re.compile("|".join(_NARRATION_PATTERNS), re.MULTILINE | re.IGNORECASE)
 

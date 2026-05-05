@@ -240,6 +240,18 @@ _DE_LABEL = {
     "brightness": "Helligkeit",
 }
 
+_FR_LABEL = {
+    "temperature": "température",
+    "humidity": "humidité",
+    "co2": "CO₂",
+    "illuminance": "luminosité",
+    "pressure": "pression",
+    "power": "puissance",
+    "energy": "consommation",
+    "battery": "batterie",
+    "brightness": "luminosité",
+}
+
 
 def _format_state(state_obj: Any, spec: dict, lang: str = "en") -> str | None:
     """Render a state object into a short speech string per spec."""
@@ -247,6 +259,7 @@ def _format_state(state_obj: Any, spec: dict, lang: str = "en") -> str | None:
         return None
     label = spec["label"]
     de_label = _DE_LABEL.get(label, label)
+    fr_label = _FR_LABEL.get(label, label)
     transform = spec.get("transform")
     if "attribute" in spec:
         attr_key = spec["attribute"]
@@ -258,13 +271,19 @@ def _format_state(state_obj: Any, spec: dict, lang: str = "en") -> str | None:
                 pct = round(int(val) / 255 * 100)
                 if lang == "de":
                     return f"Die {de_label} liegt bei {pct}%."
+                if lang == "fr":
+                    return f"La {fr_label} est à {pct}%."
                 return f"The {label} is {pct}%."
             except Exception:  # noqa: BLE001
                 if lang == "de":
                     return f"Die {de_label} ist {_round_numeric(val)}."
+                if lang == "fr":
+                    return f"La {fr_label} est de {_round_numeric(val)}."
                 return f"The {label} is {_round_numeric(val)}."
         if lang == "de":
             return f"Die {de_label} ist {_round_numeric(val)}."
+        if lang == "fr":
+            return f"La {fr_label} est de {_round_numeric(val)}."
         return f"The {label} is {_round_numeric(val)}."
     # state-based (sensors)
     raw = state_obj.state
@@ -273,6 +292,8 @@ def _format_state(state_obj: Any, spec: dict, lang: str = "en") -> str | None:
     unit = state_obj.attributes.get("unit_of_measurement") or spec.get("unit_fallback") or ""
     if lang == "de":
         return f"Die {de_label} ist {_round_numeric(raw)}{unit}."
+    if lang == "fr":
+        return f"La {fr_label} est de {_round_numeric(raw)}{unit}."
     return f"The {label} is {_round_numeric(raw)}{unit}."
 
 
@@ -352,21 +373,29 @@ def _pick_climate_humidity(entities: list[Any], hass: HomeAssistant) -> tuple[An
 
 
 _SUN_RE = re.compile(
-    r"\b(?:"
-    r"when\s+(?:is|does)\s+(?:the\s+)?sun(?:set|rise)?(?:\s+today|\s+tomorrow)?|"
-    r"when\s+does\s+(?:the\s+)?sun\s+(?:set|rise|come\s+up|go\s+down)|"
-    r"when\s+does\s+it\s+get\s+dark|"
-    r"is\s+it\s+(?:dark|light)\s+outside|"
-    r"is\s+the\s+sun\s+(?:up|out)|"
-    r"sunrise|sunset|"
+    r"(?:"
+    r"\bwhen\s+(?:is|does)\s+(?:the\s+)?sun(?:set|rise)?(?:\s+today|\s+tomorrow)?\b|"
+    r"\bwhen\s+does\s+(?:the\s+)?sun\s+(?:set|rise|come\s+up|go\s+down)\b|"
+    r"\bwhen\s+does\s+it\s+get\s+dark\b|"
+    r"\bis\s+it\s+(?:dark|light)\s+outside\b|"
+    r"\bis\s+the\s+sun\s+(?:up|out)\b|"
+    r"\bsunrise\b|\bsunset\b|"
     # German: 'wann geht die Sonne unter', 'wann ist Sonnenaufgang',
     # 'wann geht der Sonnenuntergang', 'ist es dunkel/hell draußen'.
     # Match both concatenated (Sonnenuntergang) and split ("Sonne unter").
-    r"wann\s+(?:ist|geht|kommt)\s+(?:der\s+|die\s+|das\s+)?sonne(?:n(?:auf|unter)gang)?(?:\s+(?:auf|unter|hoch|runter))?|"
-    r"sonnenaufgang|sonnenuntergang|"
-    r"ist\s+es\s+(?:dunkel|hell)(?:\s+drau(?:ss|ß)en)?|"
-    r"ist\s+die\s+sonne\s+(?:auf|oben|drau(?:ss|ß)en)"
-    r")\b",
+    r"\bwann\s+(?:ist|geht|kommt)\s+(?:der\s+|die\s+|das\s+)?sonne(?:n(?:auf|unter)gang)?(?:\s+(?:auf|unter|hoch|runter))?\b|"
+    r"\bsonnenaufgang\b|\bsonnenuntergang\b|"
+    r"\bist\s+es\s+(?:dunkel|hell)(?:\s+drau(?:ss|ß)en)?\b|"
+    r"\bist\s+die\s+sonne\s+(?:auf|oben|drau(?:ss|ß)en)\b|"
+    # French: 'à quelle heure se couche le soleil',
+    # 'à quelle heure se lève le soleil', 'fait-il nuit dehors',
+    # 'le soleil est-il levé', 'coucher du soleil', 'lever du soleil'.
+    r"\bà\s+quelle\s+heure\s+se\s+(?:couche|l[èe]ve)\s+le\s+soleil\b|"
+    r"\bquand\s+(?:se\s+couche|se\s+l[èe]ve)\s+le\s+soleil\b|"
+    r"\b(?:coucher|lever)\s+(?:du\s+)?soleil\b|"
+    r"\bfait-il\s+(?:nuit|jour)(?:\s+dehors)?\b|"
+    r"\ble\s+soleil\s+(?:est-il\s+)?lev[ée]\b"
+    r")",
     re.IGNORECASE,
 )
 
@@ -407,14 +436,18 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
     next_rising = _fmt(attrs.get("next_rising"))
     is_up = state.state == "above_horizon"
 
-    # Detect language for output localization. Cheap heuristic:
-    # presence of common German function words.
-    is_de = any(w in msg_lower for w in (
+    # Detect language for output localization. Cheap keyword heuristics —
+    # checked in order, first match wins. French keywords are checked
+    # before German because some accents collide ('à').
+    is_fr = any(w in msg_lower for w in (
+        "à quelle heure", "soleil", "fait-il", "lever", "coucher",
+    ))
+    is_de = (not is_fr) and any(w in msg_lower for w in (
         "wann", "sonne", "dunkel", "hell", "drau", "untergang", "aufgang", "ist es",
     ))
     # Boolean is-it-light queries: handle BEFORE sunset/sunrise time
     # questions so 'dark'/'light' don't get mis-routed to next_setting.
-    if (
+    is_boolean = (
         "is it dark" in msg_lower
         or "is it light" in msg_lower
         or "is the sun up" in msg_lower
@@ -422,7 +455,16 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
         or "ist es dunkel" in msg_lower
         or "ist es hell" in msg_lower
         or "ist die sonne" in msg_lower
-    ):
+        or "fait-il nuit" in msg_lower
+        or "fait-il jour" in msg_lower
+        or "le soleil est-il levé" in msg_lower
+        or "le soleil est-il leve" in msg_lower
+    )
+    if is_boolean:
+        if is_fr:
+            if is_up:
+                return f"Le soleil est levé. Coucher du soleil à {next_setting}." if next_setting else "Le soleil est levé."
+            return f"Le soleil est couché. Lever du soleil à {next_rising}." if next_rising else "Le soleil est couché."
         if is_de:
             if is_up:
                 return f"Die Sonne ist oben. Sonnenuntergang ist um {next_setting}." if next_setting else "Die Sonne ist oben."
@@ -431,16 +473,27 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
             return f"The sun is up. Sunset is at {next_setting}." if next_setting else "The sun is up."
         return f"The sun is down. Sunrise is at {next_rising}." if next_rising else "The sun is down."
     # Sunset / sunrise time questions
-    if any(w in msg_lower for w in ("sunset", "untergang", "go down", "set today", "sonne unter")):
+    if any(w in msg_lower for w in ("sunset", "untergang", "go down", "set today",
+                                     "sonne unter", "couche le soleil",
+                                     "coucher du soleil", "se couche")):
         if next_setting:
             _LOGGER.info("AI Plugin shortcut hit: sunset → %s", next_setting)
-            return (f"Sonnenuntergang ist um {next_setting}." if is_de
-                    else f"Sunset is at {next_setting}.")
-    if any(w in msg_lower for w in ("sunrise", "aufgang", "come up", "rise today", "rise tomorrow", "sun rise", "sonne auf")):
+            if is_fr:
+                return f"Le soleil se couche à {next_setting}."
+            if is_de:
+                return f"Sonnenuntergang ist um {next_setting}."
+            return f"Sunset is at {next_setting}."
+    if any(w in msg_lower for w in ("sunrise", "aufgang", "come up", "rise today",
+                                     "rise tomorrow", "sun rise", "sonne auf",
+                                     "lève le soleil", "leve le soleil",
+                                     "lever du soleil", "se lève", "se leve")):
         if next_rising:
             _LOGGER.info("AI Plugin shortcut hit: sunrise → %s", next_rising)
-            return (f"Sonnenaufgang ist um {next_rising}." if is_de
-                    else f"Sunrise is at {next_rising}.")
+            if is_fr:
+                return f"Le soleil se lève à {next_rising}."
+            if is_de:
+                return f"Sonnenaufgang ist um {next_rising}."
+            return f"Sunrise is at {next_rising}."
     # Fallback: full daylight summary
     if next_setting and next_rising:
         return f"Sunrise is at {next_rising}, sunset is at {next_setting}."
@@ -454,14 +507,30 @@ _DE_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_FR_HINT_RE = re.compile(
+    r"\b(?:quelle|quel|fait-il|est-ce|combien|y\s+a-t-il|chambre|salon|cuisine|"
+    r"salle\s+de\s+bain|couloir|humidit[ée]|temp[ée]rature|pression|luminosit[ée]|"
+    r"électricit[ée]|electricite|d'[ée]lectricit[ée]|d'eau|allumées|"
+    r"éteins|allume|baisse|d[ée]hors|dans\s+la|dans\s+le|dans\s+l'|"
+    r"taux\s+d')\b",
+    re.IGNORECASE,
+)
+
 
 def _detect_lang(message: str) -> str:
-    """Return 'de' if message looks German, else 'en'.
+    """Return 'fr' / 'de' / 'en' based on keyword heuristics.
 
-    Used to localize deterministic-shortcut output strings. Heuristic only —
-    when both languages have overlapping keywords, defaults to 'en'.
+    Used to localize deterministic-shortcut output strings. French is
+    checked before German because their accented characters can collide
+    with German vowel mutations in some encodings. Defaults to 'en' when
+    neither matches.
     """
-    return "de" if _DE_HINT_RE.search(message or "") else "en"
+    msg = message or ""
+    if _FR_HINT_RE.search(msg):
+        return "fr"
+    if _DE_HINT_RE.search(msg):
+        return "de"
+    return "en"
 
 
 def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
@@ -504,6 +573,7 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
 
     lang = _detect_lang(message)
     de_label = _DE_LABEL.get(spec["label"], spec["label"])
+    fr_label = _FR_LABEL.get(spec["label"], spec["label"])
 
     # For light brightness we target the brightest-on light, else any.
     if attr_key == "brightness":
@@ -547,6 +617,8 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
             )
             if lang == "de":
                 return f"Die {de_label} ist {_round_numeric(val)}{unit}."
+            if lang == "fr":
+                return f"La {fr_label} est de {_round_numeric(val)}{unit}."
             return f"The {spec['label']} is {_round_numeric(val)}{unit}."
 
     # Humidity fallback: same pattern, climate.* current_humidity.
@@ -560,6 +632,8 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
             )
             if lang == "de":
                 return f"Die {de_label} ist {_round_numeric(val)}%."
+            if lang == "fr":
+                return f"La {fr_label} est de {_round_numeric(val)}%."
             return f"The {spec['label']} is {_round_numeric(val)}%."
 
     return None
