@@ -210,6 +210,24 @@ def _entities_in_area(hass: HomeAssistant, area_id: str) -> list[Any]:
     return results
 
 
+def _round_numeric(val: Any, decimals: int = 1) -> Any:
+    """Round to N decimals if value is a float-parseable number; else return as-is.
+
+    Avoids speech artefacts like '25.0617828369141°C' from raw sensor floats.
+    Integers stay integer-shaped ('42' not '42.0'). Strings that don't parse
+    as numbers pass through unchanged ('on', 'open', etc).
+    """
+    if val is None:
+        return val
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return val
+    if f == int(f):
+        return int(f)
+    return round(f, decimals)
+
+
 def _format_state(state_obj: Any, spec: dict) -> str | None:
     """Render a state object into a short speech string per spec."""
     if state_obj is None:
@@ -226,14 +244,14 @@ def _format_state(state_obj: Any, spec: dict) -> str | None:
                 pct = round(int(val) / 255 * 100)
                 return f"The {label} is {pct}%."
             except Exception:  # noqa: BLE001
-                return f"The {label} is {val}."
-        return f"The {label} is {val}."
+                return f"The {label} is {_round_numeric(val)}."
+        return f"The {label} is {_round_numeric(val)}."
     # state-based (sensors)
     raw = state_obj.state
     if raw in (None, "", "unknown", "unavailable", "none"):
         return None
     unit = state_obj.attributes.get("unit_of_measurement") or spec.get("unit_fallback") or ""
-    return f"The {label} is {raw}{unit}."
+    return f"The {label} is {_round_numeric(raw)}{unit}."
 
 
 def _pick_best_sensor(entities: list[Any], hass: HomeAssistant, spec: dict) -> Any | None:
@@ -365,7 +383,7 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
                 "AI Plugin shortcut hit: temperature in %s → %s (climate fallback)",
                 area.name, state.entity_id,
             )
-            return f"The {spec['label']} is {val}{unit}."
+            return f"The {spec['label']} is {_round_numeric(val)}{unit}."
 
     return None
 
