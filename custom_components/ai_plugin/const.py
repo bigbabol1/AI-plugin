@@ -120,7 +120,6 @@ ERROR_INVALID_API_KEY = "invalid_api_key"
 ERROR_MODEL_REQUIRED = "model_required"
 ERROR_INVALID_URL = "invalid_url"
 ERROR_SEARXNG_UNREACHABLE = "searxng_unreachable"
-ERROR_TOO_MANY_TRIGGER_LANGUAGES = "too_many_trigger_languages"
 
 # System prompts
 SYSTEM_PROMPT_DEFAULT = (

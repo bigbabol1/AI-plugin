@@ -62,7 +62,6 @@ from .const import (
     CONF_TAVILY_API_KEY,
     CONF_TEMPERATURE,
     CONF_TOP_P,
-    CONF_TRIGGER_LANGUAGES,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
@@ -83,10 +82,7 @@ from .const import (
     ERROR_INVALID_URL,
     ERROR_MODEL_REQUIRED,
     ERROR_SEARXNG_UNREACHABLE,
-    ERROR_TOO_MANY_TRIGGER_LANGUAGES,
     PROVIDER_OPENAI_COMPAT,
-    SUPPORTED_TRIGGER_LANGUAGES,
-    default_trigger_langs,
 )
 from .exceptions import CannotConnect
 from .providers.openai_compat import async_fetch_models
@@ -215,24 +211,6 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
                 default=current.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING),
             ): selector.BooleanSelector(),
             vol.Optional(
-                CONF_TRIGGER_LANGUAGES,
-                default=current.get(
-                    CONF_TRIGGER_LANGUAGES, default_trigger_langs(hass)
-                ),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": "de", "label": "Deutsch"},
-                        {"value": "fr", "label": "Français"},
-                        {"value": "es", "label": "Español"},
-                        {"value": "pt", "label": "Português"},
-                        {"value": "pl", "label": "Polski"},
-                    ],
-                    multiple=True,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
                 CONF_MAX_TOOL_ITERATIONS,
                 default=current.get(CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS),
             ): selector.NumberSelector(
@@ -307,14 +285,9 @@ def _validate_advanced_input(user_input: dict[str, Any]) -> dict[str, str]:
     """Per-field validation for the advanced step.
 
     Returns a dict suitable for the ``errors`` arg of ``async_show_form``;
-    empty when input is acceptable. Keep this in sync with the schema in
-    ``_advanced_schema`` — currently the only check is that the user did
-    not pick more than two trigger languages.
+    empty when input is acceptable.
     """
     errors: dict[str, str] = {}
-    trig = user_input.get(CONF_TRIGGER_LANGUAGES)
-    if isinstance(trig, list) and len(trig) > 2:
-        errors[CONF_TRIGGER_LANGUAGES] = ERROR_TOO_MANY_TRIGGER_LANGUAGES
     return errors
 
 
