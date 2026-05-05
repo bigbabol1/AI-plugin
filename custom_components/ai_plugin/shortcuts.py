@@ -309,6 +309,105 @@ def _pick_climate_temperature(entities: list[Any], hass: HomeAssistant) -> tuple
     return None
 
 
+def _pick_climate_humidity(entities: list[Any], hass: HomeAssistant) -> tuple[Any, Any] | None:
+    """Fallback for humidity queries: read current_humidity from climate.* in area.
+
+    Mirrors _pick_climate_temperature for rooms whose thermostat exposes
+    current_humidity but where no dedicated humidity sensor is exposed
+    to the conversation assistant.
+    """
+    for entry in entities:
+        if not entry.entity_id.startswith("climate."):
+            continue
+        state = hass.states.get(entry.entity_id)
+        if state is None:
+            continue
+        val = state.attributes.get("current_humidity")
+        if val in (None, "", "unknown", "unavailable"):
+            continue
+        return state, val
+    return None
+
+
+_SUN_RE = re.compile(
+    r"\b(?:"
+    r"when\s+(?:is|does)\s+(?:the\s+)?sun(?:set|rise)?(?:\s+today|\s+tomorrow)?|"
+    r"when\s+does\s+(?:the\s+)?sun\s+(?:set|rise|come\s+up|go\s+down)|"
+    r"when\s+does\s+it\s+get\s+dark|"
+    r"is\s+it\s+(?:dark|light)\s+outside|"
+    r"is\s+the\s+sun\s+(?:up|out)|"
+    r"sunrise|sunset|"
+    r"wann\s+(?:ist|geht)\s+(?:der\s+)?sonne(?:n(?:auf|unter)gang)?|"
+    r"sonnenaufgang|sonnenuntergang"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
+    """Deterministic reply for sun/daylight questions.
+
+    Reads sun.sun entity directly. Bypasses the LLM which often refuses
+    with 'no real-time access' even when the entity is available.
+    """
+    if not _SUN_RE.search(message):
+        return None
+    state = hass.states.get("sun.sun")
+    if state is None:
+        return None
+    msg_lower = message.lower()
+    attrs = state.attributes or {}
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz_name = (getattr(hass.config, "time_zone", None) or "").strip()
+        tz = ZoneInfo(tz_name) if tz_name else None
+    except Exception:  # noqa: BLE001
+        tz = None
+
+    def _fmt(iso: str | None) -> str | None:
+        if not iso:
+            return None
+        try:
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            if tz is not None:
+                dt = dt.astimezone(tz)
+            return dt.strftime("%H:%M")
+        except Exception:  # noqa: BLE001
+            return None
+
+    next_setting = _fmt(attrs.get("next_setting"))
+    next_rising = _fmt(attrs.get("next_rising"))
+    is_up = state.state == "above_horizon"
+
+    # Boolean is-it-light queries: handle BEFORE sunset/sunrise time
+    # questions so 'dark'/'light' don't get mis-routed to next_setting.
+    if (
+        "is it dark" in msg_lower
+        or "is it light" in msg_lower
+        or "is the sun up" in msg_lower
+        or "is the sun out" in msg_lower
+        or "ist es dunkel" in msg_lower
+        or "ist es hell" in msg_lower
+    ):
+        if is_up:
+            return f"The sun is up. Sunset is at {next_setting}." if next_setting else "The sun is up."
+        return f"The sun is down. Sunrise is at {next_rising}." if next_rising else "The sun is down."
+    # Sunset / sunrise time questions
+    if any(w in msg_lower for w in ("sunset", "untergang", "go down", "set today")):
+        if next_setting:
+            _LOGGER.info("AI Plugin shortcut hit: sunset → %s", next_setting)
+            return f"Sunset is at {next_setting}."
+    if any(w in msg_lower for w in ("sunrise", "aufgang", "come up", "rise today", "rise tomorrow", "sun rise")):
+        if next_rising:
+            _LOGGER.info("AI Plugin shortcut hit: sunrise → %s", next_rising)
+            return f"Sunrise is at {next_rising}."
+    # Fallback: full daylight summary
+    if next_setting and next_rising:
+        return f"Sunrise is at {next_rising}, sunset is at {next_setting}."
+    return None
+
+
 def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
     """Return a deterministic reply for supported patterns, else None.
 
@@ -323,6 +422,10 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
     """
     if not message or not hass:
         return None
+
+    sun_reply = _try_sun_shortcut(hass, message)
+    if sun_reply:
+        return sun_reply
 
     attr_key = _detect_attribute(message)
     if attr_key is None:
@@ -384,6 +487,17 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
                 area.name, state.entity_id,
             )
             return f"The {spec['label']} is {_round_numeric(val)}{unit}."
+
+    # Humidity fallback: same pattern, climate.* current_humidity.
+    if attr_key == "humidity":
+        fallback = _pick_climate_humidity(entities, hass)
+        if fallback:
+            state, val = fallback
+            _LOGGER.info(
+                "AI Plugin shortcut hit: humidity in %s → %s (climate fallback)",
+                area.name, state.entity_id,
+            )
+            return f"The {spec['label']} is {_round_numeric(val)}%."
 
     return None
 

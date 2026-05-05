@@ -90,6 +90,9 @@ _NARRATION_PATTERNS = [
     # "I'm checking the humidity in the bedroom."
     # "I'm checking the air pressure outside for you."
     r"^\s*I'?(?:m|\s+am)\s+(?:checking|looking|finding|searching|querying|fetching|getting)[^\n]*$",
+    # "I'll turn off Gustav and tell you the time." — future-tense action narration
+    # WITHOUT actually having done it. Includes 'tell|give|let'.
+    r"^\s*I'?ll\s+(?:turn|switch|set|dim|adjust|play|pause|skip|stop|start|cancel|tell|give|let|find|fetch|get|search|look|check)[^\n]*$",
 ]
 _NARRATION_RE = re.compile("|".join(_NARRATION_PATTERNS), re.MULTILINE | re.IGNORECASE)
 
