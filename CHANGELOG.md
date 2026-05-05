@@ -4,6 +4,20 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.0 — Data-driven multilingual support
+
+**Breaking:**
+- `trigger_languages` config option removed. Language now follows the HA Assist pipeline (`Buddy (DE)`, `Buddy (FR)`, etc.).
+
+**New:**
+- All per-language data lives in `custom_components/ai_plugin/i18n/<code>.yaml` files. Adding a new language is a YAML PR — no Python changes.
+- Schema-validated at load time; bad YAML fails the integration cleanly.
+- 6 languages shipped: en, de, fr, es, pt, pl. Contributors can add more via PR — see `i18n/CONTRIBUTING.md`.
+
+**Changed:**
+- Per-language hint blocks dropped from the system prompt (~80–160 tokens saved per request).
+- Sun shortcut, narration regex, attribute-in-area shortcut now language-symmetric — every supported language uses the same code paths and templates.
+
 ## [0.6.5] - 2026-04-28
 
 ### Changed
