@@ -130,3 +130,19 @@ def test_de_template_format():
 
 def test_fr_template_format():
     assert L.template("sun_set_at", "fr", time="20:39") == "Le soleil se couche à 20:39."
+
+
+def test_all_five_languages_plus_english_load():
+    expected = {"en", "de", "fr", "es", "pt", "pl"}
+    assert expected.issubset(set(LOCALIZATIONS.keys()))
+
+
+@pytest.mark.parametrize("lang", ["de", "fr", "es", "pt", "pl"])
+def test_each_lang_has_temperature_label(lang: str):
+    assert "temperature" in LOCALIZATIONS[lang].labels
+
+
+@pytest.mark.parametrize("lang", ["de", "fr", "es", "pt", "pl"])
+def test_each_lang_compiles_sun_set_keyword(lang: str):
+    pat = LOCALIZATIONS[lang].keyword_re["sun_set"]
+    assert pat is not None

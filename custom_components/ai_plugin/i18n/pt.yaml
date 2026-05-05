@@ -1,0 +1,37 @@
+meta:
+  code: "pt"
+  name: "Português"
+  contributors: []
+
+labels:
+  temperature: "temperatura"
+  humidity: "humidade"
+  co2: "CO₂"
+  illuminance: "iluminação"
+  pressure: "pressão"
+  power: "potência"
+  energy: "consumo"
+  battery: "bateria"
+  brightness: "brilho"
+
+templates:
+  attr_state:        "A {label} é {val}{unit}."
+  attr_pct:          "A {label} está em {val}%."
+  attr_humidity_fb:  "A {label} é {val}%."
+  sun_set_at:        "O sol põe-se às {time}."
+  sun_rise_at:       "O sol nasce às {time}."
+  sun_is_up:         "O sol está alto. Põe-se às {time}."
+  sun_is_down:       "O sol está baixo. Nasce às {time}."
+  fallback_no_sensor: "Não tenho um sensor de {label} em {area}."
+
+keywords:
+  sun_set:       ["pôr do sol", "quando se põe o sol", "a que horas se põe o sol"]
+  sun_rise:      ["nascer do sol", "quando nasce o sol", "a que horas nasce o sol"]
+  sun_dark:      ["está escuro", "está claro"]
+  sun_is_up:     ["o sol está alto"]
+  narration:     ["estou a verificar", "estou a procurar", "estou a olhar", "vou verificar", "vou procurar"]
+  area_prefixes: ["na", "no", "em a", "em"]
+
+patterns:
+  narration_full: []
+  sun_full:       []
