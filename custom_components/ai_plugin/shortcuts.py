@@ -32,6 +32,8 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
+from .i18n import L
+
 try:
     from homeassistant.components.homeassistant.exposed_entities import (
         async_should_expose,
@@ -372,47 +374,32 @@ def _pick_climate_humidity(entities: list[Any], hass: HomeAssistant) -> tuple[An
     return None
 
 
-_SUN_RE = re.compile(
-    r"(?:"
-    r"\bwhen\s+(?:is|does)\s+(?:the\s+)?sun(?:set|rise)?(?:\s+today|\s+tomorrow)?\b|"
-    r"\bwhen\s+does\s+(?:the\s+)?sun\s+(?:set|rise|come\s+up|go\s+down)\b|"
-    r"\bwhen\s+does\s+it\s+get\s+dark\b|"
-    r"\bis\s+it\s+(?:dark|light)\s+outside\b|"
-    r"\bis\s+the\s+sun\s+(?:up|out)\b|"
-    r"\bsunrise\b|\bsunset\b|"
-    # German: 'wann geht die Sonne unter', 'wann ist Sonnenaufgang',
-    # 'wann geht der Sonnenuntergang', 'ist es dunkel/hell draußen'.
-    # Match both concatenated (Sonnenuntergang) and split ("Sonne unter").
-    r"\bwann\s+(?:ist|geht|kommt)\s+(?:der\s+|die\s+|das\s+)?sonne(?:n(?:auf|unter)gang)?(?:\s+(?:auf|unter|hoch|runter))?\b|"
-    r"\bsonnenaufgang\b|\bsonnenuntergang\b|"
-    r"\bist\s+es\s+(?:dunkel|hell)(?:\s+drau(?:ss|ß)en)?\b|"
-    r"\bist\s+die\s+sonne\s+(?:auf|oben|drau(?:ss|ß)en)\b|"
-    # French: 'à quelle heure se couche le soleil',
-    # 'à quelle heure se lève le soleil', 'fait-il nuit dehors',
-    # 'le soleil est-il levé', 'coucher du soleil', 'lever du soleil'.
-    r"\bà\s+quelle\s+heure\s+se\s+(?:couche|l[èe]ve)\s+le\s+soleil\b|"
-    r"\bquand\s+(?:se\s+couche|se\s+l[èe]ve)\s+le\s+soleil\b|"
-    r"\b(?:coucher|lever)\s+(?:du\s+)?soleil\b|"
-    r"\bfait-il\s+(?:nuit|jour)(?:\s+dehors)?\b|"
-    r"\ble\s+soleil\s+(?:est-il\s+)?lev[ée]\b"
-    r")",
-    re.IGNORECASE,
-)
+def _try_sun_shortcut(hass: HomeAssistant, message: str, lang: str = "en") -> str | None:
+    """Deterministic reply for sun/daylight questions, in the user's language.
 
-
-def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
-    """Deterministic reply for sun/daylight questions.
-
-    Reads sun.sun entity directly. Bypasses the LLM which often refuses
-    with 'no real-time access' even when the entity is available.
+    Reads ``sun.sun`` directly. Bypasses the LLM which often refuses these
+    queries. ``lang`` selects the keyword regex set and the response
+    template; English is the universal fallback.
     """
-    if not _SUN_RE.search(message):
+    msg_lower = (message or "").lower()
+    sun_set_re = L.keyword_re("sun_set", lang)
+    sun_rise_re = L.keyword_re("sun_rise", lang)
+    sun_dark_re = L.keyword_re("sun_dark", lang)
+    sun_is_up_re = L.keyword_re("sun_is_up", lang)
+
+    matched = (
+        (sun_set_re and sun_set_re.search(msg_lower))
+        or (sun_rise_re and sun_rise_re.search(msg_lower))
+        or (sun_dark_re and sun_dark_re.search(msg_lower))
+        or (sun_is_up_re and sun_is_up_re.search(msg_lower))
+    )
+    if not matched:
         return None
+
     state = hass.states.get("sun.sun")
     if state is None:
         return None
-    msg_lower = message.lower()
-    attrs = state.attributes or {}
+
     try:
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -432,71 +419,28 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
         except Exception:  # noqa: BLE001
             return None
 
+    attrs = state.attributes or {}
     next_setting = _fmt(attrs.get("next_setting"))
     next_rising = _fmt(attrs.get("next_rising"))
     is_up = state.state == "above_horizon"
 
-    # Detect language for output localization. Cheap keyword heuristics —
-    # checked in order, first match wins. French keywords are checked
-    # before German because some accents collide ('à').
-    is_fr = any(w in msg_lower for w in (
-        "à quelle heure", "soleil", "fait-il", "lever", "coucher",
-    ))
-    is_de = (not is_fr) and any(w in msg_lower for w in (
-        "wann", "sonne", "dunkel", "hell", "drau", "untergang", "aufgang", "ist es",
-    ))
-    # Boolean is-it-light queries: handle BEFORE sunset/sunrise time
-    # questions so 'dark'/'light' don't get mis-routed to next_setting.
-    is_boolean = (
-        "is it dark" in msg_lower
-        or "is it light" in msg_lower
-        or "is the sun up" in msg_lower
-        or "is the sun out" in msg_lower
-        or "ist es dunkel" in msg_lower
-        or "ist es hell" in msg_lower
-        or "ist die sonne" in msg_lower
-        or "fait-il nuit" in msg_lower
-        or "fait-il jour" in msg_lower
-        or "le soleil est-il levé" in msg_lower
-        or "le soleil est-il leve" in msg_lower
-    )
-    if is_boolean:
-        if is_fr:
-            if is_up:
-                return f"Le soleil est levé. Coucher du soleil à {next_setting}." if next_setting else "Le soleil est levé."
-            return f"Le soleil est couché. Lever du soleil à {next_rising}." if next_rising else "Le soleil est couché."
-        if is_de:
-            if is_up:
-                return f"Die Sonne ist oben. Sonnenuntergang ist um {next_setting}." if next_setting else "Die Sonne ist oben."
-            return f"Die Sonne ist unten. Sonnenaufgang ist um {next_rising}." if next_rising else "Die Sonne ist unten."
-        if is_up:
-            return f"The sun is up. Sunset is at {next_setting}." if next_setting else "The sun is up."
-        return f"The sun is down. Sunrise is at {next_rising}." if next_rising else "The sun is down."
-    # Sunset / sunrise time questions
-    if any(w in msg_lower for w in ("sunset", "untergang", "go down", "set today",
-                                     "sonne unter", "couche le soleil",
-                                     "coucher du soleil", "se couche")):
-        if next_setting:
-            _LOGGER.info("AI Plugin shortcut hit: sunset → %s", next_setting)
-            if is_fr:
-                return f"Le soleil se couche à {next_setting}."
-            if is_de:
-                return f"Sonnenuntergang ist um {next_setting}."
-            return f"Sunset is at {next_setting}."
-    if any(w in msg_lower for w in ("sunrise", "aufgang", "come up", "rise today",
-                                     "rise tomorrow", "sun rise", "sonne auf",
-                                     "lève le soleil", "leve le soleil",
-                                     "lever du soleil", "se lève", "se leve")):
-        if next_rising:
-            _LOGGER.info("AI Plugin shortcut hit: sunrise → %s", next_rising)
-            if is_fr:
-                return f"Le soleil se lève à {next_rising}."
-            if is_de:
-                return f"Sonnenaufgang ist um {next_rising}."
-            return f"Sunrise is at {next_rising}."
-    # Fallback: full daylight summary
-    if next_setting and next_rising:
-        return f"Sunrise is at {next_rising}, sunset is at {next_setting}."
+    # Boolean queries first so 'dark' / 'fait-il nuit' don't shadow the
+    # sunset time branch.
+    if (sun_dark_re and sun_dark_re.search(msg_lower)) or (
+        sun_is_up_re and sun_is_up_re.search(msg_lower)
+    ):
+        if is_up and next_setting:
+            return L.template("sun_is_up", lang, time=next_setting)
+        if not is_up and next_rising:
+            return L.template("sun_is_down", lang, time=next_rising)
+
+    if sun_set_re and sun_set_re.search(msg_lower) and next_setting:
+        _LOGGER.info("AI Plugin shortcut hit: sunset → %s (lang=%s)", next_setting, lang)
+        return L.template("sun_set_at", lang, time=next_setting)
+    if sun_rise_re and sun_rise_re.search(msg_lower) and next_rising:
+        _LOGGER.info("AI Plugin shortcut hit: sunrise → %s (lang=%s)", next_rising, lang)
+        return L.template("sun_rise_at", lang, time=next_rising)
+
     return None
 
 
@@ -533,7 +477,7 @@ def _detect_lang(message: str) -> str:
     return "en"
 
 
-def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
+def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str | None:
     """Return a deterministic reply for supported patterns, else None.
 
     Entry point used by the orchestrator before falling through to the
@@ -548,7 +492,7 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
     if not message or not hass:
         return None
 
-    sun_reply = _try_sun_shortcut(hass, message)
+    sun_reply = _try_sun_shortcut(hass, message, lang)
     if sun_reply:
         return sun_reply
 

@@ -46,3 +46,15 @@ def test_keyword_re_word_boundary_no_substring_match():
 
 def test_pattern_list_empty_for_unset_key():
     assert L.pattern_list("narration_full", "en") == []
+
+
+def test_sun_keyword_re_matches_de_phrase():
+    pat = L.keyword_re("sun_set", "de")
+    assert pat is not None
+    assert pat.search("wann geht die sonne unter") is not None
+
+
+def test_sun_keyword_re_matches_fr_phrase():
+    pat = L.keyword_re("sun_set", "fr")
+    assert pat is not None
+    assert pat.search("à quelle heure se couche le soleil") is not None
