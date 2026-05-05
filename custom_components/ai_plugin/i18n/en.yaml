@@ -1,0 +1,37 @@
+meta:
+  code: "en"
+  name: "English"
+  contributors: []
+
+labels:
+  temperature: "temperature"
+  humidity: "humidity"
+  co2: "CO₂"
+  illuminance: "illuminance"
+  pressure: "pressure"
+  power: "power"
+  energy: "energy"
+  battery: "battery"
+  brightness: "brightness"
+
+templates:
+  attr_state:        "The {label} is {val}{unit}."
+  attr_pct:          "The {label} is {val}%."
+  attr_humidity_fb:  "The {label} is {val}%."
+  sun_set_at:        "Sunset is at {time}."
+  sun_rise_at:       "Sunrise is at {time}."
+  sun_is_up:         "The sun is up. Sunset is at {time}."
+  sun_is_down:       "The sun is down. Sunrise is at {time}."
+  fallback_no_sensor: "I don't have a {label} sensor in {area}."
+
+keywords:
+  sun_set:       ["when is sunset", "sunset", "when does the sun set", "when does the sun go down", "when does it get dark"]
+  sun_rise:      ["when is sunrise", "sunrise", "when does the sun rise", "when does the sun come up"]
+  sun_dark:      ["is it dark outside", "is it light outside"]
+  sun_is_up:     ["is the sun up", "is the sun out"]
+  narration:     ["i'm checking", "i am checking", "i'm looking", "i'm finding", "i'm searching"]
+  area_prefixes: ["in the", "in"]
+
+patterns:
+  narration_full: []
+  sun_full:       []
