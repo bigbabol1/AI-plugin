@@ -93,6 +93,11 @@ _NARRATION_PATTERNS = [
     # "I'll turn off Gustav and tell you the time." — future-tense action narration
     # WITHOUT actually having done it. Includes 'tell|give|let'.
     r"^\s*I'?ll\s+(?:turn|switch|set|dim|adjust|play|pause|skip|stop|start|cancel|tell|give|let|find|fetch|get|search|look|check)[^\n]*$",
+    # German narration: "Ich prüfe ...", "Ich überprüfe ...", "Ich suche ...",
+    # "Ich schaue ..." — same pattern as English "I'm checking" but in DE.
+    # Stops at line end. Restricted to verbs that are tool-call narration in
+    # German voice-assistant contexts.
+    r"^\s*Ich\s+(?:prüfe|überprüfe|checke|suche\s+nach|schaue|sehe\s+nach|frage)[^\n]*$",
 ]
 _NARRATION_RE = re.compile("|".join(_NARRATION_PATTERNS), re.MULTILINE | re.IGNORECASE)
 

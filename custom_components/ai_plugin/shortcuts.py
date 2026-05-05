@@ -228,11 +228,25 @@ def _round_numeric(val: Any, decimals: int = 1) -> Any:
     return round(f, decimals)
 
 
-def _format_state(state_obj: Any, spec: dict) -> str | None:
+_DE_LABEL = {
+    "temperature": "Temperatur",
+    "humidity": "Luftfeuchtigkeit",
+    "co2": "CO₂",
+    "illuminance": "Helligkeit",
+    "pressure": "Luftdruck",
+    "power": "Leistung",
+    "energy": "Energieverbrauch",
+    "battery": "Batterieladung",
+    "brightness": "Helligkeit",
+}
+
+
+def _format_state(state_obj: Any, spec: dict, lang: str = "en") -> str | None:
     """Render a state object into a short speech string per spec."""
     if state_obj is None:
         return None
     label = spec["label"]
+    de_label = _DE_LABEL.get(label, label)
     transform = spec.get("transform")
     if "attribute" in spec:
         attr_key = spec["attribute"]
@@ -242,15 +256,23 @@ def _format_state(state_obj: Any, spec: dict) -> str | None:
         if transform == "brightness_pct":
             try:
                 pct = round(int(val) / 255 * 100)
+                if lang == "de":
+                    return f"Die {de_label} liegt bei {pct}%."
                 return f"The {label} is {pct}%."
             except Exception:  # noqa: BLE001
+                if lang == "de":
+                    return f"Die {de_label} ist {_round_numeric(val)}."
                 return f"The {label} is {_round_numeric(val)}."
+        if lang == "de":
+            return f"Die {de_label} ist {_round_numeric(val)}."
         return f"The {label} is {_round_numeric(val)}."
     # state-based (sensors)
     raw = state_obj.state
     if raw in (None, "", "unknown", "unavailable", "none"):
         return None
     unit = state_obj.attributes.get("unit_of_measurement") or spec.get("unit_fallback") or ""
+    if lang == "de":
+        return f"Die {de_label} ist {_round_numeric(raw)}{unit}."
     return f"The {label} is {_round_numeric(raw)}{unit}."
 
 
@@ -337,8 +359,13 @@ _SUN_RE = re.compile(
     r"is\s+it\s+(?:dark|light)\s+outside|"
     r"is\s+the\s+sun\s+(?:up|out)|"
     r"sunrise|sunset|"
-    r"wann\s+(?:ist|geht)\s+(?:der\s+)?sonne(?:n(?:auf|unter)gang)?|"
-    r"sonnenaufgang|sonnenuntergang"
+    # German: 'wann geht die Sonne unter', 'wann ist Sonnenaufgang',
+    # 'wann geht der Sonnenuntergang', 'ist es dunkel/hell draußen'.
+    # Match both concatenated (Sonnenuntergang) and split ("Sonne unter").
+    r"wann\s+(?:ist|geht|kommt)\s+(?:der\s+|die\s+|das\s+)?sonne(?:n(?:auf|unter)gang)?(?:\s+(?:auf|unter|hoch|runter))?|"
+    r"sonnenaufgang|sonnenuntergang|"
+    r"ist\s+es\s+(?:dunkel|hell)(?:\s+drau(?:ss|ß)en)?|"
+    r"ist\s+die\s+sonne\s+(?:auf|oben|drau(?:ss|ß)en)"
     r")\b",
     re.IGNORECASE,
 )
@@ -380,6 +407,11 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
     next_rising = _fmt(attrs.get("next_rising"))
     is_up = state.state == "above_horizon"
 
+    # Detect language for output localization. Cheap heuristic:
+    # presence of common German function words.
+    is_de = any(w in msg_lower for w in (
+        "wann", "sonne", "dunkel", "hell", "drau", "untergang", "aufgang", "ist es",
+    ))
     # Boolean is-it-light queries: handle BEFORE sunset/sunrise time
     # questions so 'dark'/'light' don't get mis-routed to next_setting.
     if (
@@ -389,23 +421,47 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str) -> str | None:
         or "is the sun out" in msg_lower
         or "ist es dunkel" in msg_lower
         or "ist es hell" in msg_lower
+        or "ist die sonne" in msg_lower
     ):
+        if is_de:
+            if is_up:
+                return f"Die Sonne ist oben. Sonnenuntergang ist um {next_setting}." if next_setting else "Die Sonne ist oben."
+            return f"Die Sonne ist unten. Sonnenaufgang ist um {next_rising}." if next_rising else "Die Sonne ist unten."
         if is_up:
             return f"The sun is up. Sunset is at {next_setting}." if next_setting else "The sun is up."
         return f"The sun is down. Sunrise is at {next_rising}." if next_rising else "The sun is down."
     # Sunset / sunrise time questions
-    if any(w in msg_lower for w in ("sunset", "untergang", "go down", "set today")):
+    if any(w in msg_lower for w in ("sunset", "untergang", "go down", "set today", "sonne unter")):
         if next_setting:
             _LOGGER.info("AI Plugin shortcut hit: sunset → %s", next_setting)
-            return f"Sunset is at {next_setting}."
-    if any(w in msg_lower for w in ("sunrise", "aufgang", "come up", "rise today", "rise tomorrow", "sun rise")):
+            return (f"Sonnenuntergang ist um {next_setting}." if is_de
+                    else f"Sunset is at {next_setting}.")
+    if any(w in msg_lower for w in ("sunrise", "aufgang", "come up", "rise today", "rise tomorrow", "sun rise", "sonne auf")):
         if next_rising:
             _LOGGER.info("AI Plugin shortcut hit: sunrise → %s", next_rising)
-            return f"Sunrise is at {next_rising}."
+            return (f"Sonnenaufgang ist um {next_rising}." if is_de
+                    else f"Sunrise is at {next_rising}.")
     # Fallback: full daylight summary
     if next_setting and next_rising:
         return f"Sunrise is at {next_rising}, sunset is at {next_setting}."
     return None
+
+
+_DE_HINT_RE = re.compile(
+    r"\b(?:wie|ist|im|der|die|das|wieviel|luftfeucht|temperatur|luftdruck|"
+    r"stromverbrauch|schlafzimmer|wohnzimmer|küche|kueche|badezimmer|flur|"
+    r"hobbyraum|warm|kalt|feucht|hell|dunkel|wieso|wann)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_lang(message: str) -> str:
+    """Return 'de' if message looks German, else 'en'.
+
+    Used to localize deterministic-shortcut output strings. Heuristic only —
+    when both languages have overlapping keywords, defaults to 'en'.
+    """
+    return "de" if _DE_HINT_RE.search(message or "") else "en"
 
 
 def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
@@ -446,6 +502,9 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
     if not entities:
         return None
 
+    lang = _detect_lang(message)
+    de_label = _DE_LABEL.get(spec["label"], spec["label"])
+
     # For light brightness we target the brightest-on light, else any.
     if attr_key == "brightness":
         best = None
@@ -458,7 +517,7 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
                 break
         if best is None:
             return None
-        reply = _format_state(best, spec)
+        reply = _format_state(best, spec, lang=lang)
         if reply:
             _LOGGER.info(
                 "AI Plugin shortcut hit: %s in %s → %s", attr_key, area.name, best.entity_id
@@ -468,7 +527,7 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
 
     best = _pick_best_sensor(entities, hass, spec)
     if best is not None:
-        reply = _format_state(best, spec)
+        reply = _format_state(best, spec, lang=lang)
         if reply:
             _LOGGER.info(
                 "AI Plugin shortcut hit: %s in %s → %s", attr_key, area.name, best.entity_id
@@ -486,6 +545,8 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
                 "AI Plugin shortcut hit: temperature in %s → %s (climate fallback)",
                 area.name, state.entity_id,
             )
+            if lang == "de":
+                return f"Die {de_label} ist {_round_numeric(val)}{unit}."
             return f"The {spec['label']} is {_round_numeric(val)}{unit}."
 
     # Humidity fallback: same pattern, climate.* current_humidity.
@@ -497,6 +558,8 @@ def try_shortcut(hass: HomeAssistant, message: str) -> str | None:
                 "AI Plugin shortcut hit: humidity in %s → %s (climate fallback)",
                 area.name, state.entity_id,
             )
+            if lang == "de":
+                return f"Die {de_label} ist {_round_numeric(val)}%."
             return f"The {spec['label']} is {_round_numeric(val)}%."
 
     return None
