@@ -1,0 +1,37 @@
+meta:
+  code: "de"
+  name: "Deutsch"
+  contributors: []
+
+labels:
+  temperature: "Temperatur"
+  humidity: "Luftfeuchtigkeit"
+  co2: "CO₂"
+  illuminance: "Helligkeit"
+  pressure: "Luftdruck"
+  power: "Leistung"
+  energy: "Energieverbrauch"
+  battery: "Batterieladung"
+  brightness: "Helligkeit"
+
+templates:
+  attr_state:        "Die {label} ist {val}{unit}."
+  attr_pct:          "Die {label} liegt bei {val}%."
+  attr_humidity_fb:  "Die {label} ist {val}%."
+  sun_set_at:        "Sonnenuntergang ist um {time}."
+  sun_rise_at:       "Sonnenaufgang ist um {time}."
+  sun_is_up:         "Die Sonne ist oben. Sonnenuntergang ist um {time}."
+  sun_is_down:       "Die Sonne ist unten. Sonnenaufgang ist um {time}."
+  fallback_no_sensor: "Ich habe keinen {label}-Sensor in {area}."
+
+keywords:
+  sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]
+  sun_rise:      ["sonnenaufgang", "wann geht die sonne auf", "wann ist sonnenaufgang"]
+  sun_dark:      ["ist es dunkel", "ist es hell"]
+  sun_is_up:     ["ist die sonne oben", "ist die sonne auf"]
+  narration:     ["ich prüfe", "ich überprüfe", "ich checke", "ich suche nach", "ich schaue", "ich sehe nach", "ich frage"]
+  area_prefixes: ["im", "in der", "in dem", "in"]
+
+patterns:
+  narration_full: []
+  sun_full:       []

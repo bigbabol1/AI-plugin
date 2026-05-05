@@ -1,0 +1,37 @@
+meta:
+  code: "fr"
+  name: "Français"
+  contributors: []
+
+labels:
+  temperature: "température"
+  humidity: "humidité"
+  co2: "CO₂"
+  illuminance: "luminosité"
+  pressure: "pression"
+  power: "puissance"
+  energy: "consommation"
+  battery: "batterie"
+  brightness: "luminosité"
+
+templates:
+  attr_state:        "La {label} est de {val}{unit}."
+  attr_pct:          "La {label} est à {val}%."
+  attr_humidity_fb:  "La {label} est de {val}%."
+  sun_set_at:        "Le soleil se couche à {time}."
+  sun_rise_at:       "Le soleil se lève à {time}."
+  sun_is_up:         "Le soleil est levé. Coucher du soleil à {time}."
+  sun_is_down:       "Le soleil est couché. Lever du soleil à {time}."
+  fallback_no_sensor: "Je n'ai pas de capteur de {label} dans {area}."
+
+keywords:
+  sun_set:       ["coucher du soleil", "se couche le soleil", "à quelle heure se couche le soleil"]
+  sun_rise:      ["lever du soleil", "se lève le soleil", "à quelle heure se lève le soleil"]
+  sun_dark:      ["fait-il nuit", "fait-il jour"]
+  sun_is_up:     ["le soleil est-il levé"]
+  narration:     ["je vérifie", "je cherche", "je regarde", "je consulte", "je recherche", "je vais vérifier", "je vais chercher", "je vais regarder"]
+  area_prefixes: ["dans la", "dans le", "dans l'", "en"]
+
+patterns:
+  narration_full: []
+  sun_full:       []

@@ -107,3 +107,26 @@ def test_reference_completeness_no_warning_when_complete(
     with caplog.at_level(logging.WARNING):
         _check_against_reference(complete, en, tmp_path / "de.yaml")
     assert not any("missing" in rec.message for rec in caplog.records)
+
+
+def test_de_yaml_loads():
+    assert "de" in LOCALIZATIONS
+    de = LOCALIZATIONS["de"]
+    assert de.labels["temperature"] == "Temperatur"
+    assert "{label}" in de.templates["attr_state"]
+    assert de.keyword_re["sun_set"].search("wann geht die sonne unter") is not None
+
+
+def test_fr_yaml_loads():
+    assert "fr" in LOCALIZATIONS
+    fr = LOCALIZATIONS["fr"]
+    assert fr.labels["temperature"] == "température"
+    assert fr.keyword_re["narration"].search("je vérifie la météo") is not None
+
+
+def test_de_template_format():
+    assert L.template("sun_set_at", "de", time="20:39") == "Sonnenuntergang ist um 20:39."
+
+
+def test_fr_template_format():
+    assert L.template("sun_set_at", "fr", time="20:39") == "Le soleil se couche à 20:39."
