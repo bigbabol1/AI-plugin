@@ -84,6 +84,12 @@ _NARRATION_PATTERNS = [
     r"^\s*(?:Checking|Searching|Looking up|Querying)[^\n]*\.{0,6}\s*$",
     r"^\s*Found\s+(?:a\s+|the\s+|one\s+)?\w+\s+entit(?:y|ies)[^\n]*$",
     r"^\s*No\s+\w+\s+entit(?:y|ies)\s+found[^\n]*$",
+    # qwen3.5-9b style narration:
+    # "I found a light named Gustav. I'll turn it red for you."
+    r"^\s*I'?(?:ve)?\s+found\s+(?:a|the|one)?\s*[\w\- ]+?\.\s*I'?ll[^\n]*$",
+    # "I'm checking the humidity in the bedroom."
+    # "I'm checking the air pressure outside for you."
+    r"^\s*I'?(?:m|\s+am)\s+(?:checking|looking|finding|searching|querying|fetching|getting)[^\n]*$",
 ]
 _NARRATION_RE = re.compile("|".join(_NARRATION_PATTERNS), re.MULTILINE | re.IGNORECASE)
 
@@ -945,7 +951,24 @@ class Orchestrator:
             # 6. Append tool call/result messages then the assistant reply to history.
             for msg in tool_msgs:
                 await self._context_mgr.add_raw_message(conversation_id, msg)
-            stored_reply = _strip_narration(reply) or reply
+            narration_stripped = _strip_narration(reply)
+            # When the entire reply was narration, prefer surfacing the
+            # "couldn't produce" fallback (handled below in the empty-reply
+            # branch) over playing back useless filler like "I'm checking
+            # the temperature for you". Keep the partial-strip result when
+            # there is real content left.
+            if narration_stripped:
+                stored_reply = narration_stripped
+            elif reply.strip():
+                _LOGGER.warning(
+                    "AI Plugin: reply was pure narration (%r) — "
+                    "downgrading to fallback so user isn't told an action "
+                    "was taken when it wasn't",
+                    reply[:120],
+                )
+                stored_reply = ""
+            else:
+                stored_reply = reply
             stored_reply = _strip_emoji(stored_reply) or stored_reply
 
             # TTS suppression for media-playback tool calls. The audio that
