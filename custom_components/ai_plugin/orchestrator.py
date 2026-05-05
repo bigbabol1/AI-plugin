@@ -600,13 +600,37 @@ class Orchestrator:
                     lang,
                     list(PROMPT_HINTS_I18N),
                 )
+        time_block = self._build_time_block()
         location_block = await self._build_location_block()
         facts_block = await self._build_user_facts_block(user_id)
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
-        parts = [base, location_block, facts_block]
+        parts = [base, time_block, location_block, facts_block]
         if custom:
             parts.append(custom)
         return "\n\n".join(p for p in parts if p)
+
+    def _build_time_block(self) -> str:
+        """Return a fresh [CURRENT TIME] block in the user's local timezone.
+
+        Computed per-request so small models that ignore tools still answer
+        time questions correctly. Without this block the LLM hallucinates
+        clock readings.
+        """
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            cfg = self._hass.config if self._hass is not None else None
+            tz_name = (getattr(cfg, "time_zone", None) or "").strip() if cfg else ""
+            now = datetime.now(ZoneInfo(tz_name)) if tz_name else datetime.now().astimezone()
+            stamp = now.strftime("%A, %Y-%m-%d %H:%M %Z")
+            return (
+                f"[CURRENT TIME]\n{stamp}\n"
+                "Use this for any question about the time, date, day-of-week, "
+                "or 'how long until X'. Do NOT guess the time."
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: time block build failed", exc_info=True)
+            return ""
 
     async def _build_user_facts_block(self, user_id: str | None) -> str:
         """Render stored user facts as a numbered prompt block.
