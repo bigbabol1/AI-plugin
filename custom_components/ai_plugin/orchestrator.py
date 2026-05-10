@@ -109,6 +109,48 @@ def _any_tool_call(tool_msgs: list[dict], tool_name: str) -> bool:
     return False
 
 
+# Online-query grounding verifier: detect messages that clearly require
+# live web data. Conservative by design — false negatives (missed trigger)
+# are silent; false positives (forced search on a general question) waste
+# a tool call. Only match unambiguous live-data triggers.
+_ONLINE_QUERY_RE = re.compile(
+    r"\b("
+    # News / current events
+    r"news|latest|breaking|trending|recent(?:ly)?|just\s+announced|"
+    r"current\s+events?|what(?:'s|\s+is)\s+happening|"
+    # Prices / markets
+    r"price\s+of|how\s+much\s+(?:is|does|costs?)|stock\s+price|"
+    r"exchange\s+rate|bitcoin|crypto(?:currency)?|nasdaq|dow\s+jones|s&p|"
+    # Sports
+    r"who\s+won|match\s+result|score(?:\s+of)?|game\s+(?:result|score)|"
+    r"standings?|league\s+table|"
+    # Temporal triggers (explicit recency)
+    r"today(?:'s)?|tonight|yesterday|this\s+week|this\s+month|"
+    r"right\s+now|at\s+the\s+moment|currently|"
+    # German equivalents
+    r"nachrichten|aktuell(?:e|er|es)?|neueste(?:n|s)?|gerade\s+jetzt|"
+    r"heute|gestern|diese\s+woche|preis\s+von|wer\s+hat\s+gewonnen"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Exclude queries that look online but are answered by HA sensors.
+_ONLINE_EXCLUDE_RE = re.compile(
+    r"\b(?:temperature|humidity|sensor|thermostat|climate|heizung|"
+    r"temperatur|luftfeuchtigkeit|wetter\s+(?:drinnen|innen|sensor))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_online_query(text: str) -> bool:
+    """Return True when the message clearly needs live web data."""
+    if not text:
+        return False
+    if _ONLINE_EXCLUDE_RE.search(text):
+        return False
+    return bool(_ONLINE_QUERY_RE.search(text))
+
+
 # Phrases get_entity / search_entities return when an entity can't be
 # resolved. When the model sees these in a tool result it is supposed
 # to broaden the search (search_entities) or list_entities; small models
@@ -904,6 +946,42 @@ class Orchestrator:
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception(
                         "AI Plugin: fuzzy-resolve retry failed — keeping original reply"
+                    )
+
+            # 5d. Online-query grounding verifier: if the message clearly needs
+            # live web data and web_search is available but was never called,
+            # the model answered from stale training data. Inject a corrective
+            # and re-run once. Skipped when web search is disabled.
+            if (
+                tool_schemas
+                and self._web_search is not None
+                and _is_online_query(message)
+                and not _any_tool_call(tool_msgs, "web_search")
+            ):
+                _LOGGER.info(
+                    "AI Plugin: web-search grounding retry — online query had no web_search call"
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "CRITICAL: The user asked about live/current information "
+                        "(news, prices, scores, recent events). You answered WITHOUT "
+                        "calling web_search. Your training data is STALE for this topic. "
+                        "You MUST call web_search right now with a concise query, "
+                        "then answer from its result. Do not answer from memory."
+                    ),
+                })
+                try:
+                    reply4, tool_msgs4 = await self._tool_loop(
+                        messages, tool_schemas, user_id, voice_mode, message,
+                        device_id=device_id, language=language,
+                    )
+                    if _any_tool_call(tool_msgs4, "web_search"):
+                        reply = reply4
+                        tool_msgs = tool_msgs + tool_msgs4
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "AI Plugin: web-search grounding retry failed — keeping original reply"
                     )
 
             # 6. Append tool call/result messages then the assistant reply to history.
