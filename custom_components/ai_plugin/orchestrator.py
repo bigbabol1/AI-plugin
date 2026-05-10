@@ -385,7 +385,8 @@ _FILLER_CLOSING_RE = re.compile(
     r"[^\n]*"
     r"|(?:consider\s+(?:checking|visiting|consulting|looking))[^\n]*"
     r"|(?:it(?:'s|\s+is)\s+(?:advisable|recommended|best)\s+to\s+(?:check|visit|consult))[^\n]*"
-    r"|for\s+(?:more|further|additional|specific|detailed?)\s+(?:information|info|details?)"
+    r"|for\s+(?:[\w'-]+\s+){0,8}?"
+    r"(?:information|info|details?|coverage|listings?|updates?|news)"
     r"[^\n]*"
     r"|(?:visit|refer\s+to|consult|see|check\s+out)\s+(?:the\s+)?"
     r"(?:website|site|page|link|url|provided\s+links?)[^\n]*"
@@ -686,6 +687,25 @@ class Orchestrator:
             self._conv_locks[conv_id] = asyncio.Lock()
         return self._conv_locks[conv_id]
 
+    def _is_voice_device(self, device_id: str | None) -> bool:
+        """True only when the device_id has an assist_satellite entity.
+
+        Plain-text Assist (sidebar) and REST API calls also carry a
+        device_id, but they are not voice — they want the full default
+        prompt with detailed replies. Only assist_satellite indicates a
+        real STT→TTS voice pipeline.
+        """
+        if not device_id or self._hass is None:
+            return False
+        try:
+            ent_reg = er.async_get(self._hass)
+            for entry in er.async_entries_for_device(ent_reg, device_id):
+                if entry.entity_id.startswith("assist_satellite."):
+                    return True
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("voice-device check failed", exc_info=True)
+        return False
+
     def _build_provider(self) -> AbstractProvider:
         """Build provider from current entry options."""
         opts = self._entry.options
@@ -850,14 +870,16 @@ class Orchestrator:
         Raises:
             OrchestratorError: on provider failure.
         """
-        # Heuristic: if a device_id is present the request came from a voice
-        # assistant pipeline (Assist mic → media player → device).  We also
-        # honour the explicit CONF_VOICE_MODE config toggle as a fallback for
-        # setups where the device_id is unavailable but the user always wants
-        # the compact voice prompt.  Note: HA does not expose a dedicated
-        # is_voice flag on ConversationInput (Context is not a dict), so
-        # device_id presence is the closest reliable signal available.
-        voice_mode: bool = (device_id is not None) or bool(
+        # Voice mode = device has an assist_satellite entity (real voice
+        # pipeline: mic → STT → conversation → TTS → speaker). Plain text
+        # Assist (sidebar) and REST API calls also carry a device_id but
+        # are NOT voice — they expect detailed, listable replies. The old
+        # heuristic ``device_id is not None`` over-detected and forced the
+        # voice prompt's "one short sentence" rule on every text query,
+        # turning rich web_search results into vague summaries.
+        # CONF_VOICE_MODE remains as an explicit override for installs
+        # that want the compact prompt always.
+        voice_mode: bool = self._is_voice_device(device_id) or bool(
             self._entry.options.get(CONF_VOICE_MODE, False)
         )
         # Normalize HA's BCP-47 language ("de-DE", "fr-CA") to bare ISO 639-1.
