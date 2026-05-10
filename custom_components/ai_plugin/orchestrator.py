@@ -161,6 +161,27 @@ _EVENT_VERB_RE = re.compile(
 )
 
 
+# Meta-conversation patterns: user is talking ABOUT the previous reply,
+# not asking a fresh question of the world. These should never trigger a
+# web search even if a temporal token like "just now" appears in them.
+_META_CONVO_RE = re.compile(
+    r"\b(?:"
+    # English
+    r"you\s+(?:said|told|mentioned|wrote|just\s+(?:said|told|wrote))|"
+    r"(?:tell|say|repeat|show)\s+(?:me\s+)?(?:that|it|this)\s+again|"
+    r"what\s+did\s+you\s+(?:say|tell|mean)|"
+    r"repeat\s+(?:that|it|this|yourself)|"
+    r"already\s+(?:said|told|mentioned)|"
+    # German
+    r"du\s+(?:hast|sagtest)\s+(?:gerade|eben|vorhin)|"
+    r"sagst?\s+(?:das|es)\s+(?:nochmal|noch\s+einmal)|"
+    r"wiederhol(?:e|st)|"
+    r"hast\s+du\s+gerade"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def _is_online_query(text: str) -> bool:
     """Return True when the message almost certainly needs live web data.
 
@@ -168,11 +189,17 @@ def _is_online_query(text: str) -> bool:
     - Any explicit temporal anchor (this weekend, yesterday, right now…)
     - A named place combined with an event/question verb (what happened in Berlin)
 
-    Excluded when the query is clearly about a local HA sensor.
+    Excluded when:
+    - Query is clearly about a local HA sensor.
+    - Query is meta-conversation about the previous reply ("you said that
+      just now"). The "just now" inside _TEMPORAL_ANCHOR_RE would otherwise
+      cause a useless web_search on chat-about-chat messages.
     """
     if not text:
         return False
     if _HA_SENSOR_RE.search(text):
+        return False
+    if _META_CONVO_RE.search(text):
         return False
     if _TEMPORAL_ANCHOR_RE.search(text):
         return True
