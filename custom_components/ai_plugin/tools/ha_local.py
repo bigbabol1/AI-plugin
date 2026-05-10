@@ -250,13 +250,16 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "play_music",
             "description": (
-                "Search and play music on the speaker in an area via Music "
-                "Assistant. Use for 'play music in hobby room', 'play Enya in "
-                "kitchen', 'spiel jazz im wohnzimmer', 'shuffle my workout "
-                "playlist in the living room'. The plugin resolves the area's "
-                "primary Music-Assistant speaker automatically. The audio "
-                "starting on the speaker IS the confirmation — reply with an "
-                "empty string so the satellite does not talk over it."
+                "Search and play music on a speaker via Music Assistant. "
+                "Use for music-playback requests like 'play Enya', 'play "
+                "jazz', 'shuffle my workout playlist', 'spiel jazz im "
+                "wohnzimmer'. If the user names a room, pass that exact "
+                "room as area. If the user does NOT name a room, OMIT "
+                "the area parameter entirely — the plugin will fall back "
+                "to the area of the satellite that received the request. "
+                "Do NOT guess or default to a specific room when none "
+                "was mentioned. The audio starting on the speaker IS "
+                "the confirmation — reply with an empty string."
             ),
             "parameters": {
                 "type": "object",
@@ -272,9 +275,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "area": {
                         "type": "string",
                         "description": (
-                            "Area name (e.g. 'hobby room'). Required — the "
-                            "plugin picks the area's primary media_player. "
-                            "Call list_areas if unsure."
+                            "Area name when the user explicitly names a "
+                            "room (e.g. 'kitchen', 'living room', "
+                            "'wohnzimmer'). OMIT when the user did not "
+                            "specify a room — the plugin defaults to "
+                            "the calling satellite's own area."
                         ),
                     },
                     "media_type": {
@@ -284,7 +289,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     **_EXPOSED_ONLY_PROP,
                 },
-                "required": ["query", "area"],
+                "required": ["query"],
             },
         },
     },
@@ -639,6 +644,7 @@ class HALocalToolRegistry:
                     area=_s(arguments.get("area")).strip() or None,
                     media_type=_s(arguments.get("media_type")).strip() or "track",
                     exposed_only=exposed_only,
+                    device_id=device_id,
                 )
             if name == "media_command":
                 return await self._media_command(
@@ -984,6 +990,7 @@ class HALocalToolRegistry:
         area: str | None,
         media_type: str = "track",
         exposed_only: bool = True,
+        device_id: str | None = None,
     ) -> str:
         """Search and play music in an area via Music Assistant.
 
@@ -999,10 +1006,43 @@ class HALocalToolRegistry:
         if not query:
             return "[play_music needs a query — what should I play?]"
 
+        # No area specified → resolve to the calling satellite's area.
+        # Voice users in the living room saying 'play jazz' should not
+        # have music start somewhere else just because the model picked
+        # an example area name. With device_id, look up which area the
+        # satellite is in and play there.
+        if not area and device_id:
+            try:
+                ent_reg = er.async_get(self._hass)
+                dev_reg = dr.async_get(self._hass)
+                area_reg = ar.async_get(self._hass)
+                # Get the device's area (either directly or via any of
+                # its entities). Prefer device.area_id; fall back to
+                # entity.area_id of the assist_satellite entity itself.
+                dev = dev_reg.async_get(device_id)
+                area_id = dev.area_id if dev else None
+                if not area_id:
+                    for entry in er.async_entries_for_device(ent_reg, device_id):
+                        if entry.area_id:
+                            area_id = entry.area_id
+                            break
+                if area_id:
+                    a = area_reg.async_get_area(area_id)
+                    if a:
+                        area = a.name
+                        _LOGGER.debug(
+                            "play_music: no area specified, defaulted to "
+                            "calling satellite's area %r (device_id=%s)",
+                            area, device_id,
+                        )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("play_music device→area lookup failed", exc_info=True)
+
         if not area:
             return (
                 "[play_music needs an area — say which speaker, e.g. "
-                "'in the hobby room'. Call list_areas to see options.]"
+                "'in the kitchen' or 'in the living room'. Call "
+                "list_areas to see options.]"
             )
 
         media_type = (media_type or "track").lower().strip()
