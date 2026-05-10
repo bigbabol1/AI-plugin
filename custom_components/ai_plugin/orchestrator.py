@@ -109,51 +109,75 @@ def _any_tool_call(tool_msgs: list[dict], tool_name: str) -> bool:
     return False
 
 
-# Online-query grounding verifier: detect messages that clearly require
-# live web data. Conservative by design — false negatives (missed trigger)
-# are silent; false positives (forced search on a general question) waste
-# a tool call. Only match unambiguous live-data triggers.
-_ONLINE_QUERY_RE = re.compile(
+# Online-query grounding verifier.
+#
+# Rather than enumerating every possible trigger phrase (a losing battle),
+# detect two broad signal classes:
+#
+# 1. EXPLICIT TEMPORAL ANCHOR — the message pins itself to a time window
+#    the model cannot know: "this weekend", "last week", "right now", etc.
+#    Any relative or recent-absolute time reference is a safe trigger.
+#
+# 2. REAL-WORLD PLACE QUERY — "in <City>" / "in <Country>" combined with
+#    a question word or event verb. The model's training snapshot of any
+#    given city's current events is always stale.
+#
+# Both classes are still excluded when the query is clearly about an HA
+# sensor (temperature, humidity, thermostat) to avoid false positives.
+
+_TEMPORAL_ANCHOR_RE = re.compile(
     r"\b("
-    # News / current events
-    r"news|latest|breaking|trending|recent(?:ly)?|just\s+announced|"
-    r"current\s+events?|what(?:'s|\s+is)\s+happening|what\s+happened|"
-    r"what(?:'s|\s+is)\s+going\s+on|going\s+on\s+in|events?\s+in|"
-    r"happened\s+in|happened\s+(?:this|last)|"
-    # Prices / markets
-    r"price\s+of|how\s+much\s+(?:is|does|costs?)|stock\s+price|"
-    r"exchange\s+rate|bitcoin|crypto(?:currency)?|nasdaq|dow\s+jones|s&p|"
-    # Sports
-    r"who\s+won|match\s+result|score(?:\s+of)?|game\s+(?:result|score)|"
-    r"standings?|league\s+table|"
-    # Temporal triggers (explicit recency)
-    r"today(?:'s)?|tonight|yesterday|last\s+night|this\s+morning|"
+    r"today|tonight|yesterday|last\s+night|this\s+morning|this\s+evening|"
     r"this\s+week(?:end)?|last\s+week(?:end)?|this\s+month|last\s+month|"
-    r"right\s+now|at\s+the\s+moment|currently|"
-    # German equivalents
-    r"nachrichten|aktuell(?:e|er|es)?|neueste(?:n|s)?|gerade\s+jetzt|"
-    r"heute|gestern|diese[sn]?\s+wochenende?|letzte[sn]?\s+wochenende?|"
-    r"diese\s+woche|letzte\s+woche|was\s+ist\s+passiert|was\s+war\s+los|"
-    r"preis\s+von|wer\s+hat\s+gewonnen"
+    r"this\s+year|last\s+year|right\s+now|at\s+the\s+moment|currently|"
+    r"just\s+(?:now|happened|announced)|recently|"
+    # German
+    r"heute|gestern|heute\s+(?:nacht|abend|morgen)|"
+    r"diese[sn]?\s+wochenende?|letzte[sn]?\s+wochenende?|"
+    r"diese\s+woche|letzte\s+woche|diesen\s+monat|letzten\s+monat|"
+    r"gerade\s+jetzt|im\s+moment|zur(?:zeit|zeit)|gerade\s+eben"
     r")\b",
     re.IGNORECASE,
 )
 
-# Exclude queries that look online but are answered by HA sensors.
-_ONLINE_EXCLUDE_RE = re.compile(
+# "in Berlin", "in Germany", "in New York" — proper noun after preposition
+_PLACE_QUERY_RE = re.compile(
+    r"\b(?:in|at|near|around|from|about)\s+[A-ZÄÖÜ][a-zäöüß]"
+    r"(?:[a-zäöüß\-]*\s+[A-ZÄÖÜ][a-zäöüß][a-zäöüß]*)?",
+)
+
+_HA_SENSOR_RE = re.compile(
     r"\b(?:temperature|humidity|sensor|thermostat|climate|heizung|"
-    r"temperatur|luftfeuchtigkeit|wetter\s+(?:drinnen|innen|sensor))\b",
+    r"temperatur|luftfeuchtigkeit|co2|pm2|lux|pressure|druck)\b",
+    re.IGNORECASE,
+)
+
+# Verbs / question words that, combined with a place, signal a real-world query
+_EVENT_VERB_RE = re.compile(
+    r"\b(?:happen(?:ed|ing)?|going\s+on|event|news|what|who|when|where|"
+    r"passier|geschah|los\s+(?:in|war)|was\s+(?:ist|war))\b",
     re.IGNORECASE,
 )
 
 
 def _is_online_query(text: str) -> bool:
-    """Return True when the message clearly needs live web data."""
+    """Return True when the message almost certainly needs live web data.
+
+    Triggers on:
+    - Any explicit temporal anchor (this weekend, yesterday, right now…)
+    - A named place combined with an event/question verb (what happened in Berlin)
+
+    Excluded when the query is clearly about a local HA sensor.
+    """
     if not text:
         return False
-    if _ONLINE_EXCLUDE_RE.search(text):
+    if _HA_SENSOR_RE.search(text):
         return False
-    return bool(_ONLINE_QUERY_RE.search(text))
+    if _TEMPORAL_ANCHOR_RE.search(text):
+        return True
+    if _PLACE_QUERY_RE.search(text) and _EVENT_VERB_RE.search(text):
+        return True
+    return False
 
 
 # Phrases get_entity / search_entities return when an entity can't be
