@@ -988,16 +988,32 @@ class Orchestrator:
                 and not _any_tool_call(tool_msgs, "web_search")
             ):
                 _LOGGER.info(
-                    "AI Plugin: web-search grounding retry — online query had no web_search call"
+                    "AI Plugin: web-search grounding — orchestrator injecting mandatory search"
+                )
+                # Orchestrator calls web_search directly — do not trust the
+                # model to initiate the call after a corrective message, as
+                # small local models often ignore it. Inject the results as a
+                # system message so the model only needs to summarise them.
+                try:
+                    _loc = await self._location.async_resolve()
+                except Exception:  # noqa: BLE001
+                    _loc = {}
+                _search_result = await self._web_search.async_search(
+                    message[:300],
+                    strip_urls=voice_mode,
+                    near_user=False,
+                    location=_loc or None,
+                    language=(_loc or {}).get("language"),
                 )
                 messages.append({
                     "role": "system",
                     "content": (
-                        "CRITICAL: The user asked about live/current information "
-                        "(news, prices, scores, recent events). You answered WITHOUT "
-                        "calling web_search. Your training data is STALE for this topic. "
-                        "You MUST call web_search right now with a concise query, "
-                        "then answer from its result. Do not answer from memory."
+                        "The user's question requires current information. "
+                        "A web search was run automatically. Results:\n\n"
+                        f"{_search_result}\n\n"
+                        "Answer the user's question using ONLY the above search "
+                        "results. Do not use your training data. State what the "
+                        "results say; if they do not answer the question, say so."
                     ),
                 })
                 try:
@@ -1005,9 +1021,8 @@ class Orchestrator:
                         messages, tool_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
                     )
-                    if _any_tool_call(tool_msgs4, "web_search"):
-                        reply = reply4
-                        tool_msgs = tool_msgs + tool_msgs4
+                    reply = reply4
+                    tool_msgs = tool_msgs + tool_msgs4
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception(
                         "AI Plugin: web-search grounding retry failed — keeping original reply"
