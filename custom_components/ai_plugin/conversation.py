@@ -121,6 +121,21 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         continue_conversation = self._entry.options.get(
             CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION
         )
+        # Voice satellites whose TTS is routed to a separate speaker
+        # (e.g. via Mic to MediaPlayer to media_player.wohnzimmer_2)
+        # create an acoustic feedback loop: the satellite mic picks up
+        # its own TTS played back through the bound speaker and
+        # re-recognises it as a new user turn. Force-end the conversation
+        # after every voice satellite turn to break the loop. User
+        # re-triggers by saying the wake word again. Text Assist + REST
+        # API are unaffected and still honour the global toggle.
+        if self._orchestrator.is_voice_device(user_input.device_id):
+            if continue_conversation:
+                _LOGGER.debug(
+                    "AI Plugin: voice satellite turn — forcing "
+                    "continue_conversation=False to avoid TTS feedback loop"
+                )
+            continue_conversation = False
         close_match = _match_close_phrase(user_input.text)
         if close_match is not None:
             _LOGGER.info(

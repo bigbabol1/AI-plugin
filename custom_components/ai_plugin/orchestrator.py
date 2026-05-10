@@ -742,6 +742,10 @@ class Orchestrator:
             self._conv_locks[conv_id] = asyncio.Lock()
         return self._conv_locks[conv_id]
 
+    def is_voice_device(self, device_id: str | None) -> bool:
+        """Public alias of _is_voice_device for callers in other modules."""
+        return self._is_voice_device(device_id)
+
     def _is_voice_device(self, device_id: str | None) -> bool:
         """True only when the device_id has an assist_satellite entity.
 
