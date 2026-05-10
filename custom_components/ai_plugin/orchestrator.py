@@ -110,6 +110,61 @@ def _any_tool_call(tool_msgs: list[dict], tool_name: str) -> bool:
     return False
 
 
+# Action-command grounding verifier.
+# Short STT inputs like "Lights on." / "Bedroom off." make weak local
+# models narrate ("I'll turn the lights on.") instead of calling an
+# actuator tool. _strip_narration then produces an empty reply and the
+# user gets the "couldn't produce" fallback while the device stays off.
+# Detect imperative-action shape: noun+state, or turn/switch/dim verb.
+_ACTION_COMMAND_RE = re.compile(
+    r"^\s*(?:"
+    # English: "Lights on", "Bedroom off", "X on/off/dim", verbs
+    r"(?:[\w\s]{2,40}\s+(?:on|off|aus|an)|"
+    r"(?:turn|switch|toggle|put|set|dim|brighten|fade)\s+\S+)"
+    # German: "Licht an/aus", "Schalte X ein/aus"
+    r"|(?:licht|lichter|lampe|lampen|fan|ventilator|stehlampe|"
+    r"flurlicht|mood\s*light)\s+(?:an|aus|ein|on|off)"
+    r"|(?:schalte|mach)\s+\S+\s+(?:ein|aus|an)"
+    r")\b.*$",
+    re.IGNORECASE,
+)
+# Words that signal an information question, not an action — exclude.
+_QUESTION_INTENT_RE = re.compile(
+    r"\b(?:any|are|is|which|what|where|when|why|how|"
+    r"welche|sind|ist|wann|wo|warum|wie)\b",
+    re.IGNORECASE,
+)
+# Tool names whose invocation = action taken.
+_ACTUATOR_TOOL_NAMES = (
+    "set_area_state", "HassTurnOn", "HassTurnOff",
+    "HassLightSet", "HassClimateSetTemperature",
+    "HassClimateSetMode", "HassMediaPause", "HassMediaUnpause",
+    "HassMediaNext", "HassMediaPrevious",
+    "play_music", "media_command",
+)
+
+
+def _is_action_command(text: str) -> bool:
+    """True when the user message is a short imperative action.
+
+    Conservative: must be under 80 chars (commands tend to be terse),
+    must match _ACTION_COMMAND_RE, must NOT be a question.
+    """
+    if not text:
+        return False
+    text = text.strip()
+    if len(text) > 80:
+        return False
+    if _QUESTION_INTENT_RE.search(text):
+        return False
+    return bool(_ACTION_COMMAND_RE.search(text))
+
+
+def _any_actuator_call(tool_msgs: list[dict]) -> bool:
+    """True if any actuator tool was invoked in this turn."""
+    return any(_any_tool_call(tool_msgs, t) for t in _ACTUATOR_TOOL_NAMES)
+
+
 # Online-query grounding verifier.
 #
 # Rather than enumerating every possible trigger phrase (a losing battle),
@@ -1198,6 +1253,48 @@ class Orchestrator:
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception(
                         "AI Plugin: web-search grounding retry failed — keeping original reply"
+                    )
+
+            # 5e. Action-command grounding verifier: short STT inputs like
+            # "Lights on." / "Bedroom off." make weak local models narrate
+            # ("I'll turn the lights on.") instead of calling an actuator
+            # tool. _strip_narration then produces an empty reply and the
+            # user gets the "couldn't produce" fallback while the device
+            # stays off. Inject a corrective and re-run once.
+            if (
+                tool_schemas
+                and _is_action_command(message)
+                and not _any_actuator_call(tool_msgs)
+            ):
+                _LOGGER.info(
+                    "AI Plugin: action-command grounding retry — %r had no actuator call",
+                    message[:80],
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "CRITICAL: The user issued an ACTION command "
+                        f"({message!r}). You must CALL a tool to execute it — "
+                        "do NOT just say 'I'll turn it on'. For whole-home "
+                        "actions ('lights on', 'lights off', 'all off'): "
+                        "CALL set_area_state(domain='light', action='turn_on') "
+                        "(or 'turn_off'). For a specific device: CALL "
+                        "search_entities then HassTurnOn/HassTurnOff with the "
+                        "returned entity_id. Pick the most likely interpretation "
+                        "from context — do not ask for clarification. Execute now."
+                    ),
+                })
+                try:
+                    reply5, tool_msgs5 = await self._tool_loop(
+                        messages, tool_schemas, user_id, voice_mode, message,
+                        device_id=device_id, language=language,
+                    )
+                    if _any_actuator_call(tool_msgs5):
+                        reply = reply5
+                        tool_msgs = tool_msgs + tool_msgs5
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "AI Plugin: action-command grounding retry failed — keeping original reply"
                     )
 
             # 6. Append tool call/result messages then the assistant reply to history.
