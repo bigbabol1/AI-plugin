@@ -70,8 +70,10 @@ _INTERESTING_ATTRS = (
 _ACTION_DOMAINS = {"light", "switch", "fan", "cover", "climate"}
 
 # Magic values that set_area_state treats as "every area".
+# Empty string is intentionally NOT here: omitting area means "default
+# to caller's area" (when device_id resolves), with sweep-all only as
+# the explicit-keyword path.
 _SWEEP_ALL_KEYWORDS = {
-    "",
     "*",
     "all",
     "any",
@@ -218,7 +220,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Turn devices in an area on/off/toggle. Use for commands like "
                 "'lights in kitchen off', 'fans in bedroom on'. For a single "
-                "named device use HassTurnOn/HassTurnOff instead."
+                "named device use HassTurnOn/HassTurnOff instead. "
+                "When the user does NOT name a room (e.g. 'lights on'), OMIT "
+                "the area parameter — the plugin defaults to the calling "
+                "satellite's room. Use 'all'/'everywhere' ONLY when the user "
+                "explicitly says 'all', 'every', 'whole house', etc."
             ),
             "parameters": {
                 "type": "object",
@@ -226,9 +232,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "area": {
                         "type": "string",
                         "description": (
-                            "Area name (e.g. 'kitchen'). Omit, leave empty, or pass "
-                            "'all'/'everywhere'/'*' to act on every area "
-                            "(e.g. 'turn off all lights'). Call list_areas if unsure."
+                            "Area name when the user names a specific room "
+                            "(e.g. 'kitchen', 'bedroom'). OMIT when the user "
+                            "did not name a room — plugin uses caller's "
+                            "satellite area. Pass 'all'/'everywhere'/'*' "
+                            "ONLY when the user explicitly says 'all', "
+                            "'every', 'everywhere', 'whole house', etc."
                         ),
                     },
                     "domain": {
@@ -637,6 +646,7 @@ class HALocalToolRegistry:
                     domain=_s(arguments.get("domain")).strip(),
                     action=_s(arguments.get("action")).strip(),
                     exposed_only=exposed_only,
+                    device_id=device_id,
                 )
             if name == "play_music":
                 return await self._play_music(
@@ -905,11 +915,17 @@ class HALocalToolRegistry:
         domain: str,
         action: str,
         exposed_only: bool = True,
+        device_id: str | None = None,
     ) -> str:
         """Turn devices in an area on/off/toggle via a single service call.
 
-        If ``area`` is None, empty, or a wildcard keyword (all/every/everywhere/
-        anywhere/* and German aliases alle/überall), sweep every area.
+        Area resolution:
+        - Explicit area name → that area only.
+        - Explicit wildcard ('all', 'every', 'everywhere', '*', etc.) →
+          sweep every area.
+        - Empty/None area + voice satellite device_id → caller's room.
+        - Empty/None area + no device_id → sweep every area (text Assist
+          / REST API: assume whole-home).
         """
         domain = domain.lower().strip(".")
         action = action.lower()
@@ -924,7 +940,34 @@ class HALocalToolRegistry:
             return f"{domain} does not support {action}. Use {allowed}."
 
         needle = (area or "").strip().lower()
-        sweep_all = needle in _SWEEP_ALL_KEYWORDS
+        # When area is empty AND a device_id is provided, default to the
+        # calling satellite's area before falling through to sweep-all.
+        # User in living room saying 'lights on' should affect the living
+        # room only, not every light in the flat.
+        if not needle and device_id:
+            try:
+                ent_reg = er.async_get(self._hass)
+                dev_reg = dr.async_get(self._hass)
+                area_reg = ar.async_get(self._hass)
+                dev = dev_reg.async_get(device_id)
+                area_id = dev.area_id if dev else None
+                if not area_id:
+                    for entry in er.async_entries_for_device(ent_reg, device_id):
+                        if entry.area_id:
+                            area_id = entry.area_id
+                            break
+                if area_id:
+                    a = area_reg.async_get_area(area_id)
+                    if a:
+                        needle = _s(a.name).lower()
+                        _LOGGER.debug(
+                            "set_area_state: area unspecified, defaulted to "
+                            "caller's area %r (device_id=%s)",
+                            a.name, device_id,
+                        )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("set_area_state device→area lookup failed", exc_info=True)
+        sweep_all = needle in _SWEEP_ALL_KEYWORDS or needle == ""
 
         target_area = None
         if not sweep_all:
