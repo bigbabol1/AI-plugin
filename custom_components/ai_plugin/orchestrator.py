@@ -1226,17 +1226,32 @@ class Orchestrator:
             if voice_mode:
                 stored_reply = _flatten_for_voice(stored_reply) or stored_reply
 
-            # TTS suppression for media-playback tool calls. The audio that
-            # starts/stops on the speaker IS the confirmation; speaking would
-            # talk over the same speaker. Force-blank the reply when
-            # play_music or media_command was invoked, regardless of what the
-            # model produced — some models echo the system-prompt instruction
-            # ("Empty reply. Audio is the confirmation.") instead of returning
-            # empty content.
-            music_tool_invoked = _any_tool_call(
-                tool_msgs, "play_music"
-            ) or _any_tool_call(tool_msgs, "media_command")
-            if music_tool_invoked:
+            # TTS suppression for actuator tool calls — the visible/audible
+            # change IS the confirmation. Speaking "OK lights on" while the
+            # lights are visibly on is redundant and annoying for voice
+            # users. Force-blank the reply when any of these tools was
+            # invoked, regardless of what the model produced. Only suppress
+            # for actual voice satellites; text Assist still gets a
+            # confirmation since the user can't see the device.
+            _ACTUATOR_TOOLS = (
+                "play_music", "media_command",
+                "HassTurnOn", "HassTurnOff", "HassLightSet",
+                "HassClimateSetTemperature", "HassClimateSetMode",
+                "HassMediaPause", "HassMediaUnpause", "HassMediaNext",
+                "HassMediaPrevious", "set_area_state",
+            )
+            actuator_invoked = any(
+                _any_tool_call(tool_msgs, t) for t in _ACTUATOR_TOOLS
+            )
+            if actuator_invoked and voice_mode:
+                stored_reply = ""
+                reply = ""
+            elif actuator_invoked and any(
+                _any_tool_call(tool_msgs, t) for t in ("play_music", "media_command")
+            ):
+                # Music tools always suppress regardless of voice/text —
+                # the audio change IS the confirmation and TTS would talk
+                # over it on the same speaker.
                 stored_reply = ""
                 reply = ""
             elif not stored_reply.strip():
