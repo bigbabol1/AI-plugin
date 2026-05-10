@@ -1495,7 +1495,10 @@ class Orchestrator:
         """Route a tool call to ha_local, memory, web search, or MCP. Never raises."""
         if self._ha_local is not None and name in self._ha_local.tool_names:
             return await self._ha_local.call_tool(
-                name, arguments, device_id=device_id, language=language
+                name, arguments,
+                device_id=device_id,
+                language=language,
+                user_message=user_message,
             )
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             return await self._memory.call_tool(

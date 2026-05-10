@@ -21,6 +21,7 @@ through HA's built-in MCP server tools (HassTurnOn, HassLightSet, etc.).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.core import Context, HomeAssistant
@@ -68,6 +69,21 @@ _INTERESTING_ATTRS = (
 )
 
 _ACTION_DOMAINS = {"light", "switch", "fan", "cover", "climate"}
+
+# Patterns that confirm the user explicitly meant "every device, every area"
+# rather than a specific device. Used to gate set_area_state(area='all')
+# against the model's tendency to fall back to it after a failed specific
+# call. Multilingual; conservative.
+_USER_SAID_ALL_RE = re.compile(
+    r"\b(?:"
+    r"all|every|everywhere|anywhere|whole\s+(?:house|flat|home)|"
+    r"entire\s+(?:house|flat|home)|every\s+room|"
+    r"alle|jede(?:[srn])?|j[eé]des|"
+    r"[uü]berall|im\s+ganzen?\s+haus|in\s+der\s+ganzen\s+wohnung|"
+    r"komplett(?:e[srn]?)?"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # Magic values that set_area_state treats as "every area".
 # Empty string is intentionally NOT here: omitting area means "default
@@ -601,6 +617,7 @@ class HALocalToolRegistry:
         arguments: dict[str, Any],
         device_id: str | None = None,
         language: str | None = None,
+        user_message: str = "",
     ) -> str:
         """Dispatch one tool call. Never raises; errors become string replies."""
         try:
@@ -641,6 +658,26 @@ class HALocalToolRegistry:
             if name == "set_area_state":
                 raw_area = arguments.get("area")
                 area_val = _s(raw_area).strip() if raw_area is not None else ""
+                # Safety guard: model often falls back to area='all' after a
+                # failed HassTurnOff for a specific device, which then turns
+                # off everything in the flat (lights + thermostats + fans).
+                # Reject area='all' / sweep keywords unless the user
+                # explicitly said 'all'/'every'/'whole house'/etc.
+                if area_val.lower() in _SWEEP_ALL_KEYWORDS:
+                    if not _USER_SAID_ALL_RE.search(user_message or ""):
+                        _LOGGER.warning(
+                            "AI Plugin: rejected set_area_state(area=%r) — "
+                            "user message %r does not contain explicit sweep "
+                            "keyword. Likely model fallback after a failed "
+                            "specific-device call.",
+                            area_val, (user_message or "")[:80],
+                        )
+                        return (
+                            "[set_area_state(area='all') refused — user did "
+                            "not say 'all', 'every', or 'whole house'. For a "
+                            "specific device call search_entities to find it, "
+                            "then HassTurnOn/HassTurnOff with the entity_id.]"
+                        )
                 return await self._set_area_state(
                     area=area_val or None,
                     domain=_s(arguments.get("domain")).strip(),
