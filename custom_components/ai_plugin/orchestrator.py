@@ -429,6 +429,34 @@ _FILLER_CLOSING_RE = re.compile(
 )
 
 
+# Markdown / formatting tokens that read awfully via TTS or that some
+# announce-type integrations parse oddly when present in a single utterance.
+_MD_BOLD_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
+_MD_BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+\.)\s+", re.MULTILINE)
+_MD_HEADING_RE = re.compile(r"^\s*#{1,6}\s+", re.MULTILINE)
+
+
+def _flatten_for_voice(text: str) -> str:
+    """Strip markdown + collapse newlines for voice TTS.
+
+    Multi-line replies with bullets or **bold** read poorly via TTS
+    ("asterisk asterisk Title asterisk asterisk") and may interact badly
+    with announce-style media routing. Voice-mode replies should be
+    plain flowing prose. Idempotent.
+    """
+    if not text:
+        return text
+    cleaned = _MD_BOLD_RE.sub(r"\1", text)
+    cleaned = _MD_ITALIC_RE.sub(r"\1", cleaned)
+    cleaned = _MD_HEADING_RE.sub("", cleaned)
+    cleaned = _MD_BULLET_RE.sub("", cleaned)
+    # Collapse newlines into sentence breaks
+    cleaned = re.sub(r"\n+", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
 def _strip_filler_closing(text: str) -> str:
     """Remove trailing 'check X for details' filler sentences.
 
@@ -1191,6 +1219,8 @@ class Orchestrator:
                 stored_reply = reply
             stored_reply = _strip_emoji(stored_reply) or stored_reply
             stored_reply = _strip_filler_closing(stored_reply) or stored_reply
+            if voice_mode:
+                stored_reply = _flatten_for_voice(stored_reply) or stored_reply
 
             # TTS suppression for media-playback tool calls. The audio that
             # starts/stops on the speaker IS the confirmation; speaking would
