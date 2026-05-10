@@ -85,6 +85,26 @@ _USER_SAID_ALL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Specific device nouns: "air purifier", "kettle", etc. When the user
+# message contains one of these, set_area_state must be refused — the
+# user means a NAMED PHYSICAL DEVICE, not a domain category. Force
+# search_entities + HassTurnOn/Off path.
+_DEVICE_NOUN_RE = re.compile(
+    r"\b(?:"
+    r"air\s+purifier|air\s+filter|humidifier|dehumidifier|"
+    r"kettle|toaster|coffee\s+(?:machine|maker)|espresso|"
+    r"reading\s+lamp|mood\s+light|night\s+light|floor\s+lamp|"
+    r"tv|television|monitor|soundbar|"
+    r"vacuum|robot|hoover|diffuser|aroma|"
+    r"luftreiniger|luftfilter|luftbefeuchter|"
+    r"wasserkocher|kaffeemaschine|"
+    r"stehlampe|nachtlicht|leselampe|moodlight|flurlicht|"
+    r"fernseher|lautsprecher|"
+    r"staubsauger|saugroboter"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Magic values that set_area_state treats as "every area".
 # Empty string is intentionally NOT here: omitting area means "default
 # to caller's area" (when device_id resolves), with sweep-all only as
@@ -658,6 +678,31 @@ class HALocalToolRegistry:
             if name == "set_area_state":
                 raw_area = arguments.get("area")
                 area_val = _s(raw_area).strip() if raw_area is not None else ""
+                # Safety guard: when the user message names a specific
+                # physical device ('air purifier', 'kettle', 'TV',
+                # 'luftreiniger', etc.) the user does NOT mean a
+                # domain-wide sweep — but small models often fall back
+                # to set_area_state when their first HassTurnOff attempt
+                # fails. Refuse and auto-recover with search_entities.
+                if _DEVICE_NOUN_RE.search(user_message or ""):
+                    _LOGGER.warning(
+                        "AI Plugin: rejected set_area_state(area=%r, domain=%r) — "
+                        "user message %r names a specific device. Auto-running "
+                        "search_entities for recovery.",
+                        area_val, _s(arguments.get("domain")),
+                        (user_message or "")[:80],
+                    )
+                    recovery = self._auto_search_recovery(
+                        user_message or "",
+                        device_id=device_id,
+                        exposed_only=exposed_only,
+                    )
+                    return (
+                        "[set_area_state refused — user named a SPECIFIC "
+                        "device, not a domain category. CALL HassTurnOn/"
+                        "HassTurnOff with the matching entity_id below, "
+                        "preferring the one in the caller's area.]\n" + recovery
+                    )
                 # Safety guard: model often falls back to area='all' after a
                 # failed HassTurnOff for a specific device, which then turns
                 # off everything in the flat (lights + thermostats + fans).
@@ -668,15 +713,28 @@ class HALocalToolRegistry:
                         _LOGGER.warning(
                             "AI Plugin: rejected set_area_state(area=%r) — "
                             "user message %r does not contain explicit sweep "
-                            "keyword. Likely model fallback after a failed "
-                            "specific-device call.",
+                            "keyword. Auto-running search_entities to surface "
+                            "the actual specific device.",
                             area_val, (user_message or "")[:80],
+                        )
+                        # Auto-recover: run search_entities with the user
+                        # message as query, biased toward the calling
+                        # satellite's area when possible. Return hits so the
+                        # model can call HassTurnOn/Off in the next loop
+                        # iteration. Without this the model often gives up
+                        # after rejection.
+                        recovery = self._auto_search_recovery(
+                            user_message or "",
+                            device_id=device_id,
+                            exposed_only=exposed_only,
                         )
                         return (
                             "[set_area_state(area='all') refused — user did "
-                            "not say 'all', 'every', or 'whole house'. For a "
-                            "specific device call search_entities to find it, "
-                            "then HassTurnOn/HassTurnOff with the entity_id.]"
+                            "not say 'all', 'every', or 'whole house'. "
+                            "Specific-device recovery results below. CALL "
+                            "HassTurnOn/HassTurnOff with the matching "
+                            "entity_id, preferring the one in the caller's "
+                            "area.]\n" + recovery
                         )
                 return await self._set_area_state(
                     area=area_val or None,
@@ -902,6 +960,69 @@ class HALocalToolRegistry:
                 parts.append(f"precip:{precip}%")
             out.append(" ".join(parts))
         return "\n".join(out)
+
+    def _auto_search_recovery(
+        self, user_message: str, device_id: str | None, exposed_only: bool = True
+    ) -> str:
+        """When set_area_state(area='all') is rejected, run a search using
+        keywords from the user message and bias toward the caller's area.
+
+        Returns a formatted hit list ready to feed back to the model.
+        """
+        # Strip filler: "Turn off the air purifier." → "air purifier"
+        msg = (user_message or "").lower()
+        for verb in ("turn on", "turn off", "switch on", "switch off",
+                     "toggle", "schalte", "mach"):
+            msg = msg.replace(verb, " ")
+        for stop in (" the ", " a ", " an ", " der ", " die ", " das ",
+                     " den ", " ein ", " eine ", " on", " off", " an", " aus"):
+            msg = msg.replace(stop, " ")
+        query = " ".join(msg.split()).strip(".? ")
+        if not query:
+            query = (user_message or "").strip()
+
+        # Resolve caller's area name if possible
+        caller_area: str | None = None
+        if device_id and self._hass is not None:
+            try:
+                ent_reg = er.async_get(self._hass)
+                dev_reg = dr.async_get(self._hass)
+                area_reg = ar.async_get(self._hass)
+                dev = dev_reg.async_get(device_id)
+                area_id = dev.area_id if dev else None
+                if not area_id:
+                    for entry in er.async_entries_for_device(ent_reg, device_id):
+                        if entry.area_id:
+                            area_id = entry.area_id
+                            break
+                if area_id:
+                    a = area_reg.async_get_area(area_id)
+                    caller_area = _s(a.name) if a else None
+            except Exception:  # noqa: BLE001
+                pass
+
+        raw = self._search_entities(query, limit=10, exposed_only=exposed_only)
+        if caller_area:
+            head, _, body = raw.partition("\n")
+            lines = body.splitlines()
+            same = [l for l in lines if l.endswith(f"@ {caller_area}")]
+            other = [l for l in lines if not l.endswith(f"@ {caller_area}")]
+            if same:
+                # Strong narrowing: when there's a hit in the caller's
+                # area, return ONLY that one. Prevents the model from
+                # firing HassTurnOff on every match across the flat.
+                directive = (
+                    f"Caller is in {caller_area!r}. Use ONLY this one "
+                    f"entity. Call HassTurnOn or HassTurnOff EXACTLY ONCE."
+                )
+                return f"1 match (caller-area filtered):\n{directive}\n" + same[0]
+            head_extra = (
+                f"  (caller is in {caller_area!r} — no matches there; "
+                f"the entries below are in OTHER areas — pick AT MOST ONE "
+                f"and confirm with the user, do NOT actuate all of them)"
+            )
+            return f"{head}\n{head_extra}\n" + "\n".join(other)
+        return raw
 
     def _search_entities(
         self, query: str, limit: int = 10, exposed_only: bool = True
