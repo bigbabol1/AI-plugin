@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote
 
 import aiohttp
 
@@ -147,55 +147,62 @@ class WebSearchTool:
     # ── DuckDuckGo ─────────────────────────────────────────────────────────────
 
     async def _search_duckduckgo(self, query: str) -> str:
-        """Search via duckduckgo-search library (async, no API key).
+        """Search DDG via Jina Reader proxy.
 
-        Falls back to the HTML scraper when the library is not installed
-        so existing setups without the requirement keep working.
+        Jina fetches the DDG HTML page from its own servers, bypassing the
+        IP-based CAPTCHA that DDG applies to Docker/server addresses. No API
+        key, no extra dependencies — same aiohttp used everywhere else.
+        Falls back to direct HTML scrape if Jina is unreachable.
         """
+        ddg_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+        jina_url = f"https://r.jina.ai/{ddg_url}"
+        headers = {
+            "Accept": "text/plain",
+            "X-Return-Format": "markdown",
+        }
         try:
-            from duckduckgo_search import AsyncDDGS  # type: ignore[import]
-        except ImportError:
-            _LOGGER.debug("duckduckgo-search not available, using HTML fallback")
-            return await self._search_duckduckgo_html(query)
-
-        try:
-            async with AsyncDDGS() as ddgs:
-                items = await ddgs.atext(query, max_results=self._max_results)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    jina_url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                ) as resp:
+                    if resp.status != 200:
+                        _LOGGER.debug("Jina DDG proxy returned %s, trying direct HTML", resp.status)
+                        return await self._search_duckduckgo_html(query)
+                    markdown = await resp.text()
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("DuckDuckGo (library) search failed: %s — trying HTML", exc)
+            _LOGGER.debug("Jina DDG proxy failed: %s, trying direct HTML", exc)
             return await self._search_duckduckgo_html(query)
 
-        if not items:
-            return _FALLBACK_MSG
-        results = [
-            {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
-            for r in items
-        ]
+        results = _parse_jina_ddg_markdown(markdown, self._max_results)
+        if not results:
+            return await self._search_duckduckgo_html(query)
         return _format_results(query, results)
 
     async def _search_duckduckgo_html(self, query: str) -> str:
-        """HTML scraper fallback — DuckDuckGo Lite endpoint, no dependencies."""
+        """Direct DDG Lite HTML scrape — fallback when Jina is unreachable."""
         url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; AIPlugin/0.1; +https://github.com/bigbabol1/AI-plugin)",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-            ) as resp:
-                if resp.status == 202:
-                    return _FALLBACK_MSG
-                if resp.status != 200:
-                    return _FALLBACK_MSG
-                html = await resp.text()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                ) as resp:
+                    if resp.status != 200:
+                        return _FALLBACK_MSG
+                    html = await resp.text()
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("DuckDuckGo HTML fallback failed: %s", exc)
+            return _FALLBACK_MSG
 
         results = _parse_ddg_lite(html, self._max_results)
-        if not results:
-            return _FALLBACK_MSG
-        return _format_results(query, results)
+        return _format_results(query, results) if results else _FALLBACK_MSG
 
     # ── Brave Search ───────────────────────────────────────────────────────────
 
@@ -293,6 +300,37 @@ class WebSearchTool:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+_JINA_DDG_HEADING_RE = re.compile(
+    r"^## \[([^\]]+)\]\(https://duckduckgo\.com/l/\?uddg=([^&)\s]+)",
+    re.MULTILINE,
+)
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+
+def _parse_jina_ddg_markdown(text: str, max_results: int) -> list[dict[str, str]]:
+    """Parse Jina-rendered DDG HTML markdown into result dicts.
+
+    DDG result headings have the form:
+      ## [Title](https://duckduckgo.com/l/?uddg=URL_ENCODED_REAL_URL&rut=...)
+    The snippet is the text block that follows until the next heading.
+    """
+    matches = list(_JINA_DDG_HEADING_RE.finditer(text))
+    results: list[dict[str, str]] = []
+    for i, m in enumerate(matches[:max_results]):
+        title = m.group(1).strip()
+        url = unquote(m.group(2))
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = text[start:end]
+        block = _MD_IMAGE_RE.sub("", block)
+        block = _MD_LINK_RE.sub(r"\1", block)
+        block = re.sub(r"https?://\S+", "", block)
+        snippet = " ".join(block.split())[:300]
+        results.append({"title": title, "url": url, "snippet": snippet})
+    return results
 
 
 def _parse_ddg_lite(html: str, max_results: int) -> list[dict[str, str]]:
