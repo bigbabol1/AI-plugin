@@ -147,12 +147,34 @@ class WebSearchTool:
     # ── DuckDuckGo ─────────────────────────────────────────────────────────────
 
     async def _search_duckduckgo(self, query: str) -> str:
-        """Search via DuckDuckGo Lite (unofficial, no API key required).
+        """Search via duckduckgo-search library (async, no API key).
 
-        Uses the lightweight HTML endpoint which is more stable than the
-        JSON instant-answer API.  Parses result titles and snippets with
-        a simple regex — no HTML parser dependency needed.
+        Falls back to the HTML scraper when the library is not installed
+        so existing setups without the requirement keep working.
         """
+        try:
+            from duckduckgo_search import AsyncDDGS  # type: ignore[import]
+        except ImportError:
+            _LOGGER.debug("duckduckgo-search not available, using HTML fallback")
+            return await self._search_duckduckgo_html(query)
+
+        try:
+            async with AsyncDDGS() as ddgs:
+                items = await ddgs.atext(query, max_results=self._max_results)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("DuckDuckGo (library) search failed: %s — trying HTML", exc)
+            return await self._search_duckduckgo_html(query)
+
+        if not items:
+            return _FALLBACK_MSG
+        results = [
+            {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
+            for r in items
+        ]
+        return _format_results(query, results)
+
+    async def _search_duckduckgo_html(self, query: str) -> str:
+        """HTML scraper fallback — DuckDuckGo Lite endpoint, no dependencies."""
         url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; AIPlugin/0.1; +https://github.com/bigbabol1/AI-plugin)",
@@ -165,7 +187,6 @@ class WebSearchTool:
                 timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
             ) as resp:
                 if resp.status == 202:
-                    # 202 = CAPTCHA challenge — DuckDuckGo is rate-limiting us
                     return _FALLBACK_MSG
                 if resp.status != 200:
                     return _FALLBACK_MSG

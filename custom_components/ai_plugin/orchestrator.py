@@ -65,6 +65,7 @@ from .shortcuts import async_try_media_shortcut, try_shortcut
 from .tools.ha_local import HALocalToolRegistry
 from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
+from .tools.browse_url import TOOL_SCHEMA as BROWSE_URL_SCHEMA, BrowseUrlTool
 from .tools._geocode import GeocodeResult, reverse_geocode
 
 if TYPE_CHECKING:
@@ -503,6 +504,10 @@ class Orchestrator:
         self._web_search: WebSearchTool | None = (
             WebSearchTool(opts) if opts.get(CONF_WEB_SEARCH_ENABLED, False) else None
         )
+        # Browse URL tool — enabled alongside web search (no extra config needed).
+        self._browse_url: BrowseUrlTool | None = (
+            BrowseUrlTool() if opts.get(CONF_WEB_SEARCH_ENABLED, False) else None
+        )
 
         # Resolves the user's home (entity → hass.config → nothing) and
         # reverse-geocodes coordinates to a city / region label. Lazy:
@@ -774,6 +779,8 @@ class Orchestrator:
             tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
             if self._web_search is not None:
                 tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
+            if self._browse_url is not None:
+                tool_schemas = [BROWSE_URL_SCHEMA, *tool_schemas]
             if self._memory is not None:
                 tool_schemas = [*MEMORY_TOOL_SCHEMAS, *tool_schemas]
             if self._ha_local is not None:
@@ -1100,6 +1107,9 @@ class Orchestrator:
                 location=location or None,
                 language=(location or {}).get("language"),
             )
+        if name == "browse_url" and self._browse_url is not None:
+            url = arguments.get("url", "")
+            return await self._browse_url.async_browse(url, strip_urls=voice_mode)
         if self._mcp is not None:
             return await self._mcp.call_tool(name, arguments)
         return f"[Tool {name!r} unavailable — no handler configured]"
