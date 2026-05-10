@@ -1114,15 +1114,21 @@ class HALocalToolRegistry:
         if target_area is None:
             return f"Unknown area {area!r}. Try list_areas."
 
-        # Pick the area's primary Music-Assistant media_player. Prefer
-        # entities whose state.attributes.app_id == "music_assistant"
-        # (native MA player) over generic media_players in the same area.
+        # Pick the area's primary Music-Assistant media_player.
+        # Filter by REGISTRY platform == "music_assistant" (stable; works
+        # whether the speaker is on or off). The previous heuristic of
+        # checking state.attributes.app_id only matched when the speaker
+        # was already actively playing — players with state=off were
+        # silently demoted to the fallback list, which often picked a
+        # surprising speaker.
         ent_reg = er.async_get(self._hass)
         dev_reg = dr.async_get(self._hass)
-        ma_native: list[str] = []
+        ma_native: list[tuple[str, str, list[str]]] = []
         other: list[str] = []
         for eid, entry in ent_reg.entities.items():
             if not eid.startswith("media_player."):
+                continue
+            if entry.disabled_by is not None or entry.hidden_by is not None:
                 continue
             area_id = entry.area_id
             if not area_id and entry.device_id:
@@ -1134,18 +1140,43 @@ class HALocalToolRegistry:
             if exposed_only and not self._is_exposed(eid):
                 continue
             state = self._hass.states.get(eid)
-            app_id = state.attributes.get("app_id") if state else None
-            if app_id == "music_assistant":
-                ma_native.append(eid)
+            fn = _s(state.attributes.get("friendly_name") if state else "") or ""
+            aliases = [_s(a) for a in (getattr(entry, "aliases", None) or ())]
+            if entry.platform == "music_assistant":
+                ma_native.append((eid, fn, aliases))
             else:
                 other.append(eid)
 
-        candidates = ma_native or other
-        if not candidates:
+        if not ma_native and not other:
             scope = "exposed " if exposed_only else ""
             return f"No {scope}media_player in {target_area.name}."
 
-        entity_id = sorted(candidates)[0]
+        entity_id: str | None = None
+        if ma_native:
+            # Prefer the player whose friendly_name or alias matches the
+            # area's name — that's almost always the user-blessed primary
+            # speaker (e.g. media_player.wohnzimmer_2 with friendly_name
+            # 'Wohnzimmer' in area 'living room' / alias 'wohnzimmer').
+            area_keys = {_s(target_area.name).lower()}
+            for al in (getattr(target_area, "aliases", None) or ()):
+                area_keys.add(_s(al).lower())
+            for eid, fn, aliases in ma_native:
+                hay = {fn.lower()} | {a.lower() for a in aliases}
+                if hay & area_keys:
+                    entity_id = eid
+                    break
+            if entity_id is None:
+                # Fallback: alphabetical first MA player.
+                entity_id = sorted(eid for eid, _, _ in ma_native)[0]
+        else:
+            # No MA-platform player found — last-resort fallback to any
+            # other media_player. play_media may not work via MA service
+            # in this case, but the call will fail loudly.
+            entity_id = sorted(other)[0]
+        _LOGGER.debug(
+            "play_music: target area=%r, ma_native=%d, other=%d, picked=%r",
+            target_area.name, len(ma_native), len(other), entity_id,
+        )
 
         try:
             await self._hass.services.async_call(
