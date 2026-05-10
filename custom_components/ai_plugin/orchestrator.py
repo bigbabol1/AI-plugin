@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import date as _date
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
@@ -178,6 +179,36 @@ def _is_online_query(text: str) -> bool:
     if _PLACE_QUERY_RE.search(text) and _EVENT_VERB_RE.search(text):
         return True
     return False
+
+
+# Short follow-up pronouns/question words that reference prior context.
+_FOLLOWUP_RE = re.compile(
+    r"^\s*(?:"
+    r"when\??|where\??|who\??|what\??|how\??|why\??|"
+    r"wann\??|wo\??|wer\??|was\??|wie\??|warum\??|"
+    r"(?:when|where|what|how|why|wann|wo|wer|was|wie)\s+.{1,60}"
+    r"|(?:and\s+)?(?:the|that|this|it|those|these|das|die|den|dieser?)\b.{0,80}"
+    r")\s*\??$",
+    re.IGNORECASE,
+)
+
+
+def _is_online_followup(text: str, tool_msgs: list[dict]) -> bool:
+    """True when the current message is a short follow-up to a prior web search.
+
+    Catches 'when exactly did that happen?', 'and the evacuation?', 'who was
+    involved?' etc. after the model already retrieved online data in this turn
+    or when recent tool messages contain a web_search result.
+    """
+    if not text or len(text.strip()) > 120:
+        return False
+    if _HA_SENSOR_RE.search(text):
+        return False
+    if not _FOLLOWUP_RE.search(text):
+        return False
+    # Only treat as online follow-up when there is evidence of a prior
+    # web search in the current conversation turn's tool messages.
+    return _any_tool_call(tool_msgs, "web_search")
 
 
 # Phrases get_entity / search_entities return when an entity can't be
@@ -979,27 +1010,33 @@ class Orchestrator:
 
             # 5d. Online-query grounding verifier: if the message clearly needs
             # live web data and web_search is available but was never called,
-            # the model answered from stale training data. Inject a corrective
-            # and re-run once. Skipped when web search is disabled.
-            if (
-                tool_schemas
-                and self._web_search is not None
-                and _is_online_query(message)
+            # the model answered from stale training data. Orchestrator calls
+            # web_search directly and injects results — no model cooperation.
+            # Also fires on short follow-up questions referencing a prior
+            # web search result ("when exactly did that happen?").
+            _needs_search = (
+                self._web_search is not None
+                and tool_schemas
                 and not _any_tool_call(tool_msgs, "web_search")
-            ):
+                and (
+                    _is_online_query(message)
+                    or _is_online_followup(message, tool_msgs)
+                )
+            )
+            if _needs_search:
                 _LOGGER.info(
                     "AI Plugin: web-search grounding — orchestrator injecting mandatory search"
                 )
-                # Orchestrator calls web_search directly — do not trust the
-                # model to initiate the call after a corrective message, as
-                # small local models often ignore it. Inject the results as a
-                # system message so the model only needs to summarise them.
                 try:
                     _loc = await self._location.async_resolve()
                 except Exception:  # noqa: BLE001
                     _loc = {}
+                # Append today's date so DDG returns current results instead
+                # of evergreen "check Eventbrite" style pages.
+                _today = _date.today().strftime("%Y-%m-%d")
+                _search_query = f"{message[:260]} ({_today})"
                 _search_result = await self._web_search.async_search(
-                    message[:300],
+                    _search_query,
                     strip_urls=voice_mode,
                     near_user=False,
                     location=_loc or None,
@@ -1009,6 +1046,7 @@ class Orchestrator:
                     "role": "system",
                     "content": (
                         "The user's question requires current information. "
+                        f"Today's date is {_today}. "
                         "A web search was run automatically. Results:\n\n"
                         f"{_search_result}\n\n"
                         "Answer the user's question using ONLY the above search "
