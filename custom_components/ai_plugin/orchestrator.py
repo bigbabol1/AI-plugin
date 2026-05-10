@@ -117,7 +117,9 @@ _ONLINE_QUERY_RE = re.compile(
     r"\b("
     # News / current events
     r"news|latest|breaking|trending|recent(?:ly)?|just\s+announced|"
-    r"current\s+events?|what(?:'s|\s+is)\s+happening|"
+    r"current\s+events?|what(?:'s|\s+is)\s+happening|what\s+happened|"
+    r"what(?:'s|\s+is)\s+going\s+on|going\s+on\s+in|events?\s+in|"
+    r"happened\s+in|happened\s+(?:this|last)|"
     # Prices / markets
     r"price\s+of|how\s+much\s+(?:is|does|costs?)|stock\s+price|"
     r"exchange\s+rate|bitcoin|crypto(?:currency)?|nasdaq|dow\s+jones|s&p|"
@@ -125,11 +127,14 @@ _ONLINE_QUERY_RE = re.compile(
     r"who\s+won|match\s+result|score(?:\s+of)?|game\s+(?:result|score)|"
     r"standings?|league\s+table|"
     # Temporal triggers (explicit recency)
-    r"today(?:'s)?|tonight|yesterday|this\s+week|this\s+month|"
+    r"today(?:'s)?|tonight|yesterday|last\s+night|this\s+morning|"
+    r"this\s+week(?:end)?|last\s+week(?:end)?|this\s+month|last\s+month|"
     r"right\s+now|at\s+the\s+moment|currently|"
     # German equivalents
     r"nachrichten|aktuell(?:e|er|es)?|neueste(?:n|s)?|gerade\s+jetzt|"
-    r"heute|gestern|diese\s+woche|preis\s+von|wer\s+hat\s+gewonnen"
+    r"heute|gestern|diese[sn]?\s+wochenende?|letzte[sn]?\s+wochenende?|"
+    r"diese\s+woche|letzte\s+woche|was\s+ist\s+passiert|was\s+war\s+los|"
+    r"preis\s+von|wer\s+hat\s+gewonnen"
     r")\b",
     re.IGNORECASE,
 )
