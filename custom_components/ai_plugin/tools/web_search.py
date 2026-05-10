@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date as _date
 from typing import Any
 from urllib.parse import quote_plus, unquote
 
@@ -124,6 +125,7 @@ class WebSearchTool:
             location=location,
             language=language,
         )
+        scoped_query = _maybe_inject_date(scoped_query)
         _LOGGER.debug(
             "WebSearchTool: backend=%s query=%r scoped=%r near_user=%s strip_urls=%s",
             self._backend, query, scoped_query, near_user, strip_urls,
@@ -449,6 +451,44 @@ def _best_place_label(location: dict[str, Any] | None) -> str | None:
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
         return f"{lat:.4f},{lon:.4f}"
     return None
+
+
+# Words/phrases that anchor a query to "now" or a recent window. When any
+# of these appear, we append today's ISO date so DDG returns dated articles
+# instead of evergreen index pages. Multilingual; conservative.
+_TEMPORAL_QUERY_RE = re.compile(
+    r"\b("
+    r"today|tonight|yesterday|last\s+night|this\s+morning|this\s+evening|"
+    r"this\s+week(?:end)?|last\s+week(?:end)?|this\s+month|last\s+month|"
+    r"right\s+now|at\s+the\s+moment|currently|current(?:ly)?|"
+    r"latest|recent(?:ly)?|breaking|just\s+(?:now|happened|announced)|"
+    r"happen(?:ed|ing)?|"
+    r"heute|gestern|heute\s+(?:nacht|abend|morgen)|"
+    r"diese[sn]?\s+wochenende?|letzte[sn]?\s+wochenende?|"
+    r"diese\s+woche|letzte\s+woche|diesen\s+monat|letzten\s+monat|"
+    r"gerade\s+(?:jetzt|eben)|im\s+moment|aktuell(?:e|er|es)?|"
+    r"neueste(?:n|s)?|nachrichten|passier(?:t|te)?"
+    r")\b",
+    re.IGNORECASE,
+)
+_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+
+
+def _maybe_inject_date(query: str) -> str:
+    """Append today's ISO date when query has a temporal anchor.
+
+    Search engines return evergreen pages for vague event queries
+    ("what happened in Berlin today"). Adding the explicit date forces
+    them to surface articles dated to the actual day.
+    Idempotent: skips when a date is already present.
+    """
+    if not query:
+        return query
+    if _DATE_RE.search(query):
+        return query
+    if not _TEMPORAL_QUERY_RE.search(query):
+        return query
+    return f"{query} {_date.today().isoformat()}"
 
 
 def _maybe_inject_location(
