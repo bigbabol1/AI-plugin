@@ -365,6 +365,56 @@ def _strip_emoji(text: str) -> str:
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()
 
+
+# Trailing "check X for details" / "you can find more at Y" filler sentences.
+# Models love padding factual answers with redirects to external sites; the
+# system prompt forbids it but small local models still emit them. Strip them
+# out post-hoc to keep replies tight.
+_FILLER_CLOSING_RE = re.compile(
+    r"(?:^|(?<=[.!?]\s))"
+    r"(?:"
+    # English patterns
+    r"check\s+(?:the\s+|local\s+|specific\s+|out\s+)?"
+    r"(?:event\s+)?(?:calendars?|listings?|details?|websites?|sites?|news\s+links?|providers?)"
+    r"[^\n]*"
+    r"|(?:specific\s+|detailed?\s+|more\s+|further\s+|additional\s+)?"
+    r"(?:details?|information|info)\s+(?:can\s+be\s+found|are\s+available|is\s+available)"
+    r"[^\n]*"
+    r"|(?:you\s+can\s+(?:check|find|visit|see|refer|consult|browse|explore))"
+    r"[^\n]*"
+    r"|for\s+(?:more|further|additional|specific|detailed?)\s+(?:information|info|details?)"
+    r"[^\n]*"
+    r"|(?:visit|refer\s+to|consult|see|check\s+out)\s+(?:the\s+)?"
+    r"(?:website|site|page|link|url|provided\s+links?)[^\n]*"
+    # German patterns
+    r"|weitere\s+informationen[^\n]*"
+    r"|f[uü]r\s+(?:weitere|spezifische|detaillierte?|mehr)\s+"
+    r"(?:informationen|details?|infos?)[^\n]*"
+    r"|schauen\s+sie[^\n]*"
+    r"|besuchen\s+sie[^\n]*"
+    r"|(?:einzelheiten|details?)\s+(?:finden\s+sie|sind\s+verf[uü]gbar)[^\n]*"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_filler_closing(text: str) -> str:
+    """Remove trailing 'check X for details' filler sentences.
+
+    Iterative: a reply may contain two filler sentences in a row.
+    Stops after a fixed number of passes so a pathological input
+    cannot loop.
+    """
+    if not text:
+        return text
+    cleaned = text.strip()
+    for _ in range(3):
+        new = _FILLER_CLOSING_RE.sub("", cleaned).strip()
+        if new == cleaned:
+            break
+        cleaned = new
+    return cleaned
+
 # Domain/device words that suggest the user is asking about a specific entity.
 _ENTITY_WORDS = frozenset(
     "light lights switch switches lamp lamps bulb bulbs sensor sensors "
@@ -1088,6 +1138,7 @@ class Orchestrator:
             else:
                 stored_reply = reply
             stored_reply = _strip_emoji(stored_reply) or stored_reply
+            stored_reply = _strip_filler_closing(stored_reply) or stored_reply
 
             # TTS suppression for media-playback tool calls. The audio that
             # starts/stops on the speaker IS the confirmation; speaking would
