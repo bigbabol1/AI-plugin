@@ -332,6 +332,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "enum": ["track", "album", "artist", "playlist", "radio"],
                         "description": "Optional. Default 'track'.",
                     },
+                    "radio_mode": {
+                        "type": "boolean",
+                        "description": (
+                            "Optional. Default auto. When true, Music Assistant "
+                            "creates a dynamic radio/playlist that continues playing "
+                            "similar tracks after the requested item finishes. "
+                            "Best for single-track or artist requests ('play Hotel "
+                            "California', 'play Enya'). "
+                            "When false, playback stops after the playlist/album/artist "
+                            "ends. Best for explicit playlists/albums. "
+                            "Auto: true for 'track', false for 'album'/'artist'/"
+                            "'playlist'/'radio'."
+                        ),
+                    },
                     **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["query"],
@@ -748,6 +762,7 @@ class HALocalToolRegistry:
                     query=_s(arguments.get("query")).strip(),
                     area=_s(arguments.get("area")).strip() or None,
                     media_type=_s(arguments.get("media_type")).strip() or "track",
+                    radio_mode=arguments.get("radio_mode"),
                     exposed_only=exposed_only,
                     device_id=device_id,
                 )
@@ -1190,6 +1205,7 @@ class HALocalToolRegistry:
         query: str,
         area: str | None,
         media_type: str = "track",
+        radio_mode: bool | None = None,
         exposed_only: bool = True,
         device_id: str | None = None,
     ) -> str:
@@ -1337,11 +1353,16 @@ class HALocalToolRegistry:
         )
 
         try:
+            _auto_radio = radio_mode if radio_mode is not None else (media_type == "track")
             await self._hass.services.async_call(
                 "music_assistant",
                 "play_media",
                 target={"entity_id": entity_id},
-                service_data={"media_id": query, "media_type": media_type},
+                service_data={
+                    "media_id": query,
+                    "media_type": media_type,
+                    "radio_mode": _auto_radio,
+                },
                 blocking=True,
             )
         except Exception as exc:  # noqa: BLE001
