@@ -575,6 +575,39 @@ _TIMER_INTENTS = {
     "timer_status": "HassTimerStatus",
 }
 
+_DURATION_UNIT_RE = re.compile(
+    r"(\d+)\s*"
+    r"(hours?|hrs?|stunden?|minutes?|mins?|minuten?|seconds?|secs?|sekunden?)",
+    re.IGNORECASE,
+)
+
+
+def _parse_utterance_duration(text: str) -> dict[str, int] | None:
+    """Extract an explicit h/m/s duration from a spoken utterance (EN + DE).
+
+    Sums repeated units (e.g. '1 minute 30 seconds' / '1 Minute 30 Sekunden')
+    and returns any of {'hours','minutes','seconds'} found, else None. Used to
+    override model slot-filling, which sometimes assigns the wrong unit
+    (e.g. '10 seconds' → minutes=10).
+    """
+    if not text:
+        return None
+    out: dict[str, int] = {}
+    for num, unit in _DURATION_UNIT_RE.findall(text):
+        u = unit.lower()
+        if u.startswith(("hour", "hr", "stunde")):
+            key = "hours"
+        elif u.startswith("min"):
+            key = "minutes"
+        else:
+            key = "seconds"
+        try:
+            out[key] = out.get(key, 0) + int(num)
+        except ValueError:
+            continue
+    return out or None
+
+
 TOOL_NAMES = {
     "list_areas",
     "list_entities",
@@ -661,7 +694,8 @@ class HALocalToolRegistry:
 
             if name in _TIMER_INTENTS:
                 return await self._call_timer_intent(
-                    name, arguments, device_id=device_id, language=language
+                    name, arguments, device_id=device_id, language=language,
+                    user_message=user_message,
                 )
 
             if name == "list_areas":
@@ -1495,6 +1529,7 @@ class HALocalToolRegistry:
         arguments: dict[str, Any],
         device_id: str | None = None,
         language: str | None = None,
+        user_message: str = "",
     ) -> str:
         """Invoke a HA built-in voice-timer intent.
 
@@ -1531,6 +1566,23 @@ class HALocalToolRegistry:
                 except (TypeError, ValueError):
                     continue
                 slots[key] = {"value": int_val}
+
+        # Deterministic override: the spoken utterance is ground truth for the
+        # duration. Small models sometimes mis-fill the unit (e.g. "10 seconds"
+        # → minutes=10), so when the utterance carries an explicit duration we
+        # replace the model's h/m/s slots with the parsed value (name is kept).
+        if tool_name in ("start_timer", "increase_timer", "decrease_timer"):
+            parsed = _parse_utterance_duration(user_message)
+            if parsed:
+                for k in ("hours", "minutes", "seconds"):
+                    slots.pop(k, None)
+                for k, v in parsed.items():
+                    slots[k] = {"value": v}
+                _LOGGER.debug(
+                    "AI Plugin timer: duration from utterance %r → %s "
+                    "(overrode model slots)",
+                    (user_message or "")[:80], parsed,
+                )
 
         if tool_name == "start_timer":
             has_duration = any(k in slots for k in ("hours", "minutes", "seconds"))
