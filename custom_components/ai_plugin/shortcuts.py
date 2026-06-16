@@ -725,15 +725,19 @@ def _resolve_named_entity(
     for eid, entry in ent_reg.entities.items():
         if eid.split(".", 1)[0] not in _ACTION_DOMAINS:
             continue
-        if async_should_expose is not None and not async_should_expose(
-            hass, _CONVERSATION_ASSISTANT, eid
-        ):
-            continue
-        cands = [entry.name, entry.original_name, *(entry.aliases or ())]
+        if async_should_expose is not None:
+            try:
+                if not async_should_expose(hass, _CONVERSATION_ASSISTANT, eid):
+                    continue
+            except Exception:  # noqa: BLE001 — fail open; never let one entity abort resolution
+                pass
+        raw = [entry.name, entry.original_name, *(entry.aliases or ())]
         st = hass.states.get(eid)
         if st:
-            cands.append(st.attributes.get("friendly_name"))
-        cands = [c.lower() for c in cands if c]
+            raw.append(st.attributes.get("friendly_name"))
+        # entry.name can be a non-str sentinel (HA ComputedNameType) and
+        # state attributes are arbitrary types — keep only real strings.
+        cands = [c.lower() for c in raw if isinstance(c, str) and c]
         if not cands:
             continue
         area = _entry_area_id(hass, entry, dev_reg)

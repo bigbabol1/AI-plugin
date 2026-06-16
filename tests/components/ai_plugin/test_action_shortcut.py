@@ -167,3 +167,18 @@ async def test_unexposed_entity_not_actuated(monkeypatch):
     result = await async_try_action_shortcut(hass, "switch TV on", lang="en")
     assert result is None
     hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_string_registry_name_does_not_crash(patched):
+    """HA 2026.6 entry.name can be a non-str sentinel (ComputedNameType) with
+    no .lower(); iterating it must not abort resolution of the real device."""
+    class _Computed:  # mimics HA's ComputedNameType
+        pass
+    ents = [_entity("light.weird", name=_Computed()), TV()]
+    hass, ent_reg, dev_reg = _make_hass(ents)
+    patched(hass, ent_reg, dev_reg)
+    result = await async_try_action_shortcut(hass, "switch TV on", lang="en")
+    assert result == (True, "")
+    _, service, eid = _last_call(hass)
+    assert service == "turn_on" and eid == "switch.tv"

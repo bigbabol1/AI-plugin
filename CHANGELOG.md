@@ -4,6 +4,11 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.25 — Fix on/off shortcut crashing on real registries
+
+**Fixed:**
+- `_resolve_named_entity` raised `AttributeError: 'ComputedNameType' object has no attribute 'lower'` on Home Assistant 2026.6, where `entry.name` can be a non-`str` sentinel for auto-computed names. Iterating the entity registry hit such an entry, the whole on/off shortcut threw, and every command fell through to the LLM — so the v0.9.23 deterministic shortcut never actually fired on a live install (unit-test mocks used plain-string aliases and missed it). Candidate names are now filtered to real strings (`isinstance(c, str)`), and the `async_should_expose` check is wrapped fail-open so a single problem entity can't abort resolution. Regression test added.
+
 ## v0.9.24 — Bake single-device on/off guidance into the voice prompt
 
 **Changed:**
