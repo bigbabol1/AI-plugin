@@ -4,6 +4,13 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.23 — Deterministic on/off shortcut (all languages)
+
+**New:**
+- Single named-device on/off now resolves deterministically *before* the LLM, in all 6 i18n languages. Phrasings like "switch the TV on", "TV on", and German "schalte den Fernseher ein" / "mach den Fernseher aus" no longer depend on the small model getting the tool call right.
+- New `action_on` / `action_off` regex pattern lists in each `i18n/<code>.yaml` (each captures the device as `(?P<name>...)`). Add or improve a language's coverage by editing its YAML — no Python changes.
+- `shortcuts.async_try_action_shortcut`: matches the per-language patterns, resolves the captured name to one exposed entity in switch/light/fan/input_boolean/humidifier/siren (exact then substring match, caller-area tiebreak), and dispatches `homeassistant.turn_on`/`turn_off`. Ambiguous or unresolved devices fall through to the LLM rather than actuating the wrong one. Empty reply (TTS suppression) on success.
+
 ## v0.9.0 — Data-driven multilingual support
 
 **Breaking:**

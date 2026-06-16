@@ -35,3 +35,7 @@ keywords:
 patterns:
   narration_full: []
   sun_full:       []
+  action_on:
+    - '^(?:allume|allumer|allumez|active|activer)\s+(?:le|la|les|l''|l’|un|une)?\s*(?P<name>.+?)$'
+  action_off:
+    - '^(?:éteins|eteins|éteindre|éteignez|désactive|desactive|coupe)\s+(?:le|la|les|l''|l’)?\s*(?P<name>.+?)$'

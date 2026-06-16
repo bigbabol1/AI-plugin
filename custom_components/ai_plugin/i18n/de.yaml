@@ -35,3 +35,9 @@ keywords:
 patterns:
   narration_full: []
   sun_full:       []
+  action_on:
+    - '^(?:schalte|mach|stell|stelle|dreh|drehe)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+(?:ein|an)$'
+    - '^(?P<name>.+?)\s+(?:ein|an)$'
+  action_off:
+    - '^(?:schalte|mach|stell|stelle|dreh|drehe)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+aus$'
+    - '^(?P<name>.+?)\s+aus$'

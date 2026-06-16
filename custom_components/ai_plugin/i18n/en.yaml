@@ -35,3 +35,13 @@ keywords:
 patterns:
   narration_full: []
   sun_full:       []
+  # Single named-device on/off (deterministic, bypasses the LLM). Each
+  # regex must capture the device as (?P<name>...). Compiled IGNORECASE.
+  action_on:
+    - '^(?:turn|switch|flip|put)\s+on\s+(?:the\s+|a\s+)?(?P<name>.+?)$'
+    - '^(?:turn|switch|flip|put)\s+(?:the\s+|a\s+)?(?P<name>.+?)\s+on$'
+    - '^(?P<name>.+?)\s+on$'
+  action_off:
+    - '^(?:turn|switch|flip|put)\s+off\s+(?:the\s+|a\s+)?(?P<name>.+?)$'
+    - '^(?:turn|switch|flip|put)\s+(?:the\s+|a\s+)?(?P<name>.+?)\s+off$'
+    - '^(?P<name>.+?)\s+off$'

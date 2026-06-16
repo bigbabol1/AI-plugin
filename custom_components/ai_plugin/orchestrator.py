@@ -62,7 +62,7 @@ from .context_manager import ContextManager
 from .exceptions import OrchestratorError
 from .i18n import L
 from .providers.openai_compat import OpenAICompatProvider
-from .shortcuts import async_try_media_shortcut, try_shortcut
+from .shortcuts import async_try_action_shortcut, async_try_media_shortcut, try_shortcut
 from .tools.ha_local import HALocalToolRegistry
 from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
@@ -1056,6 +1056,31 @@ class Orchestrator:
                         conversation_id, "assistant", media_reply
                     )
                     return media_reply
+
+            # 1d. Pre-LLM shortcut for single named-device on/off commands
+            # (all i18n languages). Small models mis-route "switch X on" /
+            # "schalte X ein" (verb vs domain, or only "turn on X" word
+            # order); this resolves the named device and dispatches the
+            # service directly, returning an empty reply for TTS
+            # suppression. Misses / ambiguous devices fall through to the LLM.
+            try:
+                action_result = await async_try_action_shortcut(
+                    self._hass, message, lang=lang, device_id=device_id
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: action shortcut raised", exc_info=True)
+                action_result = None
+            if action_result is not None:
+                handled, action_reply = action_result
+                if handled:
+                    _LOGGER.info(
+                        "AI Plugin: action shortcut hit for conv=%s",
+                        conversation_id,
+                    )
+                    await self._context_mgr.add_turn(
+                        conversation_id, "assistant", action_reply
+                    )
+                    return action_reply
 
             # 2. Summarize old turns if we're approaching the soft token limit.
             if self._summarization_enabled:

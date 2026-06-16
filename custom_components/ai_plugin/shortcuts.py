@@ -25,7 +25,7 @@ import logging
 import re
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import (
     area_registry as ar,
     device_registry as dr,
@@ -669,5 +669,150 @@ async def async_try_media_shortcut(
         cmd,
         service,
         ", ".join(target_ids),
+    )
+    return (True, "")
+
+
+# ── On/off shortcut for a single named device (all i18n languages) ─────────────
+
+# HassTurnOn-equivalent domains a deterministic on/off may actuate.
+_ACTION_DOMAINS = ("switch", "light", "fan", "input_boolean", "humidifier", "siren")
+
+
+def _caller_area_id(hass: HomeAssistant, device_id: str | None) -> str | None:
+    """Resolve the area of the calling voice satellite, if any."""
+    if not device_id:
+        return None
+    dev = dr.async_get(hass).async_get(device_id)
+    if dev and dev.area_id:
+        return dev.area_id
+    for entry in er.async_entries_for_device(er.async_get(hass), device_id):
+        if entry.area_id:
+            return entry.area_id
+    return None
+
+
+def _entry_area_id(hass: HomeAssistant, entry: Any, dev_reg: Any) -> str | None:
+    """Area of an entity entry, falling back to its device's area."""
+    if entry.area_id:
+        return entry.area_id
+    if entry.device_id:
+        dev = dev_reg.async_get(entry.device_id)
+        return dev.area_id if dev else None
+    return None
+
+
+def _resolve_named_entity(
+    hass: HomeAssistant, name: str, *, device_id: str | None = None
+) -> str | None:
+    """Resolve a spoken device name to ONE exposed, actuatable entity_id.
+
+    Matches name / original_name / aliases / friendly_name (exact first,
+    then substring), restricted to exposed entities in _ACTION_DOMAINS.
+    When the match is ambiguous, the caller's area breaks the tie; if it
+    still can't, returns None so the LLM can disambiguate rather than the
+    shortcut actuating the wrong device.
+    """
+    needle = name.strip().lower().strip(".?!,")
+    if not needle:
+        return None
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    caller = _caller_area_id(hass, device_id)
+
+    exact: list[tuple[str, str | None]] = []
+    substr: list[tuple[str, str | None]] = []
+    for eid, entry in ent_reg.entities.items():
+        if eid.split(".", 1)[0] not in _ACTION_DOMAINS:
+            continue
+        if async_should_expose is not None and not async_should_expose(
+            hass, _CONVERSATION_ASSISTANT, eid
+        ):
+            continue
+        cands = [entry.name, entry.original_name, *(entry.aliases or ())]
+        st = hass.states.get(eid)
+        if st:
+            cands.append(st.attributes.get("friendly_name"))
+        cands = [c.lower() for c in cands if c]
+        if not cands:
+            continue
+        area = _entry_area_id(hass, entry, dev_reg)
+        if needle in cands:
+            exact.append((eid, area))
+        elif any(needle in c for c in cands):
+            substr.append((eid, area))
+
+    for pool in (exact, substr):
+        if not pool:
+            continue
+        if len(pool) == 1:
+            return pool[0][0]
+        if caller:
+            same = [eid for eid, area in pool if area == caller]
+            if len(same) == 1:
+                return same[0]
+        return None  # ambiguous, no clean winner → fall through to the LLM
+    return None
+
+
+async def async_try_action_shortcut(
+    hass: HomeAssistant,
+    message: str,
+    *,
+    lang: str = "en",
+    device_id: str | None = None,
+) -> tuple[bool, str] | None:
+    """Pre-LLM shortcut: turn a single named device on/off, in any language.
+
+    Small models mis-route phrasings like "switch TV on" or German
+    "schalte den Fernseher ein" (treating "switch"/"schalte" as a domain,
+    or only handling "turn on X" word order). This matches the per-language
+    action_on / action_off regexes from i18n, resolves the captured device
+    name to one exposed entity, and dispatches homeassistant.turn_on/off
+    directly. 'switch'/'schalte' is the verb here, never a domain.
+
+    Returns (handled, reply) with reply="" for TTS suppression, or None to
+    fall through to the LLM (no match / unresolved / ambiguous device).
+    """
+    if not message:
+        return None
+    msg = message.strip().rstrip(".?!").lower()
+    if not msg or len(msg.split()) > 7:
+        return None
+
+    action: str | None = None
+    name: str = ""
+    # off-first: on/off tokens are disjoint, but this is a safe tiebreak.
+    for polarity, service in (("off", "turn_off"), ("on", "turn_on")):
+        for rx in L.pattern_list(f"action_{polarity}", lang):
+            m = rx.match(msg)
+            if m and (m.group("name") or "").strip():
+                action, name = service, m.group("name").strip()
+                break
+        if action:
+            break
+    if action is None:
+        return None
+
+    entity_id = _resolve_named_entity(hass, name, device_id=device_id)
+    if not entity_id:
+        return None
+
+    try:
+        await hass.services.async_call(
+            "homeassistant",
+            action,
+            {"entity_id": entity_id},
+            blocking=True,
+            context=Context(),
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception(
+            "AI Plugin action shortcut: %s on %s failed", action, entity_id
+        )
+        return None
+
+    _LOGGER.info(
+        "AI Plugin action shortcut: %s → %s (lang=%s)", action, entity_id, lang
     )
     return (True, "")
