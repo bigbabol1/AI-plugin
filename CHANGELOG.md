@@ -4,6 +4,11 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.24 — Bake single-device on/off guidance into the voice prompt
+
+**Changed:**
+- `SYSTEM_PROMPT_VOICE` now carries explicit, language-agnostic single-device on/off guidance: "switch/turn X on/off" (and the same in the user's language) is a VERB on a named device → resolve via `search_entities` then `HassTurnOn`/`HassTurnOff`, never `set_area_state`. This is the LLM fallback for cases the deterministic on/off shortcut (v0.9.23) does not catch — ambiguous/unresolved device names, multi-clause commands, and on/off for cover/climate. Behaviour no longer depends on a per-install custom system prompt. Per-language handling continues to live in the i18n shortcut (`i18n/<lang>.yaml`), keeping the prompt itself language-agnostic.
+
 ## v0.9.23 — Deterministic on/off shortcut (all languages)
 
 **New:**
