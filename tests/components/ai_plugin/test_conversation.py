@@ -43,6 +43,7 @@ def _baseline_orch(entry=None) -> Orchestrator:
     orch._memory = None
     orch._max_tool_iterations = 5
     orch._web_search = None
+    orch._browse_url = None
     orch._ha_local = None
     orch._last_entities = {}
     orch._conv_locks = {}

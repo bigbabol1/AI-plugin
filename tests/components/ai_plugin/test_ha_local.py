@@ -131,7 +131,7 @@ def test_set_area_state_schema_registered() -> None:
     assert set(params["required"]) == {"domain", "action"}
     assert "area" in params["properties"]
     assert set(params["properties"]["domain"]["enum"]) == {
-        "light", "switch", "fan", "media_player", "cover", "climate",
+        "light", "switch", "fan", "cover", "climate",
     }
     assert set(params["properties"]["action"]["enum"]) == {
         "turn_on", "turn_off", "toggle",
@@ -327,6 +327,7 @@ async def test_set_area_state_sweep_all_keyword(patched_registries) -> None:
     out = await reg.call_tool(
         "set_area_state",
         {"area": "all", "domain": "light", "action": "turn_off"},
+        user_message="turn off all lights",
     )
     assert "turn_off 2 light(s) in all areas" in out
     args, kwargs = hass.services.async_call.call_args
@@ -368,5 +369,6 @@ async def test_set_area_state_sweep_german_alias(patched_registries) -> None:
     out = await reg.call_tool(
         "set_area_state",
         {"area": "alle", "domain": "light", "action": "turn_off"},
+        user_message="alle Lichter ausschalten",
     )
     assert "turn_off 1 light(s) in all areas" in out

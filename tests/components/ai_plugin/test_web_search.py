@@ -331,6 +331,7 @@ async def test_orchestrator_dispatches_web_search_tool() -> None:
     orch._ha_local = None
     orch._max_tool_iterations = 5
     orch._web_search = mock_web
+    orch._browse_url = None
     orch._provider = mock_provider
     orch._location = mock_location
     orch._last_entities = {}
@@ -522,7 +523,11 @@ async def test_async_search_injects_location_when_near_user_true(monkeypatch) ->
         location={"city": "Berlin"},
         language="en",
     )
-    assert captured == ["events tonight near Berlin"]
+    # near_user injects the location; a temporal query ("tonight") also gets
+    # today's ISO date appended for grounding — assert the location bias
+    # without pinning the dynamic date.
+    assert len(captured) == 1
+    assert captured[0].startswith("events tonight near Berlin")
 
 
 async def test_async_search_no_inject_when_location_none(monkeypatch) -> None:
