@@ -1,0 +1,222 @@
+# Eval prompt matrix for AI Plugin.
+#
+# Placeholders like {test_light_name} are filled from home.yaml `values`.
+# Prompts marked `mutating: true` change state (actuation, timers, memory)
+# and only run with --full. `verify_template` is rendered by HA after the
+# final turn and must yield "True" — real state proof, not reply parsing.
+#
+# Rubric per turn: HTTP 200 + non-empty speech (unless empty_ok) +
+# ≥1 `any` regex (when given) + no `none` regex + no defaults.none regex.
+
+defaults:
+  none:
+    - "(?i)couldn't produce an answer"
+    - "(?i)couldn't process that"
+    - "(?i)tool call limit"
+    - "(?i)as an ai\\b"
+
+prompts:
+  # ── sun (deterministic shortcut expected — sub-second) ──────────────────
+  - id: sun_sunset_en
+    category: sun
+    text: "when does the sun set today?"
+    expect: {any: ["\\b\\d{1,2}:\\d{2}\\b"]}
+  - id: sun_up_en
+    category: sun
+    text: "is the sun up right now?"
+    expect: {any: ["(?i)(sun is (up|down|above|below)|it('s| is) (day|dark|night))"]}
+  - id: sun_sunset_de
+    category: sun
+    lang: de
+    text: "wann geht die Sonne unter?"
+    expect: {any: ["\\b\\d{1,2}:\\d{2}\\b"]}
+
+  # ── time / date (known shortcut gap — LLM must read [CURRENT TIME]) ─────
+  - id: time_now_en
+    category: time
+    text: "what time is it?"
+    expect: {any: ["\\b\\d{1,2}:\\d{2}\\b"], none: ["(?i)don't (have|know)"]}
+  - id: date_today_en
+    category: time
+    text: "what day is it today?"
+    expect: {any: ["(?i)monday|tuesday|wednesday|thursday|friday|saturday|sunday"]}
+
+  # ── sensors in areas (deterministic shortcut expected) ──────────────────
+  - id: sensor_temp_bedroom_en
+    category: sensor
+    text: "what's the temperature in the bedroom?"
+    expect: {any: ["\\d+([.,]\\d+)?\\s*°?"], none: ["(?i)don't have|can't find|no (temperature )?sensor"]}
+  - id: sensor_temp_living_en
+    category: sensor
+    text: "how warm is it in the living room?"
+    expect: {any: ["\\d+([.,]\\d+)?\\s*°?"], none: ["(?i)don't have|can't find"]}
+  - id: sensor_temp_hobby_en
+    category: sensor
+    text: "temperature in the hobby room"
+    expect: {any: ["\\d+([.,]\\d+)?\\s*°?"], none: ["(?i)don't have|can't find"]}
+  - id: sensor_humidity_bedroom_en
+    category: sensor
+    text: "how humid is it in the bedroom?"
+    expect: {any: ["\\d+([.,]\\d+)?\\s*%?"], none: ["(?i)don't have|can't find"]}
+  - id: sensor_temp_bedroom_de
+    category: sensor
+    lang: de
+    text: "wie warm ist es im Schlafzimmer?"
+    expect: {any: ["\\d+([.,]\\d+)?\\s*°?"], none: ["(?i)kann (ich )?nicht|keine?n? Sensor"]}
+  - id: sensor_humidity_living_de
+    category: sensor
+    lang: de
+    text: "wie hoch ist die Luftfeuchtigkeit im Wohnzimmer?"
+    expect: {any: ["\\d+([.,]\\d+)?\\s*%?"]}
+
+  # ── state-set queries (grounding verifier territory) ────────────────────
+  - id: state_lights_on_en
+    category: state_list
+    text: "are any lights on?"
+    expect: {any: ["(?i)\\bno\\b|\\bnone\\b|no lights|all .* off|\\bon\\b"]}
+  - id: state_lights_kitchen_en
+    category: state_list
+    text: "which lights are on in the kitchen?"
+    expect: {any: ["(?i)\\bno\\b|\\bnone\\b|off|\\bon\\b"]}
+  - id: state_lights_on_de
+    category: state_list
+    lang: de
+    text: "sind irgendwelche Lichter an?"
+    expect: {any: ["(?i)\\bnein\\b|kein|aus\\b|\\ban\\b"]}
+
+  # ── inventory / discovery ────────────────────────────────────────────────
+  - id: inv_rooms_en
+    category: inventory
+    text: "what rooms do you have?"
+    expect: {any: ["(?i)kitchen"], none: ["(?i)don't have"]}
+  - id: inv_kitchen_en
+    category: inventory
+    text: "what devices are in the kitchen?"
+    expect: {none: ["(?i)don't have any|no devices"]}
+  - id: inv_lights_en
+    category: inventory
+    text: "list my lights"
+    expect: {any: ["(?i)light|lamp|licht"], none: ["(?i)don't have"]}
+
+  # ── climate (read-only) ──────────────────────────────────────────────────
+  - id: climate_thermostat_en
+    category: climate
+    text: "what is the thermostat set to?"
+    expect: {any: ["\\d+([.,]\\d+)?\\s*°?"], none: ["(?i)can't find|don't have"]}
+
+  # ── weather: local entity path ───────────────────────────────────────────
+  - id: weather_now_en
+    category: weather
+    text: "what's the weather like?"
+    expect: {any: ["(?i)(\\d+([.,]\\d+)?\\s*°?|sunny|cloud|rain|clear|overcast|fog|storm|snow)"]}
+  - id: weather_tomorrow_en
+    category: weather
+    text: "will it rain tomorrow?"
+    expect: {any: ["(?i)rain|dry|no |yes|unlikely|likely|%"]}
+  - id: weather_now_de
+    category: weather
+    lang: de
+    text: "wie ist das Wetter?"
+    expect: {any: ["(?i)(\\d+([.,]\\d+)?\\s*°?|sonnig|wolk|regen|klar|bedeckt|nebel|schnee)"]}
+
+  # ── weather: named place (must route to web_search, not local entity) ────
+  - id: weather_tokyo_en
+    category: weather_place
+    text: "what's the weather in Tokyo right now?"
+    expect: {any: ["(?i)tokyo|\\d+\\s*°"], none: ["(?i)don't have access|cannot check"]}
+
+  # ── web / current info ───────────────────────────────────────────────────
+  - id: web_bitcoin_en
+    category: web
+    text: "what is the price of bitcoin?"
+    expect: {any: ["(?i)[\\$€]|\\d{2,3}[.,]\\d{3}|dollar|euro"], none: ["(?i)don't have access|real-time"]}
+  - id: web_news_en
+    category: web
+    text: "what's in the news today?"
+    expect: {none: ["(?i)don't have access|real-time|training data"]}
+  - id: web_events_nearby_en
+    category: web
+    text: "any events nearby this weekend?"
+    expect: {none: ["(?i)don't have access|check (the )?(listings|websites|calendars)"]}
+
+  # ── bare-noun sanity (historical prompt-dump failure mode) ───────────────
+  - id: short_weather_en
+    category: sanity
+    text: "weather"
+    expect: {none: ["(?i)\\[PERSONALITY\\]|\\[ENTITY|system prompt|STRICT"]}
+  - id: short_temperature_en
+    category: sanity
+    text: "temperature"
+    expect: {none: ["(?i)\\[PERSONALITY\\]|\\[ENTITY|STRICT"]}
+  - id: short_events_en
+    category: sanity
+    text: "events"
+    expect: {none: ["(?i)\\[PERSONALITY\\]|super bowl|STRICT"]}
+
+  # ── media question (read-only) ───────────────────────────────────────────
+  - id: media_whats_playing_en
+    category: media_q
+    text: "what is playing right now?"
+    expect: {any: ["(?i)nothing|no media|not playing|playing|paused"]}
+
+  # ── actuation: named device (MUTATING — verified via live state) ─────────
+  - id: action_light_on_named
+    category: action
+    mutating: true
+    text: "turn on the {test_light_name}"
+    expect: {empty_ok: true, none: ["(?i)can't find|couldn't|which"]}
+    verify_template: "{{ is_state('{test_light_entity}', 'on') }}"
+    cleanup_service: {domain: light, service: turn_off, entity_id: "{test_light_entity}"}
+  - id: action_light_off_named
+    category: action
+    mutating: true
+    text: "switch the {test_light_name} off"
+    expect: {empty_ok: true, none: ["(?i)can't find|couldn't|which"]}
+    verify_template: "{{ is_state('{test_light_entity}', 'off') }}"
+  - id: action_light_on_named_de
+    category: action
+    mutating: true
+    lang: de
+    text: "schalte {test_light_name} ein"
+    expect: {empty_ok: true, none: ["(?i)nicht finden|welche"]}
+    verify_template: "{{ is_state('{test_light_entity}', 'on') }}"
+    cleanup_service: {domain: light, service: turn_off, entity_id: "{test_light_entity}"}
+  - id: action_area_kitchen
+    category: action
+    mutating: true
+    text: "turn off the lights in the kitchen"
+    expect: {empty_ok: true}
+    verify_template: >-
+      {{ states.light | selectattr('state','eq','on')
+         | selectattr('entity_id','in', area_entities('kitchen'))
+         | list | count == 0 }}
+
+  # ── timers (MUTATING — self-cleaning pair) ───────────────────────────────
+  - id: timer_set_cancel
+    category: timer
+    mutating: true
+    turns:
+      - text: "set a timer for 45 minutes called eval"
+        expect: {any: ["(?i)45|eval|timer"], none: ["(?i)couldn't|failed"]}
+      - text: "cancel the eval timer"
+        expect: {none: ["(?i)no .*timer|couldn't|failed"]}
+  - id: timer_seconds_unit
+    category: timer
+    mutating: true
+    turns:
+      - text: "set a timer for 90 seconds"
+        expect: {any: ["(?i)90\\s*seconds|1[.,:]?5|one and a half|minute"], none: ["(?i)90\\s*minutes"]}
+      - text: "cancel the timer"
+        expect: {none: ["(?i)couldn't|failed"]}
+
+  # ── memory round-trip (MUTATING — self-cleaning) ─────────────────────────
+  - id: memory_roundtrip
+    category: memory
+    mutating: true
+    turns:
+      - text: "remember that my eval marker word is quokka"
+        expect: {none: ["(?i)error|couldn't"]}
+      - text: "what is my eval marker word?"
+        expect: {any: ["(?i)quokka"]}
+      - text: "forget that my eval marker word is quokka"
+        expect: {none: ["(?i)error"]}

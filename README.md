@@ -128,9 +128,11 @@ The integration's **Listen for follow-up after voice replies** option (Settings 
 
 ### How it works end-to-end
 
-When enabled (default), `AIPluginConversationEntity._async_handle_message` returns `ConversationResult(continue_conversation=True)` ([`conversation.py`](custom_components/ai_plugin/conversation.py)). HA Core's `assist_pipeline` reads that flag and instructs the bound voice satellite to start a fresh STT/VAD listen window without triggering the wake word — this is the standard HA mechanism shared by every conversation agent, so the behaviour is identical with Whisper / Piper / Wyoming / external satellites.
+For **typed Assist and REST API** turns, the option (default on) makes `async_process` return `ConversationResult(continue_conversation=True)` ([`conversation.py`](custom_components/ai_plugin/conversation.py)), HA's standard mechanism for keeping a session open.
 
-A **close-phrase detector** (`_match_close_phrase`, see `const.py` `CLOSE_PHRASES`) overrides the flag to `False` whenever the user's input matches a closing utterance (`thanks`, `bye`, `done`, `okay that's all`, German `tschüss` / `danke das war's`, etc.) so the loop ends cleanly without an awkward extra listen.
+For **real voice satellites** (devices with an `assist_satellite` entity) the integration always returns `continue_conversation=False`, regardless of this option. Satellites whose TTS plays through a separate speaker otherwise re-hear their own reply and re-trigger STT — an acoustic feedback loop. Chained voice turns are instead handled satellite-side (see the SmartMic switch below); say the wake word to start the next turn on stock satellites.
+
+A **close-phrase detector** (`_match_close_phrase`, see `const.py` `CONVERSATION_CLOSE_PHRASES`) forces the flag to `False` whenever the user's input matches a closing utterance (`thanks`, `bye`, `done`, `okay that's all`, German `tschüss` / `danke das war's`, etc.) so the loop ends cleanly without an awkward extra listen.
 
 ### Companion satellite switch — `Persistent Conversation`
 
@@ -138,16 +140,8 @@ If you pair AI Plugin with the [SmartMic](https://github.com/bigbabol1/SmartMic)
 
 | Setting | Owns | Triggers when |
 |---------|------|---------------|
-| **AI Plugin → Listen for follow-up** | The next *speech* turn | After every successful reply (`continue_conversation=True`) — HA pipeline re-arms STT once. |
-| **SmartMic → Persistent Conversation** | The follow-up *silence* recovery | Only fires inside `voice_assistant.on_error` when STT returns `stt-no-text-recognized`. If on, it silently re-arms STT instead of dropping back to wake-word mode after the 5 s error timeout. |
-
-Practical combinations:
-
-| AI Plugin follow-up | Satellite persistent | Behaviour |
-|---|---|---|
-| ON | ON | Most natural — chained turns, tolerant of pauses, only the wake word or a close phrase ends the session. |
-| ON | OFF | One follow-up window per reply; if the user is silent the satellite drops back to wake-required after ~5 s. |
-| OFF | (any) | Wake word required for every turn; the satellite switch is a no-op for this path. |
+| **AI Plugin → Listen for follow-up** | Follow-up turns for *typed Assist / REST* sessions | After every non-close-phrase reply on non-satellite paths. No effect on voice satellites (always force-ended, see above). |
+| **SmartMic → Persistent Conversation** | Chained *voice* turns on the satellite itself | Satellite-side re-arm of STT after replies/silence, independent of HA's `continue_conversation` flag. This is the supported way to get wake-word-free follow-ups on voice. |
 
 The satellite-side `on_end` handler also detects `voice_assistant.is_running()` and skips its wake-restart branch so the two `voice_assistant.start` cycles never fight each other.
 
@@ -187,7 +181,9 @@ All settings are editable post-install via **Settings → Devices & Services →
 
 ## Web Search Backends
 
-Default backend is **Brave Search**. Pick another in the Web Search step.
+Default backend is **DuckDuckGo** (zero config, works out of the box). For
+better quality, pick Brave or Tavily in the Web Search step and supply an
+API key.
 
 | Backend | Cost | API key | Notes |
 |---------|------|---------|-------|

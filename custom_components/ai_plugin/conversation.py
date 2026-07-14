@@ -25,6 +25,7 @@ from .const import (
     DOMAIN,
 )
 from .exceptions import OrchestratorError
+from .i18n import L
 from .orchestrator import Orchestrator
 
 _LOGGER = logging.getLogger(__name__)
@@ -114,7 +115,8 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             )
         except OrchestratorError as exc:
             _LOGGER.error("AI Plugin error processing message: %s", exc)
-            reply = f"Sorry, I couldn't process that. ({exc})"
+            _lang = (user_input.language or "en").split("-")[0].lower()
+            reply = f"{L.template('err_process', _lang)} ({exc})"
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(reply)

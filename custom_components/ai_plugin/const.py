@@ -67,7 +67,11 @@ DEFAULT_CONTEXT_WINDOW = 16384
 DEFAULT_MAX_RESULTS = 5
 DEFAULT_MAX_TOOL_ITERATIONS = 10
 DEFAULT_RESPONSE_TIMEOUT = 30
-DEFAULT_WEB_SEARCH_BACKEND = BACKEND_BRAVE
+# DuckDuckGo is the only backend that works with zero configuration. Brave
+# (the pre-0.9.26 default) silently returned "API key not configured" on
+# fresh installs that enabled web search without supplying a key. Existing
+# entries keep whatever backend they stored at setup time.
+DEFAULT_WEB_SEARCH_BACKEND = BACKEND_DUCKDUCKGO
 DEFAULT_SUMMARIZATION_ENABLED = True
 DEFAULT_VOICE_MODE = False
 DEFAULT_CONTINUE_CONVERSATION = True

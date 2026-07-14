@@ -102,6 +102,10 @@ _BACKOFF_MAX = 30.0
 # Seconds to wait for a server to become CONNECTED on startup.
 # stdio servers (uvx) may need to download packages on first run — allow 120s.
 _CONNECT_TIMEOUT = 120.0
+# Ceiling for a single tool call. The orchestrator's response_timeout only
+# wraps the LLM HTTP call — without this, one hung MCP tool stalls the whole
+# voice turn indefinitely.
+_CALL_TIMEOUT = 15.0
 
 
 class _State(Enum):
@@ -120,7 +124,6 @@ class _MCPServerConnection:
         self._state = _State.DISCONNECTED
         self._session: ClientSession | None = None
         self._tools: list[Any] = []          # list[mcp.types.Tool]
-        self._static_context: str = ""       # server prompt text (e.g. HA Assist device map)
         self._task: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
         self._shutdown = asyncio.Event()
@@ -135,10 +138,6 @@ class _MCPServerConnection:
     @property
     def tools(self) -> list[Any]:
         return list(self._tools)
-
-    @property
-    def static_context(self) -> str:
-        return self._static_context
 
     async def async_start(self) -> None:
         """Start the background connection task and return immediately.
@@ -166,7 +165,9 @@ class _MCPServerConnection:
         if self._session is None or self._state != _State.CONNECTED:
             return f"[Tool {name!r} unavailable — MCP server {self._name!r} not connected]"
         try:
-            result = await self._session.call_tool(name, arguments)
+            result = await asyncio.wait_for(
+                self._session.call_tool(name, arguments), timeout=_CALL_TIMEOUT
+            )
             # result.content is a list of content blocks; join text blocks
             parts = []
             for block in result.content:
@@ -177,6 +178,15 @@ class _MCPServerConnection:
                 else:
                     parts.append(str(block))
             return "\n".join(parts) or "(empty result)"
+        except TimeoutError:
+            _LOGGER.warning(
+                "AI Plugin MCP: tool %r on %r timed out after %.0fs",
+                name, self._name, _CALL_TIMEOUT,
+            )
+            return (
+                f"[Tool {name!r} timed out after {_CALL_TIMEOUT:.0f}s — "
+                "tell the user the action may not have completed]"
+            )
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
                 "AI Plugin MCP: tool %r call failed on %r: %s", name, self._name, exc
@@ -335,52 +345,17 @@ class _MCPServerConnection:
                     )
 
     async def _on_connected(self, session: ClientSession) -> None:
-        """Cache tool list + server prompts and signal readiness."""
+        """Cache the tool list and signal readiness."""
         result = await session.list_tools()
         self._tools = result.tools
-        self._static_context = await self._fetch_static_context(session)
         self._session = session
         self._state = _State.CONNECTED
         self._ready.set()
         _LOGGER.info(
-            "AI Plugin MCP: connected to %r — %d tools, static_context=%d chars",
+            "AI Plugin MCP: connected to %r — %d tools",
             self._name,
             len(self._tools),
-            len(self._static_context),
         )
-
-    async def _fetch_static_context(self, session: ClientSession) -> str:
-        """Fetch every prompt the server exposes and concatenate the text.
-
-        HA's built-in mcp_server exposes an 'Assist' prompt containing the
-        exposed-entity inventory. Injecting that into the system prompt lets
-        the model answer 'what is in the hobby room' without a tool call
-        and avoids the name-synonym confusion that occurs when comma-separated
-        voice aliases are parsed as separate devices.
-
-        Never raises — servers without prompt support return empty string.
-        """
-        try:
-            listing = await session.list_prompts()
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.debug("AI Plugin MCP: %r has no prompts (%s)", self._name, exc)
-            return ""
-
-        parts: list[str] = []
-        for prompt in listing.prompts:
-            try:
-                result = await session.get_prompt(prompt.name)
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.debug(
-                    "AI Plugin MCP: get_prompt(%r) on %r failed: %s",
-                    prompt.name, self._name, exc,
-                )
-                continue
-            for msg in result.messages:
-                text = getattr(msg.content, "text", None)
-                if text:
-                    parts.append(text)
-        return "\n\n".join(parts).strip()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -435,19 +410,6 @@ class MCPToolRegistry:
             if server.state == _State.CONNECTED:
                 schemas.extend(openai_tool_schema(t) for t in server.tools)
         return schemas
-
-    def get_static_contexts(self) -> list[str]:
-        """Return per-server prompt text from currently connected MCP servers.
-
-        Used by the orchestrator to inject the HA Assist device inventory
-        into the system prompt so the model has a stable view of what
-        entities exist and in which areas.
-        """
-        return [
-            s.static_context
-            for s in self._servers
-            if s.state == _State.CONNECTED and s.static_context
-        ]
 
     def estimate_schema_tokens(self) -> int:
         """Estimate the token cost of all current tool schemas.

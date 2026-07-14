@@ -240,3 +240,62 @@ async def test_clear_unknown_conv_is_noop() -> None:
     """clear() on a conversation that never existed does not raise."""
     cm = ContextManager(max_tokens=8192)
     await cm.clear("nonexistent")  # should not raise
+
+
+# ── v0.9.26: per-request tool-token budget + idle eviction ────────────────────
+
+
+async def test_get_messages_tool_tokens_override_tightens_budget() -> None:
+    """Passing the real schema size must shrink the history budget."""
+    cm = ContextManager(max_tokens=1000, tool_token_budget=0)
+    for _ in range(10):
+        await cm.add_turn("c", "user", "x" * 240)  # ~60 tokens each
+
+    # Constructor budget (0) reserves nothing → all 10 messages fit.
+    msgs = await cm.get_messages("c", "sys")
+    assert len(msgs) == 11  # system + 10
+
+    # Actual schemas worth ~800 tokens → history must be truncated.
+    msgs2 = await cm.get_messages("c", "sys", tool_tokens=800)
+    assert 2 <= len(msgs2) < 11
+
+
+async def test_summarize_uses_tool_tokens_override() -> None:
+    """tool_tokens must feed the soft limit, not just the hard limit."""
+    cm = ContextManager(max_tokens=1000, tool_token_budget=0)
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(return_value="Summary.")
+
+    for _ in range(5):
+        await cm.add_turn("c", "user", "x" * 200)       # ~50 tokens
+        await cm.add_turn("c", "assistant", "y" * 200)  # ~50 tokens
+
+    # 500 history tokens, soft limit without override ≈ 649 → no trigger.
+    await cm.summarize_if_needed("c", "s", mock_provider)
+    mock_provider.async_complete.assert_not_awaited()
+
+    # With 400 reserved for schemas, soft limit ≈ 389 → triggers.
+    await cm.summarize_if_needed("c", "s", mock_provider, tool_tokens=400)
+    mock_provider.async_complete.assert_awaited_once()
+
+
+async def test_evict_idle_drops_only_stale_conversations() -> None:
+    cm = ContextManager(max_tokens=8192)
+    await cm.add_turn("old", "user", "hi")
+    await cm.add_turn("fresh", "user", "hi")
+    cm._last_used["old"] -= 7 * 3600  # simulate 7h idle
+
+    evicted = cm.evict_idle()
+
+    assert evicted == ["old"]
+    assert cm.get_history("old") == []
+    assert cm.get_history("fresh")
+    assert "old" not in cm._locks
+    assert "old" not in cm._last_used
+
+
+async def test_evict_idle_noop_when_all_fresh() -> None:
+    cm = ContextManager(max_tokens=8192)
+    await cm.add_turn("a", "user", "hi")
+    assert cm.evict_idle() == []
+    assert cm.get_history("a")

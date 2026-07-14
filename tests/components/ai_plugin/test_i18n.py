@@ -146,3 +146,17 @@ def test_each_lang_has_temperature_label(lang: str):
 def test_each_lang_compiles_sun_set_keyword(lang: str):
     pat = LOCALIZATIONS[lang].keyword_re["sun_set"]
     assert pat is not None
+
+
+# ── v0.9.26: localized failure strings ────────────────────────────────────────
+
+
+def test_error_templates_present_and_localized() -> None:
+    from custom_components.ai_plugin.i18n import L
+
+    assert L.template("err_no_answer", "en").startswith("I couldn't")
+    assert "Antwort" in L.template("err_no_answer", "de")
+    assert L.template("err_process", "de").startswith("Entschuldigung")
+    for key in ("err_no_answer", "err_process", "note_tool_limit"):
+        # Unknown language must fall back to English, never raise.
+        assert L.template(key, "xx") == L.template(key, "en")

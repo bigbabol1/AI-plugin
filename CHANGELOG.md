@@ -4,6 +4,25 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.26 — Context-budget correctness, MCP timeout, localized fallbacks, eval harness
+
+**Fixed:**
+- **Tool-schema tokens are now budgeted per request** (`orchestrator.py`, `context_manager.py`). The reserve was computed once at startup from MCP schemas only — before MCP had even connected — so the ~2.5k tokens of built-in ha_local/memory/web/browse schemas were never accounted for. Long conversations overran `num_ctx` and Ollama silently truncated the *front* of the prompt, dropping the system prompt mid-conversation. The orchestrator now measures the schema list actually being sent each turn and passes it to both summarization and history trimming.
+- **MCP tool calls have a 15s ceiling** (`tools/mcp_client.py` `_CALL_TIMEOUT`). The integration's `response_timeout` only wraps the LLM HTTP call; a hung MCP tool stalled the whole voice turn indefinitely. Timeouts return an error string the model can relay.
+- **Recovery guidance no longer directs the model at missing tools** (`tools/ha_local.py`, `orchestrator.py`). The set_area_state refusal paths told the model to CALL HassTurnOn/HassTurnOff — tools that only exist when HA's built-in MCP server is connected. The orchestrator now passes the actual tool-name set through, and installs without the Hass tools get honest guidance (report the found entity) instead of a dead end.
+- **Failure strings are localized** (`i18n/*.yaml` `err_no_answer`, `err_process`, `note_tool_limit`). "I couldn't produce an answer for that." and friends were spoken in English on German/French/… voice pipelines. All six languages shipped.
+- **Idle conversation state is evicted after 6h** (`context_manager.py` `evict_idle`, orchestrator lock/last-entity maps). HA mints a fresh conversation id per Assist session; the per-conversation history/lock dicts previously grew for the lifetime of the HA process.
+- **CI actually installs the test requirements** (`.github/workflows/test.yml`, `requirements_test.txt`). CI installed an ad-hoc package list missing PyYAML (a hard import of the i18n loader) while `requirements_test.txt` listed `pytest-homeassistant-custom-component`, which the suite doesn't use (tests run against the stubs in `tests/conftest.py`). One file is now the single source of truth.
+
+**Changed:**
+- **Default web-search backend is DuckDuckGo** (`const.py`). Brave requires an API key; fresh installs that enabled web search without one got "API key not configured" apologies on every search. Existing entries keep their stored backend. Brave/Tavily remain the recommended quality picks.
+- `forget` tool description now states explicitly that BOTH `index` and `fact` must be passed (the handler always enforced it; the schema's phrasing suggested `fact` was optional, sending small models into refusal loops).
+- Removed the dead static-context plumbing in `tools/mcp_client.py` (`get_static_contexts` had no caller; it also fetched every server prompt at connect time for nothing).
+
+**New:**
+- **Offline eval harness** (`tests/eval/`): drives a live HA install via `POST /api/conversation/process` and scores replies against a per-prompt regex rubric — pass rates, latency medians, real state verification via HA templates for actuation prompts (`--full`), safe read-only subset by default. `home.yaml` (gitignored) carries per-install names. Baseline on the reference install (qwen3-class 8B, voice mode): 26/29 safe prompts, median turn 5.8s; shortcut-served turns ~0.02s.
+- README: the "Listen for follow-up" section now documents the actual behaviour — voice-satellite turns always end (TTS feedback-loop protection); follow-up chaining on voice is satellite-side.
+
 ## v0.9.25 — Fix on/off shortcut crashing on real registries
 
 **Fixed:**

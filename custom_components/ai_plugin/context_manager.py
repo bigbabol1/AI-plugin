@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -49,6 +50,11 @@ _LOGGER = logging.getLogger(__name__)
 # Number of most-recent full turns (user + assistant pairs) to keep
 # verbatim when summarizing older history.
 _KEEP_RECENT_TURNS = 4
+
+# Conversations idle longer than this are evicted. HA Assist mints a fresh
+# conversation_id per session, so without eviction the per-conversation
+# history/lock dicts grow for the lifetime of the HA process.
+_IDLE_EVICT_SECONDS = 6 * 3600.0
 
 
 class ContextManager:
@@ -72,6 +78,7 @@ class ContextManager:
         self._tool_budget = tool_token_budget
         self._history: dict[str, list[dict[str, str]]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._last_used: dict[str, float] = {}
 
     # ── public helpers ────────────────────────────────────────────────────────
 
@@ -105,10 +112,22 @@ class ContextManager:
                 total += 1
         return total
 
-    def _budget(self, system_prompt: str) -> tuple[int, int]:
-        """Return (soft_limit, hard_limit) for history tokens."""
+    def _budget(
+        self, system_prompt: str, tool_tokens: int | None = None
+    ) -> tuple[int, int]:
+        """Return (soft_limit, hard_limit) for history tokens.
+
+        tool_tokens is the estimated size of the tool schemas actually being
+        sent this request. Falls back to the constructor-time budget when the
+        caller doesn't know it (that value predates MCP connection and misses
+        the built-in ha_local/memory/web schemas entirely, so callers should
+        pass the real number whenever possible — otherwise history over-runs
+        num_ctx and the runtime silently drops the front of the prompt,
+        system prompt first).
+        """
         system_tokens = self.estimate_tokens(system_prompt)
-        available = max(0, self._max_tokens - system_tokens - self._tool_budget)
+        reserved = tool_tokens if tool_tokens is not None else self._tool_budget
+        available = max(0, self._max_tokens - system_tokens - reserved)
         return int(available * 0.65), int(available * 0.85)
 
     def budget_report(
@@ -143,6 +162,7 @@ class ContextManager:
     async def add_turn(self, conv_id: str, role: str, content: str) -> None:
         """Append a single text message to the conversation history."""
         async with self._get_lock(conv_id):
+            self._last_used[conv_id] = time.monotonic()
             self._history.setdefault(conv_id, []).append(
                 {"role": role, "content": content}
             )
@@ -150,19 +170,44 @@ class ContextManager:
     async def add_raw_message(self, conv_id: str, message: dict) -> None:
         """Append a pre-formatted message dict (e.g. tool call or tool result)."""
         async with self._get_lock(conv_id):
+            self._last_used[conv_id] = time.monotonic()
             self._history.setdefault(conv_id, []).append(message)
+
+    def evict_idle(self, max_idle_seconds: float = _IDLE_EVICT_SECONDS) -> list[str]:
+        """Drop state for conversations idle longer than max_idle_seconds.
+
+        Returns the evicted conversation ids so the caller can clean up its
+        own per-conversation maps (locks, last-entity tracking). Safe to call
+        outside the per-conversation locks: anything idle for hours cannot
+        have a coroutine currently holding its lock.
+        """
+        now = time.monotonic()
+        stale = [
+            cid for cid, ts in self._last_used.items()
+            if now - ts > max_idle_seconds
+        ]
+        for cid in stale:
+            self._history.pop(cid, None)
+            self._locks.pop(cid, None)
+            self._last_used.pop(cid, None)
+        if stale:
+            _LOGGER.debug(
+                "AI Plugin: evicted %d idle conversation(s)", len(stale)
+            )
+        return stale
 
     async def get_messages(
         self,
         conv_id: str,
         system_prompt: str,
+        tool_tokens: int | None = None,
     ) -> list[dict[str, str]]:
         """Return messages ready to send to the LLM.
 
         Format: [system_message, *history], hard-truncated so the total
         never exceeds 85 % of the available budget.
         """
-        _, hard_limit = self._budget(system_prompt)
+        _, hard_limit = self._budget(system_prompt, tool_tokens)
 
         async with self._get_lock(conv_id):
             history = list(self._history.get(conv_id, []))
@@ -182,6 +227,7 @@ class ContextManager:
         conv_id: str,
         system_prompt: str,
         provider: AbstractProvider,
+        tool_tokens: int | None = None,
     ) -> None:
         """Summarize old turns when history approaches the soft token limit.
 
@@ -193,7 +239,7 @@ class ContextManager:
         return without mutating history — the hard limit in get_messages
         acts as the fallback.
         """
-        soft_limit, _ = self._budget(system_prompt)
+        soft_limit, _ = self._budget(system_prompt, tool_tokens)
 
         async with self._get_lock(conv_id):
             history = list(self._history.get(conv_id, []))
@@ -253,6 +299,7 @@ class ContextManager:
         """Clear all history for a conversation (e.g. user requests reset)."""
         async with self._get_lock(conv_id):
             self._history.pop(conv_id, None)
+            self._last_used.pop(conv_id, None)
 
     # ── private helpers ───────────────────────────────────────────────────────
 

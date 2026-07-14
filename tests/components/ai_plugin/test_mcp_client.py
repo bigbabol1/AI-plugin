@@ -476,3 +476,26 @@ async def test_server_connection_call_tool_handles_binary_and_other_blocks() -> 
 
     assert "[binary data: 8 bytes]" in result
     assert "other_repr" in result
+
+
+# ── v0.9.26: per-call timeout ─────────────────────────────────────────────────
+
+
+async def test_call_tool_times_out(monkeypatch) -> None:
+    """A hung MCP tool must not stall the voice turn indefinitely."""
+    from custom_components.ai_plugin.tools import mcp_client as mod
+
+    conn = mod._MCPServerConnection({"url": "http://x/mcp"})
+    conn._state = mod._State.CONNECTED
+
+    async def _hang(name, arguments):
+        await asyncio.sleep(30)
+
+    session = MagicMock()
+    session.call_tool = _hang
+    conn._session = session
+
+    monkeypatch.setattr(mod, "_CALL_TIMEOUT", 0.05)
+    result = await conn.call_tool("slow_tool", {})
+    assert "timed out" in result
+    assert "slow_tool" in result

@@ -372,3 +372,63 @@ async def test_set_area_state_sweep_german_alias(patched_registries) -> None:
         user_message="alle Lichter ausschalten",
     )
     assert "turn_off 1 light(s) in all areas" in out
+
+
+# ── v0.9.26: recovery guidance adapts to available tools ─────────────────────
+
+
+async def test_device_noun_recovery_with_hass_tools(patched_registries) -> None:
+    """With HassTurnOn available, recovery directs the model at it."""
+    areas = [_area("a1", "hobby room")]
+    ents = [_entity("switch.air_purifier", area_id="a1", name="Air Purifier")]
+    hass, area_reg, ent_reg, dev_reg = _make_hass(areas, ents)
+    patched_registries(hass, area_reg, ent_reg, dev_reg)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "all", "domain": "switch", "action": "turn_off"},
+        user_message="turn off the air purifier",
+        available_tools={"set_area_state", "search_entities", "HassTurnOn", "HassTurnOff"},
+    )
+    assert "refused" in out
+    assert "HassTurnOn" in out
+
+
+async def test_device_noun_recovery_without_hass_tools(patched_registries) -> None:
+    """Without HA's MCP server, recovery must NOT direct the model at
+    HassTurnOn/HassTurnOff — that guidance was a dead end."""
+    areas = [_area("a1", "hobby room")]
+    ents = [_entity("switch.air_purifier", area_id="a1", name="Air Purifier")]
+    hass, area_reg, ent_reg, dev_reg = _make_hass(areas, ents)
+    patched_registries(hass, area_reg, ent_reg, dev_reg)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "all", "domain": "switch", "action": "turn_off"},
+        user_message="turn off the air purifier",
+        available_tools={"set_area_state", "search_entities"},
+    )
+    assert "refused" in out
+    assert "NOT available" in out
+    assert "HassTurnOn" not in out
+
+
+async def test_device_noun_recovery_unknown_tools_keeps_old_behaviour(
+    patched_registries,
+) -> None:
+    """available_tools=None (unknown) keeps the pre-0.9.26 directive."""
+    areas = [_area("a1", "hobby room")]
+    ents = [_entity("switch.air_purifier", area_id="a1", name="Air Purifier")]
+    hass, area_reg, ent_reg, dev_reg = _make_hass(areas, ents)
+    patched_registries(hass, area_reg, ent_reg, dev_reg)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"area": "all", "domain": "switch", "action": "turn_off"},
+        user_message="turn off the air purifier",
+    )
+    assert "refused" in out
+    assert "HassTurnOn" in out

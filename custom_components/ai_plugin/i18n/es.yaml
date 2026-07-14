@@ -23,6 +23,9 @@ templates:
   sun_is_up:         "El sol está alto. Se pone a las {time}."
   sun_is_down:       "El sol está bajo. Sale a las {time}."
   fallback_no_sensor: "No tengo un sensor de {label} en {area}."
+  err_no_answer:     "No pude generar una respuesta. Intenta reformularla."
+  err_process:       "Lo siento, no pude procesar eso."
+  note_tool_limit:   "[Nota: se alcanzó el límite de herramientas — la respuesta puede estar incompleta.]"
 
 keywords:
   sun_set:       ["puesta de sol", "cuándo se pone el sol", "a qué hora se pone el sol"]

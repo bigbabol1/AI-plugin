@@ -1010,6 +1010,12 @@ class Orchestrator:
             sections.append(f"[LAST ACTION]\n{last}")
         system_prompt = "\n\n".join(sections)
 
+        # Evict conversations idle for hours; HA mints a fresh id per Assist
+        # session, so these maps otherwise grow for the process lifetime.
+        for stale_id in self._context_mgr.evict_idle():
+            self._conv_locks.pop(stale_id, None)
+            self._last_entities.pop(stale_id, None)
+
         # Serialise concurrent requests for the same conversation to prevent
         # interleaved history and summarisation races.
         async with self._get_conv_lock(conversation_id):
@@ -1082,16 +1088,12 @@ class Orchestrator:
                     )
                     return action_reply
 
-            # 2. Summarize old turns if we're approaching the soft token limit.
-            if self._summarization_enabled:
-                await self._context_mgr.summarize_if_needed(
-                    conversation_id, system_prompt, self._provider
-                )
-
-            # 3. Build the message list (system prompt + trimmed history).
-            messages = await self._context_mgr.get_messages(conversation_id, system_prompt)
-
-            # 4. Collect tool schemas: ha_local + memory + web_search + MCP tools.
+            # 2. Collect tool schemas: ha_local + memory + web_search + MCP
+            # tools. Done before history budgeting so the context manager can
+            # reserve space for what is actually sent this request — the
+            # constructor-time estimate ran before MCP connected and never
+            # covered the built-in schemas, so history could overrun num_ctx
+            # and the runtime silently dropped the system prompt.
             tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
             if self._web_search is not None:
                 tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
@@ -1102,6 +1104,19 @@ class Orchestrator:
             if self._ha_local is not None:
                 ha_schemas = _prune_ha_local_schemas(message, self._ha_local.get_schemas())
                 tool_schemas = [*ha_schemas, *tool_schemas]
+            schema_tokens = self._context_mgr.estimate_tokens(str(tool_schemas))
+
+            # 3. Summarize old turns if we're approaching the soft token limit.
+            if self._summarization_enabled:
+                await self._context_mgr.summarize_if_needed(
+                    conversation_id, system_prompt, self._provider,
+                    tool_tokens=schema_tokens,
+                )
+
+            # 4. Build the message list (system prompt + trimmed history).
+            messages = await self._context_mgr.get_messages(
+                conversation_id, system_prompt, tool_tokens=schema_tokens
+            )
 
             _LOGGER.debug(
                 "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
@@ -1114,7 +1129,6 @@ class Orchestrator:
 
             # Token budget snapshot — one INFO line per user turn for observability.
             if _LOGGER.isEnabledFor(logging.INFO):
-                schema_tokens = self._context_mgr.estimate_tokens(str(tool_schemas))
                 report = self._context_mgr.budget_report(
                     system_prompt, messages, schema_tokens
                 )
@@ -1384,7 +1398,7 @@ class Orchestrator:
                     "AI Plugin: empty reply from model (conv=%s, tools_called=%d) — substituting fallback",
                     conversation_id, len(tool_msgs),
                 )
-                reply = "I couldn't produce an answer for that. Try rephrasing."
+                reply = L.template("err_no_answer", lang)
                 stored_reply = reply
 
             await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
@@ -1471,6 +1485,7 @@ class Orchestrator:
                     result = await self._dispatch_tool(
                         rec_name, rec_args, user_id, voice_mode, user_message,
                         device_id=device_id, language=language,
+                        available_tools=valid_tool_names,
                     )
                     tool_msg = {
                         "role": "tool",
@@ -1499,12 +1514,14 @@ class Orchestrator:
                 result = await self._dispatch_tool(
                     tc.name, tc.arguments, user_id, voice_mode, user_message,
                     device_id=device_id, language=language,
+                    available_tools=valid_tool_names,
                 )
                 msg = tc.to_tool_result_message(result)
                 messages.append(msg)
                 history_messages.append(msg)
 
-        suffix = " [Note: reached tool call limit — response may be incomplete.]"
+        _lang = (language or "en").split("-")[0].lower()
+        suffix = " " + L.template("note_tool_limit", _lang)
         return (last_response.reply_text() if last_response else "") + suffix, history_messages
 
     async def _dispatch_tool(
@@ -1516,6 +1533,7 @@ class Orchestrator:
         user_message: str = "",
         device_id: str | None = None,
         language: str | None = None,
+        available_tools: set[str] | None = None,
     ) -> str:
         """Route a tool call to ha_local, memory, web search, or MCP. Never raises."""
         if self._ha_local is not None and name in self._ha_local.tool_names:
@@ -1524,6 +1542,7 @@ class Orchestrator:
                 device_id=device_id,
                 language=language,
                 user_message=user_message,
+                available_tools=available_tools,
             )
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             return await self._memory.call_tool(

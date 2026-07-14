@@ -1,4 +1,11 @@
-pytest-homeassistant-custom-component
+# Single source of truth for test deps — CI installs exactly this file.
+# The suite runs against stubbed homeassistant modules (tests/conftest.py),
+# so the real homeassistant package / pytest-homeassistant-custom-component
+# is NOT required.
+pytest
 pytest-asyncio
 aiohttp
+httpx
+voluptuous
+PyYAML
 mcp>=1.0.0

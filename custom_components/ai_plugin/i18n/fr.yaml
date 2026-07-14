@@ -23,6 +23,9 @@ templates:
   sun_is_up:         "Le soleil est levé. Coucher du soleil à {time}."
   sun_is_down:       "Le soleil est couché. Lever du soleil à {time}."
   fallback_no_sensor: "Je n'ai pas de capteur de {label} dans {area}."
+  err_no_answer:     "Je n'ai pas pu produire de réponse. Essayez de reformuler."
+  err_process:       "Désolé, je n'ai pas pu traiter cela."
+  note_tool_limit:   "[Note : limite d'appels d'outils atteinte — la réponse peut être incomplète.]"
 
 keywords:
   sun_set:       ["coucher du soleil", "se couche le soleil", "à quelle heure se couche le soleil"]

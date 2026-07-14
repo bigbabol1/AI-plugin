@@ -23,6 +23,9 @@ templates:
   sun_is_up:         "Die Sonne ist oben. Sonnenuntergang ist um {time}."
   sun_is_down:       "Die Sonne ist unten. Sonnenaufgang ist um {time}."
   fallback_no_sensor: "Ich habe keinen {label}-Sensor in {area}."
+  err_no_answer:     "Darauf habe ich gerade keine Antwort. Bitte formuliere es anders."
+  err_process:       "Entschuldigung, das konnte ich nicht verarbeiten."
+  note_tool_limit:   "[Hinweis: Werkzeuglimit erreicht — die Antwort ist möglicherweise unvollständig.]"
 
 keywords:
   sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]

@@ -685,8 +685,19 @@ class HALocalToolRegistry:
         device_id: str | None = None,
         language: str | None = None,
         user_message: str = "",
+        available_tools: set[str] | None = None,
     ) -> str:
-        """Dispatch one tool call. Never raises; errors become string replies."""
+        """Dispatch one tool call. Never raises; errors become string replies.
+
+        available_tools is the full tool-name set the model can call this
+        request (ha_local + MCP + built-ins). Recovery messages use it to
+        avoid directing the model at HassTurnOn/HassTurnOff when HA's MCP
+        server is not connected — those directives were a dead end. None
+        means unknown; assume the Hass tools exist (pre-0.9.26 behaviour).
+        """
+        has_hass_actuators = (
+            available_tools is None or "HassTurnOn" in available_tools
+        )
         try:
             exposed_only = arguments.get("exposed_only", True)
             if not isinstance(exposed_only, bool):
@@ -744,12 +755,23 @@ class HALocalToolRegistry:
                         user_message or "",
                         device_id=device_id,
                         exposed_only=exposed_only,
+                        has_hass_actuators=has_hass_actuators,
                     )
+                    if has_hass_actuators:
+                        return (
+                            "[set_area_state refused — user named a SPECIFIC "
+                            "device, not a domain category. CALL HassTurnOn/"
+                            "HassTurnOff with the matching entity_id below, "
+                            "preferring the one in the caller's area.]\n" + recovery
+                        )
                     return (
                         "[set_area_state refused — user named a SPECIFIC "
-                        "device, not a domain category. CALL HassTurnOn/"
-                        "HassTurnOff with the matching entity_id below, "
-                        "preferring the one in the caller's area.]\n" + recovery
+                        "device, not a domain category. Direct single-device "
+                        "tools are NOT available in this setup. Tell the user "
+                        "which device you found (below) and that you cannot "
+                        "switch it directly; controlling single devices needs "
+                        "the Home Assistant MCP server connected in AI Plugin "
+                        "settings.]\n" + recovery
                     )
                 # Safety guard: model often falls back to area='all' after a
                 # failed HassTurnOff for a specific device, which then turns
@@ -775,14 +797,24 @@ class HALocalToolRegistry:
                             user_message or "",
                             device_id=device_id,
                             exposed_only=exposed_only,
+                            has_hass_actuators=has_hass_actuators,
                         )
+                        if has_hass_actuators:
+                            return (
+                                "[set_area_state(area='all') refused — user did "
+                                "not say 'all', 'every', or 'whole house'. "
+                                "Specific-device recovery results below. CALL "
+                                "HassTurnOn/HassTurnOff with the matching "
+                                "entity_id, preferring the one in the caller's "
+                                "area.]\n" + recovery
+                            )
                         return (
                             "[set_area_state(area='all') refused — user did "
                             "not say 'all', 'every', or 'whole house'. "
-                            "Specific-device recovery results below. CALL "
-                            "HassTurnOn/HassTurnOff with the matching "
-                            "entity_id, preferring the one in the caller's "
-                            "area.]\n" + recovery
+                            "Direct single-device tools are NOT available in "
+                            "this setup. Tell the user which device you found "
+                            "(below) and that you cannot switch it directly.]\n"
+                            + recovery
                         )
                 return await self._set_area_state(
                     area=area_val or None,
@@ -1011,7 +1043,11 @@ class HALocalToolRegistry:
         return "\n".join(out)
 
     def _auto_search_recovery(
-        self, user_message: str, device_id: str | None, exposed_only: bool = True
+        self,
+        user_message: str,
+        device_id: str | None,
+        exposed_only: bool = True,
+        has_hass_actuators: bool = True,
     ) -> str:
         """When set_area_state(area='all') is rejected, run a search using
         keywords from the user message and bias toward the caller's area.
@@ -1060,10 +1096,18 @@ class HALocalToolRegistry:
                 # Strong narrowing: when there's a hit in the caller's
                 # area, return ONLY that one. Prevents the model from
                 # firing HassTurnOff on every match across the flat.
-                directive = (
-                    f"Caller is in {caller_area!r}. Use ONLY this one "
-                    f"entity. Call HassTurnOn or HassTurnOff EXACTLY ONCE."
-                )
+                if has_hass_actuators:
+                    directive = (
+                        f"Caller is in {caller_area!r}. Use ONLY this one "
+                        f"entity. Call HassTurnOn or HassTurnOff EXACTLY ONCE."
+                    )
+                else:
+                    directive = (
+                        f"Caller is in {caller_area!r}. This is the matching "
+                        "entity, but no direct device-control tool is "
+                        "available — report it to the user instead of "
+                        "calling set_area_state."
+                    )
                 return f"1 match (caller-area filtered):\n{directive}\n" + same[0]
             head_extra = (
                 f"  (caller is in {caller_area!r} — no matches there; "

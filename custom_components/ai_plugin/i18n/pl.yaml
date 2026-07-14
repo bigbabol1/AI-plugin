@@ -23,6 +23,9 @@ templates:
   sun_is_up:         "Słońce jest w górze. Zachód o {time}."
   sun_is_down:       "Słońce jest pod horyzontem. Wschód o {time}."
   fallback_no_sensor: "Nie mam czujnika {label} w {area}."
+  err_no_answer:     "Nie udało mi się znaleźć odpowiedzi. Spróbuj przeformułować."
+  err_process:       "Przepraszam, nie mogłem tego przetworzyć."
+  note_tool_limit:   "[Uwaga: osiągnięto limit narzędzi — odpowiedź może być niepełna.]"
 
 keywords:
   sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]

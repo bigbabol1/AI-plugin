@@ -23,6 +23,9 @@ templates:
   sun_is_up:         "The sun is up. Sunset is at {time}."
   sun_is_down:       "The sun is down. Sunrise is at {time}."
   fallback_no_sensor: "I don't have a {label} sensor in {area}."
+  err_no_answer:     "I couldn't produce an answer for that. Try rephrasing."
+  err_process:       "Sorry, I couldn't process that."
+  note_tool_limit:   "[Note: reached tool call limit — response may be incomplete.]"
 
 keywords:
   sun_set:       ["when is sunset", "sunset", "when does the sun set", "when does the sun go down", "when does it get dark"]

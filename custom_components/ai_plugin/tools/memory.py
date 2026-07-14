@@ -125,10 +125,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "forget",
             "description": (
-                "Remove a previously stored fact from persistent memory. Prefer "
-                "passing 'index' (the 1-based position from the [USER FACTS] block "
-                "or recall output) — this works regardless of language and avoids "
-                "substring mismatches. 'fact' is a fallback for substring match."
+                "Remove a previously stored fact from persistent memory. ALWAYS "
+                "pass BOTH arguments: 'index' (the 1-based position from the "
+                "[USER FACTS] block or recall output — language-independent) AND "
+                "'fact' (a keyword copied verbatim from the user's request; the "
+                "call is rejected without it). Only when no index is known, "
+                "'fact' alone falls back to a substring match."
             ),
             "parameters": {
                 "type": "object",
