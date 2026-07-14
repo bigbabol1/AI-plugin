@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -72,6 +73,9 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
     _attr_name = None
     _attr_supported_languages = "*"
     _attr_supported_features = ConversationEntityFeature.CONTROL
+    # The assist pipeline only taps chat-log deltas (early TTS) when the
+    # agent declares streaming support.
+    _attr_supports_streaming = True
 
     @property
     def supported_languages(self) -> list[str] | str:
@@ -87,24 +91,59 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             name=entry.title,
         )
 
-    async def async_process(
-        self, user_input: ConversationInput
+    async def _async_handle_message(
+        self, user_input: ConversationInput, chat_log
     ) -> ConversationResult:
-        """Process a user message from HA Assist and return a reply."""
+        """Process a user message from HA Assist and return a reply.
+
+        Called by the base ConversationEntity.async_process inside HA's
+        chat-session context. Streaming: orchestrator deltas flow through a
+        queue into chat_log.async_add_delta_content_stream so the voice
+        pipeline can start TTS before generation finishes. The consumer
+        task starts lazily on the first delta — turns that never stream
+        (shortcuts, suppressed actuations) add no empty chat-log entry.
+        """
         user_id: str | None = (
             getattr(user_input.context, "user_id", None) if user_input.context else None
         )
-        # Honour HA's ephemeral conversation_id so history resets when the
-        # Assist panel is reopened or a new session begins. Follow-up turns
-        # within the same session reuse the id HA echoes back. Long-term
-        # memory lives in the remember/recall tool (.ai_plugin_memory_*.json),
-        # not in conversation history.
-        conversation_id = user_input.conversation_id or ulid_util.ulid_now()
+        # Honour HA's session conversation_id so history resets when the
+        # Assist panel is reopened or a new session begins. Long-term memory
+        # lives in the remember/recall tool, not in conversation history.
+        conversation_id = (
+            getattr(chat_log, "conversation_id", None)
+            or user_input.conversation_id
+            or ulid_util.ulid_now()
+        )
         _LOGGER.info(
             "AI Plugin: conv_id=%s user_id=%s input=%r",
             conversation_id, user_id, user_input.text[:80],
         )
 
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        consumer: asyncio.Task | None = None
+        agent_id = getattr(self, "entity_id", None) or DOMAIN
+
+        async def _deltas():
+            yield {"role": "assistant"}
+            while (item := await queue.get()) is not None:
+                yield {"content": item}
+
+        async def _consume() -> None:
+            try:
+                async for _ in chat_log.async_add_delta_content_stream(
+                    agent_id, _deltas()
+                ):
+                    pass
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: chat-log delta stream failed", exc_info=True)
+
+        def _on_delta(text: str) -> None:
+            nonlocal consumer
+            queue.put_nowait(text)
+            if consumer is None:
+                consumer = asyncio.get_running_loop().create_task(_consume())
+
+        stream_capable = hasattr(chat_log, "async_add_delta_content_stream")
         try:
             reply = await self._orchestrator.async_process(
                 message=user_input.text,
@@ -112,11 +151,21 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 language=user_input.language,
                 device_id=user_input.device_id,
                 user_id=user_id,
+                on_delta=_on_delta if stream_capable else None,
             )
         except OrchestratorError as exc:
             _LOGGER.error("AI Plugin error processing message: %s", exc)
             _lang = (user_input.language or "en").split("-")[0].lower()
             reply = f"{L.template('err_process', _lang)} ({exc})"
+        finally:
+            if consumer is not None:
+                queue.put_nowait(None)
+                try:
+                    await consumer
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "AI Plugin: delta consumer failed", exc_info=True
+                    )
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(reply)

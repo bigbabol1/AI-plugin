@@ -33,6 +33,20 @@ class AbstractProvider(ABC):
            └── AnthropicProvider     (post-v1)
     """
 
+    async def async_chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        on_delta: Any = None,
+    ) -> ChatResponse:
+        """Streaming variant of async_chat: invoke on_delta(text) per chunk.
+
+        Default implementation ignores the listener and delegates to the
+        buffered async_chat — providers without streaming support keep
+        working; only the early-TTS benefit is lost.
+        """
+        return await self.async_chat(messages, tools)
+
     async def async_chat(
         self,
         messages: list[dict[str, Any]],

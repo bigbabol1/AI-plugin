@@ -232,10 +232,28 @@ class OpenAICompatProvider(AbstractProvider):
             adapted.append({**msg, "tool_calls": new_tcs})
         return adapted
 
+    async def async_chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        on_delta: Any = None,
+    ) -> ChatResponse:
+        """Like async_chat, but invokes on_delta(text) for each content chunk.
+
+        Only the Ollama native path streams; other backends (and calls
+        without a listener) fall back to the buffered request. The returned
+        ChatResponse is always complete — callers keep working with full
+        replies; the deltas are a side channel for early TTS.
+        """
+        if on_delta is None or not await self._detect_ollama():
+            return await self.async_chat(messages, tools)
+        return await self._chat_ollama(messages, tools, on_delta=on_delta)
+
     async def _chat_ollama(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        on_delta: Any = None,
     ) -> ChatResponse:
         """Call Ollama's native /api/chat so options.num_ctx actually takes effect."""
         session = self._get_session()
@@ -253,7 +271,7 @@ class OpenAICompatProvider(AbstractProvider):
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
-            "stream": False,
+            "stream": on_delta is not None,
             # Toggle qwen3-style chain-of-thought via the integration option.
             # Reasoning models (qwen3, deepseek-r1) emit CoT into a separate
             # `thinking` field and may also wrap it in <think>...</think>
@@ -286,6 +304,8 @@ class OpenAICompatProvider(AbstractProvider):
                         f"Invalid API key (HTTP {resp.status})"
                     ) from None
                 resp.raise_for_status()
+                if on_delta is not None:
+                    return await self._read_ollama_stream(resp, on_delta)
                 data = await resp.json(content_type=None)
                 message = data.get("message")
                 if not isinstance(message, dict):
@@ -308,6 +328,45 @@ class OpenAICompatProvider(AbstractProvider):
             ) from exc
         except aiohttp.ClientError as exc:
             raise OrchestratorError(f"HTTP error: {exc}") from exc
+
+    async def _read_ollama_stream(self, resp: Any, on_delta: Any) -> ChatResponse:
+        """Consume an Ollama NDJSON stream, forwarding content chunks.
+
+        Each line is a JSON object with a partial ``message``; content
+        arrives in fragments, tool_calls usually as one discrete chunk.
+        on_delta receives raw content fragments — sanitation and
+        hold-back policy are the caller's job. Forwarding stops the
+        moment a tool call appears (that response is not user-facing
+        prose). The returned ChatResponse carries the full accumulation.
+        """
+        content_parts: list[str] = []
+        raw_tool_calls: list[dict[str, Any]] = []
+        async for raw_line in resp.content:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError:
+                _LOGGER.debug("AI Plugin: undecodable stream line %r", line[:120])
+                continue
+            message = chunk.get("message") or {}
+            if tcs := message.get("tool_calls"):
+                raw_tool_calls.extend(tcs)
+            if fragment := message.get("content"):
+                content_parts.append(fragment)
+                if not raw_tool_calls:
+                    try:
+                        on_delta(fragment)
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.debug("AI Plugin: on_delta raised", exc_info=True)
+            if chunk.get("done"):
+                break
+        full = "".join(content_parts)
+        return ChatResponse(
+            content=self._strip_think(full),
+            tool_calls=normalize_tool_calls({"tool_calls": raw_tool_calls}),
+        )
 
     async def async_complete(
         self,

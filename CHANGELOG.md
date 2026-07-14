@@ -4,6 +4,13 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.29 — Streaming replies (sentence-safe early TTS)
+
+**New:**
+- **Replies stream into HA's chat log** (`conversation.py` `_async_handle_message` + `_attr_supports_streaming`, `orchestrator.py` `_DeltaGate`, provider `async_chat_stream`). Voice pipelines with streaming TTS start speaking after the first sentence instead of waiting for full generation — on a 7-9B model that's seconds of perceived latency per chatty turn. Ollama native backend streams (NDJSON); other backends keep the buffered path.
+- Streaming is **sentence-safe by design**, because spoken text can't be recalled: deltas are sentence-buffered with the trailing sentence held back (trailing-filler stripping still works), each sentence passes the same narration/kaomoji/voice sanitation as the final reply, and the gate shuts permanently on any turn where the safety layer might replace or blank the reply — verifier-trigger patterns (state-set, action-command, online-query), actuator calls (TTS suppression), `get_entity` misses, raw tool-call recovery, thinking leaks. Gated turns behave exactly as before.
+- The conversation entity now implements HA's modern `_async_handle_message(user_input, chat_log)` contract (chat-session management moves to core; conversation ids come from the chat log).
+
 ## v0.9.28 — Deterministic time shortcut, kaomoji-free TTS
 
 **New:**

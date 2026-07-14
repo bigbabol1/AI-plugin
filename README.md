@@ -10,6 +10,7 @@ A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — O
 - **Web search** — Brave Search (default), Tavily, SearXNG (self-hosted), DuckDuckGo (zero config)
 - **MCP extensibility** — connect external MCP servers (HTTP and stdio) for additional tools
 - **Smart context management** — sliding window + automatic LLM summarization prevents memory loss with local models
+- **Streaming replies** — sentence-safe deltas into HA's chat log; voice pipelines with streaming TTS start speaking before generation finishes (Ollama backend)
 - **Voice mode** — compact system prompt when triggered via HA Assist voice pipeline
 
 > **Tested only with Ollama.** The OpenAI-compatible endpoint should accept any of the listed backends, but only Ollama (local) has been exercised end-to-end against the prompt suite below. Reports for OpenAI / xAI / LM Studio / llama.cpp setups welcome.

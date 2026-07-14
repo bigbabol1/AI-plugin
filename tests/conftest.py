@@ -67,8 +67,37 @@ _make_module("homeassistant.const", Platform=_Platform)
 
 # ── homeassistant.components.conversation ────────────────────────────────────
 
+import uuid as _uuid_mod
+
+
+class _StubChatLog:
+    """Chat-log stand-in: records streamed deltas, mimics the 2025.7+ API."""
+
+    def __init__(self, conversation_id=None):
+        self.conversation_id = conversation_id or str(_uuid_mod.uuid4())
+        self.deltas: list[str] = []
+        self.content: list = []
+
+    async def async_add_delta_content_stream(self, agent_id, stream):
+        text = ""
+        async for delta in stream:
+            piece = delta.get("content")
+            if piece:
+                self.deltas.append(piece)
+                text += piece
+        self.content.append({"role": "assistant", "content": text})
+        return
+        yield  # pragma: no cover — marks this as an async generator
+
+    async def async_add_assistant_content_without_tools(self, content):
+        self.content.append(content)
+
+
 class _ConversationEntity:
-    pass
+    async def async_process(self, user_input):
+        """Mimic HA's base entity: open a chat log, delegate to the handler."""
+        chat_log = _StubChatLog(user_input.conversation_id)
+        return await self._async_handle_message(user_input, chat_log)
 
 
 class _ConversationEntityFeature:
@@ -98,6 +127,7 @@ _conv_mod = _make_module(
     ConversationEntityFeature=_ConversationEntityFeature,
     ConversationInput=_ConversationInput,
     ConversationResult=_ConversationResult,
+    ChatLog=_StubChatLog,
 )
 _make_module("homeassistant.components", conversation=_conv_mod)
 

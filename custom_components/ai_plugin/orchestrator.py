@@ -620,6 +620,119 @@ def _prune_ha_local_schemas(
     return pruned
 
 
+# Sentence boundary for the streaming gate. The trailing sentence is always
+# held back so the filler-closing strip can still act on it.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+class _DeltaGate:
+    """Sentence-buffered forwarder between provider deltas and HA's chat log.
+
+    Streamed speech cannot be recalled, so the gate only forwards sentences
+    that survive the same sanitation the final reply gets, holds back the
+    trailing sentence, and shuts permanently the moment the turn stops being
+    stream-safe (actuator call, get_entity miss, thinking leak). A gate with
+    no listener is inert — all methods are cheap no-ops.
+    """
+
+    def __init__(
+        self,
+        listener,  # Callable[[str], None] | None
+        lang: str = "en",
+        voice_mode: bool = False,
+    ) -> None:
+        self._listener = listener
+        self._lang = lang
+        self._voice = voice_mode
+        self._buf = ""
+        self._forwarded: list[str] = []
+
+    @property
+    def active(self) -> bool:
+        return self._listener is not None
+
+    @property
+    def forwarded_text(self) -> str:
+        return " ".join(self._forwarded)
+
+    def close(self) -> None:
+        """Stop forwarding for the rest of the turn (safety trigger hit)."""
+        self._listener = None
+        self._buf = ""
+
+    def new_response(self) -> None:
+        """Discard the unemitted tail between LLM calls in the tool loop.
+
+        Prose preceding a tool call (usually narration) must never be
+        spoken — it stays in the buffer thanks to the hold-back rule and
+        is dropped here.
+        """
+        self._buf = ""
+
+    def feed(self, fragment: str) -> None:
+        """Provider callback: accumulate and emit completed sentences."""
+        if self._listener is None or not fragment:
+            return
+        self._buf += fragment
+        if "<think" in self._buf:
+            self.close()
+            return
+        parts = _SENTENCE_SPLIT_RE.split(self._buf)
+        if len(parts) <= 1:
+            return
+        *complete, self._buf = parts
+        for sentence in complete:
+            self._emit(sentence)
+
+    def _emit(self, sentence: str) -> None:
+        s = _strip_narration(sentence, lang=self._lang)
+        s = _strip_emoji(s)
+        if self._voice:
+            s = _flatten_for_voice(s)
+        s = s.strip()
+        if not s:
+            return
+        self._forwarded.append(s)
+        try:
+            self._listener(s + " ")
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: delta listener raised", exc_info=True)
+
+    def flush_final(self, final_text: str) -> None:
+        """Send whatever part of the finished reply was not yet streamed.
+
+        When nothing streamed, the whole reply goes out in one delta (chat
+        log stays the single source of what was said). When the processed
+        reply no longer starts with the streamed prefix (a post-processor
+        rewrote it), the tail is withheld rather than double-spoken.
+        """
+        if self._listener is None:
+            return
+        listener = self._listener
+        self._listener = None
+        final_text = (final_text or "").strip()
+        if not self._forwarded:
+            if final_text:
+                try:
+                    listener(final_text)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("AI Plugin: delta listener raised", exc_info=True)
+            return
+        norm_fwd = " ".join(self.forwarded_text.split())
+        norm_final = " ".join(final_text.split())
+        if norm_final.startswith(norm_fwd):
+            rest = norm_final[len(norm_fwd):].strip()
+            if rest:
+                try:
+                    listener(rest)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("AI Plugin: delta listener raised", exc_info=True)
+        else:
+            _LOGGER.debug(
+                "AI Plugin: streamed prefix diverged from final reply — tail withheld"
+            )
+
+
 class LocationProvider:
     """Resolve the user's home location across heterogeneous installs.
 
@@ -1016,6 +1129,7 @@ class Orchestrator:
         language: str,
         device_id: str | None = None,
         user_id: str | None = None,
+        on_delta=None,
     ) -> str:
         """Process a user message and return the assistant's reply.
 
@@ -1046,6 +1160,23 @@ class Orchestrator:
         )
         # Normalize HA's BCP-47 language ("de-DE", "fr-CA") to bare ISO 639-1.
         lang = (language or "en").split("-")[0].lower()
+
+        # Streaming gate: forward sentence-complete deltas to the voice
+        # pipeline for early TTS — but only on turns where no verifier can
+        # replace the reply and no suppression can blank it. Everything
+        # else keeps the fully-buffered behaviour.
+        stream_safe = (
+            on_delta is not None
+            and not self._entry.options.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING)
+            and not _is_state_set_query(message)
+            and not _is_action_command(message)
+            and not (self._web_search is not None and _is_online_query(message))
+        )
+        gate = _DeltaGate(
+            on_delta if stream_safe else None,
+            lang=lang,
+            voice_mode=voice_mode,
+        )
         # v0.5.15: no more [HOME CONTEXT] YAML dump. Small LLMs drown in it and
         # hallucinate their way through inventory questions. The model instead
         # calls discovery tools (list_areas / list_entities / get_entity /
@@ -1204,8 +1335,14 @@ class Orchestrator:
                 if tool_schemas:
                     reply, tool_msgs = await self._tool_loop(
                         messages, tool_schemas, user_id, voice_mode, message,
-                        device_id=device_id, language=language,
+                        device_id=device_id, language=language, gate=gate,
                     )
+                elif gate.active:
+                    response = await self._provider.async_chat_stream(
+                        messages, on_delta=gate.feed
+                    )
+                    reply = response.reply_text()
+                    tool_msgs = []
                 else:
                     reply = await self._provider.async_complete(messages)
                     tool_msgs = []
@@ -1455,6 +1592,12 @@ class Orchestrator:
                 reply = L.template("err_no_answer", lang)
                 stored_reply = reply
 
+            # Streaming epilogue: send whatever part of the processed reply
+            # was not yet forwarded (or the whole reply when nothing was).
+            # TTS-suppressed turns arrive here with an empty stored_reply —
+            # flush_final sends nothing for those.
+            gate.flush_final(stored_reply)
+
             await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
 
             # Track last-controlled entities for explicit context injection.
@@ -1516,6 +1659,7 @@ class Orchestrator:
         user_message: str = "",
         device_id: str | None = None,
         language: str | None = None,
+        gate: "_DeltaGate | None" = None,
     ) -> tuple[str, list[dict]]:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
@@ -1536,7 +1680,15 @@ class Orchestrator:
         }
 
         for iteration in range(self._max_tool_iterations):
-            response = await self._provider.async_chat(messages, tool_schemas)
+            if gate is not None and gate.active:
+                # Drop any unemitted tail from the previous iteration —
+                # prose preceding a tool call is narration, never speech.
+                gate.new_response()
+                response = await self._provider.async_chat_stream(
+                    messages, tool_schemas, on_delta=gate.feed
+                )
+            else:
+                response = await self._provider.async_chat(messages, tool_schemas)
             last_response = response
 
             if not response.has_tool_calls:
@@ -1546,6 +1698,10 @@ class Orchestrator:
                 # structured tool_call. Recover by parsing and executing.
                 recovered = _parse_raw_tool_call(reply_text, valid_tool_names)
                 if recovered is not None:
+                    # Model wrote a pseudo tool call as prose — nothing it
+                    # says this turn is trustworthy enough to stream.
+                    if gate is not None:
+                        gate.close()
                     rec_name, rec_args = recovered
                     _LOGGER.info(
                         "AI Plugin: recovered raw tool-call from content: %s(%s)",
@@ -1600,6 +1756,16 @@ class Orchestrator:
                     device_id=device_id, language=language,
                     available_tools=valid_tool_names,
                 )
+                if gate is not None and gate.active:
+                    # Actuator turns get TTS-suppressed; get_entity misses
+                    # trigger a reply-replacing verifier. Either way the
+                    # final text is no longer streamable.
+                    if tc.name in _ACTUATOR_TOOL_NAMES:
+                        gate.close()
+                    elif any(
+                        p in (result or "").lower() for p in _MISS_RESULT_PATTERNS
+                    ):
+                        gate.close()
                 msg = tc.to_tool_result_message(result)
                 messages.append(msg)
                 history_messages.append(msg)
