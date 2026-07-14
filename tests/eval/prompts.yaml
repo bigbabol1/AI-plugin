@@ -197,17 +197,17 @@ prompts:
     mutating: true
     turns:
       - text: "set a timer for 45 minutes called eval"
-        expect: {any: ["(?i)45|eval|timer"], none: ["(?i)couldn't|failed"]}
+        expect: {any: ["(?i)45|eval|timer"], none: ["(?i)couldn't|failed|doesn't support|not support(ed)?|can't set|never created"]}
       - text: "cancel the eval timer"
-        expect: {none: ["(?i)no .*timer|couldn't|failed"]}
+        expect: {none: ["(?i)no .*timer|couldn't|failed|doesn't support|not support(ed)?|never created|nothing to cancel"]}
   - id: timer_seconds_unit
     category: timer
     mutating: true
     turns:
       - text: "set a timer for 90 seconds"
-        expect: {any: ["(?i)90\\s*seconds|1[.,:]?5|one and a half|minute"], none: ["(?i)90\\s*minutes"]}
+        expect: {any: ["(?i)90\\s*second|1[.,:]?5|one and a half|minute"], none: ["(?i)90\\s*minute|doesn't support|not support(ed)?|can't set"]}
       - text: "cancel the timer"
-        expect: {none: ["(?i)couldn't|failed"]}
+        expect: {none: ["(?i)couldn't|failed|doesn't support|not support(ed)?"]}
 
   # ── memory round-trip (MUTATING — self-cleaning) ─────────────────────────
   - id: memory_roundtrip
