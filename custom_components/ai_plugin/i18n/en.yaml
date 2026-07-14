@@ -50,3 +50,8 @@ patterns:
     - '^(?:turn|switch|flip|put)\s+off\s+(?:the\s+|a\s+)?(?P<name>.+?)$'
     - '^(?:turn|switch|flip|put)\s+(?:the\s+|a\s+)?(?P<name>.+?)\s+off$'
     - '^(?P<name>.+?)\s+off$'
+  # Cover open/close for a single named cover (blinds, shutters, garage).
+  action_open:
+    - '^(?:open|raise)\s+(?:the\s+|a\s+)?(?P<name>.+?)$'
+  action_close:
+    - '^(?:close|shut|lower)\s+(?:the\s+|a\s+)?(?P<name>.+?)$'

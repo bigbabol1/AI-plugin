@@ -4,6 +4,14 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.31 — Shortcut coverage: covers and volume
+
+**New:**
+- **Cover open/close shortcut** (all 6 languages, `i18n/<code>.yaml` `action_open`/`action_close`). "Open the blinds" / "Mach den Rollladen zu" now resolves deterministically to one exposed `cover.*` entity and dispatches `cover.open_cover`/`close_cover` — same exact→substring→caller-area tiebreak as on/off, ambiguity falls through to the LLM. Cover verbs never actuate non-cover entities ("open spotify" stays with the LLM).
+- **Volume in the media shortcut**: volume up/down, mute/unmute, and "set the volume to N percent" (EN+DE) dispatch the matching `media_player` service on whatever is actually playing — no LLM round-trip.
+
+**Deliberately not shortcut**: locks (deterministically unlocking a door on a regex match is a security decision, not a latency optimization) and brightness/color (slot-heavy; the LLM path already benches 9/10 on lights).
+
 ## v0.9.30 — Multi-model routing, model introspection, AI Task platform
 
 **New:**

@@ -182,3 +182,55 @@ async def test_non_string_registry_name_does_not_crash(patched):
     assert result == (True, "")
     _, service, eid = _last_call(hass)
     assert service == "turn_on" and eid == "switch.tv"
+
+
+# ── v0.9.31: cover open/close ─────────────────────────────────────────────────
+
+
+async def test_cover_open_named(patched) -> None:
+    hass, ent_reg, dev_reg = _make_hass(
+        [_entity("cover.blinds", name="Blinds"),
+         _entity("light.blinds_light", name="Blinds Light")]
+    )
+    patched(hass, ent_reg, dev_reg)
+
+    result = await async_try_action_shortcut(hass, "open the blinds", lang="en")
+
+    assert result == (True, "")
+    domain, service, eid = _last_call(hass)
+    assert (domain, service, eid) == ("cover", "open_cover", "cover.blinds")
+
+
+async def test_cover_close_de(patched) -> None:
+    hass, ent_reg, dev_reg = _make_hass([_entity("cover.rollladen", name="Rollladen")])
+    patched(hass, ent_reg, dev_reg)
+
+    result = await async_try_action_shortcut(
+        hass, "Mach den Rollladen zu", lang="de"
+    )
+
+    assert result == (True, "")
+    domain, service, eid = _last_call(hass)
+    assert (domain, service, eid) == ("cover", "close_cover", "cover.rollladen")
+
+
+async def test_cover_verbs_never_actuate_non_cover(patched) -> None:
+    """'open X' must resolve only in the cover domain — no lights/switches."""
+    hass, ent_reg, dev_reg = _make_hass([_entity("light.spotify", name="Spotify")])
+    patched(hass, ent_reg, dev_reg)
+
+    result = await async_try_action_shortcut(hass, "open spotify", lang="en")
+
+    assert result is None
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_on_off_still_works_after_refactor(patched) -> None:
+    hass, ent_reg, dev_reg = _make_hass([_entity("light.mood", name="Mood Light")])
+    patched(hass, ent_reg, dev_reg)
+
+    result = await async_try_action_shortcut(hass, "turn on the mood light", lang="en")
+
+    assert result == (True, "")
+    domain, service, eid = _last_call(hass)
+    assert (domain, service, eid) == ("homeassistant", "turn_on", "light.mood")

@@ -46,3 +46,11 @@ patterns:
   action_off:
     - '^(?:schalte|mach|stell|stelle|dreh|drehe)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+aus$'
     - '^(?P<name>.+?)\s+aus$'
+  action_open:
+    - '^(?:öffne|oeffne)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)$'
+    - '^mach(?:e)?\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+auf$'
+    - '^(?P<name>.+?)\s+(?:öffnen|aufmachen|hoch(?:fahren)?)$'
+  action_close:
+    - '^(?:schließe|schliesse)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)$'
+    - '^mach(?:e)?\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+zu$'
+    - '^(?P<name>.+?)\s+(?:schließen|schliessen|zumachen|runter(?:fahren)?)$'

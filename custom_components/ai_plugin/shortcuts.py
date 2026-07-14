@@ -568,6 +568,42 @@ _MEDIA_TRIGGERS: list[tuple[str, re.Pattern[str]]] = [
         "pause",
         re.compile(r"\b(?:paus(?:e|ier\w*))\b", re.IGNORECASE),
     ),
+    # Volume — set (with percent capture) must precede up/down; unmute
+    # must precede mute so the prefix isn't shadowed.
+    (
+        "volume_set",
+        re.compile(
+            r"\b(?:volume|lautst[äa]rke)\s+(?:to|auf)\s+(?P<pct>\d{1,3})\s*"
+            r"(?:%|percent|prozent)?\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "volume_up",
+        re.compile(
+            r"\b(?:volume\s+up|turn\s+(?:it|the\s+volume)\s+up|louder|lauter)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "volume_down",
+        re.compile(
+            r"\b(?:volume\s+down|turn\s+(?:it|the\s+volume)\s+down|"
+            r"quieter|softer|leiser)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "unmute",
+        re.compile(
+            r"\b(?:unmute|ton\s+(?:wieder\s+)?an|stumm(?:schaltung)?\s+aus\w*)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "mute",
+        re.compile(r"\b(?:mute|stumm(?:schalten)?)\b", re.IGNORECASE),
+    ),
     (
         "stop",
         re.compile(
@@ -589,6 +625,11 @@ _MEDIA_SERVICE_MAP = {
     "next": "media_next_track",
     "previous": "media_previous_track",
     "stop": "media_stop",
+    "volume_set": "volume_set",
+    "volume_up": "volume_up",
+    "volume_down": "volume_down",
+    "mute": "volume_mute",
+    "unmute": "volume_mute",
 }
 
 _MEDIA_RELEVANT_STATES = {
@@ -597,13 +638,18 @@ _MEDIA_RELEVANT_STATES = {
     "next": {"playing", "paused"},
     "previous": {"playing", "paused"},
     "stop": {"playing", "paused"},
+    "volume_set": {"playing", "paused", "on"},
+    "volume_up": {"playing", "paused", "on"},
+    "volume_down": {"playing", "paused", "on"},
+    "mute": {"playing", "paused", "on"},
+    "unmute": {"playing", "paused", "on"},
 }
 
 
-def _detect_media_command(message: str) -> str | None:
+def _detect_media_command(message: str) -> tuple[str, "re.Match[str]"] | None:
     for cmd, rx in _MEDIA_TRIGGERS:
-        if rx.search(message):
-            return cmd
+        if m := rx.search(message):
+            return cmd, m
     return None
 
 
@@ -643,12 +689,13 @@ async def async_try_media_shortcut(
     if not message:
         return None
     msg = message.strip()
-    if not msg or len(msg.split()) > 8:
+    if not msg or len(msg.split()) > 10:
         return None
 
-    cmd = _detect_media_command(msg)
-    if cmd is None:
+    detected = _detect_media_command(msg)
+    if detected is None:
         return None
+    cmd, match = detected
 
     area = _extract_area_from_media_message(hass, msg)
 
@@ -679,10 +726,19 @@ async def async_try_media_shortcut(
 
     target_ids.sort()
     service = _MEDIA_SERVICE_MAP[cmd]
+    data: dict[str, Any] = {}
+    if cmd in ("mute", "unmute"):
+        data["is_volume_muted"] = cmd == "mute"
+    elif cmd == "volume_set":
+        pct = int(match.group("pct"))
+        if not 0 <= pct <= 100:
+            return None
+        data["volume_level"] = pct / 100
     try:
         await hass.services.async_call(
             "media_player",
             service,
+            data or None,
             target={"entity_id": target_ids},
             blocking=True,
         )
@@ -731,12 +787,16 @@ def _entry_area_id(hass: HomeAssistant, entry: Any, dev_reg: Any) -> str | None:
 
 
 def _resolve_named_entity(
-    hass: HomeAssistant, name: str, *, device_id: str | None = None
+    hass: HomeAssistant,
+    name: str,
+    *,
+    device_id: str | None = None,
+    domains: tuple[str, ...] = _ACTION_DOMAINS,
 ) -> str | None:
     """Resolve a spoken device name to ONE exposed, actuatable entity_id.
 
     Matches name / original_name / aliases / friendly_name (exact first,
-    then substring), restricted to exposed entities in _ACTION_DOMAINS.
+    then substring), restricted to exposed entities in ``domains``.
     When the match is ambiguous, the caller's area breaks the tie; if it
     still can't, returns None so the LLM can disambiguate rather than the
     shortcut actuating the wrong device.
@@ -751,7 +811,7 @@ def _resolve_named_entity(
     exact: list[tuple[str, str | None]] = []
     substr: list[tuple[str, str | None]] = []
     for eid, entry in ent_reg.entities.items():
-        if eid.split(".", 1)[0] not in _ACTION_DOMAINS:
+        if eid.split(".", 1)[0] not in domains:
             continue
         if async_should_expose is not None:
             try:
@@ -812,39 +872,50 @@ async def async_try_action_shortcut(
     if not msg or len(msg.split()) > 7:
         return None
 
-    action: str | None = None
-    name: str = ""
-    # off-first: on/off tokens are disjoint, but this is a safe tiebreak.
-    for polarity, service in (("off", "turn_off"), ("on", "turn_on")):
-        for rx in L.pattern_list(f"action_{polarity}", lang):
+    # (pattern key, service domain, service, allowed entity domains).
+    # off/close before on/open is a safe tiebreak; cover verbs are checked
+    # first so "open the blinds" never reaches the on/off patterns.
+    kinds = (
+        ("action_close", "cover", "close_cover", ("cover",)),
+        ("action_open", "cover", "open_cover", ("cover",)),
+        ("action_off", "homeassistant", "turn_off", _ACTION_DOMAINS),
+        ("action_on", "homeassistant", "turn_on", _ACTION_DOMAINS),
+    )
+    matched = None
+    for key, service_domain, service, domains in kinds:
+        for rx in L.pattern_list(key, lang):
             m = rx.match(msg)
             if m and (m.group("name") or "").strip():
-                action, name = service, m.group("name").strip()
+                matched = (service_domain, service, domains, m.group("name").strip())
                 break
-        if action:
+        if matched:
             break
-    if action is None:
+    if matched is None:
         return None
+    service_domain, service, domains, name = matched
 
-    entity_id = _resolve_named_entity(hass, name, device_id=device_id)
+    entity_id = _resolve_named_entity(
+        hass, name, device_id=device_id, domains=domains
+    )
     if not entity_id:
         return None
 
     try:
         await hass.services.async_call(
-            "homeassistant",
-            action,
+            service_domain,
+            service,
             {"entity_id": entity_id},
             blocking=True,
             context=Context(),
         )
     except Exception:  # noqa: BLE001
         _LOGGER.exception(
-            "AI Plugin action shortcut: %s on %s failed", action, entity_id
+            "AI Plugin action shortcut: %s on %s failed", service, entity_id
         )
         return None
 
     _LOGGER.info(
-        "AI Plugin action shortcut: %s → %s (lang=%s)", action, entity_id, lang
+        "AI Plugin action shortcut: %s.%s → %s (lang=%s)",
+        service_domain, service, entity_id, lang,
     )
     return (True, "")

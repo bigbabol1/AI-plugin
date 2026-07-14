@@ -44,3 +44,7 @@ patterns:
     - '^(?:liga|ligar|ligue|ativa|ativar|acende|acender)\s+(?:o|a|os|as|um|uma)?\s*(?P<name>.+?)$'
   action_off:
     - '^(?:desliga|desligar|desligue|desativa|desativar|apaga|apagar)\s+(?:o|a|os|as)?\s*(?P<name>.+?)$'
+  action_open:
+    - '^(?:abre|abrir|abra)\s+(?:o\s+|a\s+|os\s+|as\s+)?(?P<name>.+?)$'
+  action_close:
+    - '^(?:fecha|fechar|feche)\s+(?:o\s+|a\s+|os\s+|as\s+)?(?P<name>.+?)$'

@@ -44,3 +44,7 @@ patterns:
     - '^(?:allume|allumer|allumez|active|activer)\s+(?:le|la|les|l''|l’|un|une)?\s*(?P<name>.+?)$'
   action_off:
     - '^(?:éteins|eteins|éteindre|éteignez|désactive|desactive|coupe)\s+(?:le|la|les|l''|l’)?\s*(?P<name>.+?)$'
+  action_open:
+    - '^(?:ouvre|ouvrir)\s+(?:le\s+|la\s+|les\s+|l[\x27’]\s*)?(?P<name>.+?)$'
+  action_close:
+    - '^(?:ferme|fermer)\s+(?:le\s+|la\s+|les\s+|l[\x27’]\s*)?(?P<name>.+?)$'
