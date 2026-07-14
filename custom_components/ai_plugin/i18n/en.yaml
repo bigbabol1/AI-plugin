@@ -27,7 +27,9 @@ templates:
   err_process:       "Sorry, I couldn't process that."
   note_tool_limit:   "[Note: reached tool call limit — response may be incomplete.]"
 
+  time_is:           "It is {time}."
 keywords:
+  time_now:      ["what time is it", "what is the time", "what's the time", "tell me the time", "current time"]
   sun_set:       ["when is sunset", "sunset", "when does the sun set", "when does the sun go down", "when does it get dark"]
   sun_rise:      ["when is sunrise", "sunrise", "when does the sun rise", "when does the sun come up"]
   sun_dark:      ["is it dark outside", "is it light outside"]

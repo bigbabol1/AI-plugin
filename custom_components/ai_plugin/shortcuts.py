@@ -405,6 +405,30 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str, lang: str = "en") -> st
     return None
 
 
+def _try_time_shortcut(hass: HomeAssistant, message: str, lang: str) -> str | None:
+    """Answer 'what time is it' from the HA clock — no LLM round-trip.
+
+    The LLM answers this correctly from the [CURRENT TIME] block, but at
+    5-8s per turn for a deterministic fact. Date questions stay with the
+    LLM (localized weekday/month names aren't worth the i18n surface).
+    """
+    time_re = L.keyword_re("time_now", lang)
+    if time_re is None or not time_re.search(message.lower()):
+        return None
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        tz_name = (getattr(hass.config, "time_zone", None) or "").strip()
+        now = datetime.now(ZoneInfo(tz_name)) if tz_name else datetime.now().astimezone()
+        stamp = now.strftime("%H:%M")
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("AI Plugin time shortcut: clock read failed", exc_info=True)
+        return None
+    _LOGGER.info("AI Plugin shortcut hit: time → %s (lang=%s)", stamp, lang)
+    return L.template("time_is", lang, time=stamp)
+
+
 def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str | None:
     """Return a deterministic reply for supported patterns, else None.
 
@@ -419,6 +443,10 @@ def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str 
     """
     if not message or not hass:
         return None
+
+    time_reply = _try_time_shortcut(hass, message, lang)
+    if time_reply:
+        return time_reply
 
     sun_reply = _try_sun_shortcut(hass, message, lang)
     if sun_reply:

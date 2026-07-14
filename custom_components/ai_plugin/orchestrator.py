@@ -448,11 +448,13 @@ _EMOJI_RE = re.compile(
 # groups containing such glyphs go first (this also removes enclosed ° and _
 # that belong to the face), then any leftover glyphs of those classes.
 # The degree sign itself is NOT a trigger — "21°C" must survive.
-_KAOMOJI_TRIGGER = "─-◿︰-﹏・･"
+# ಠ/ಥ are Kannada letters that live almost exclusively in kaomoji when they
+# appear in the plugin's shipped languages (en/de/fr/es/pt/pl).
+_KAOMOJI_TRIGGER = "─-◿︰-﹏・･ಠಥ"
 _KAOMOJI_GROUP_RE = re.compile(
     rf"[(（\[][^()（）\[\]]*[{_KAOMOJI_TRIGGER}][^()（）\[\]]*[)）\]]"
 )
-_KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏]+")
+_KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏]+|[ಠಥ]\s*_\s*[ಠಥ]")
 
 
 def _strip_emoji(text: str) -> str:

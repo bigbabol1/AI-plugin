@@ -4,6 +4,14 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.28 — Deterministic time shortcut, kaomoji-free TTS
+
+**New:**
+- **"What time is it" answers deterministically** (`shortcuts.py` `_try_time_shortcut`, all 6 languages via `i18n/<code>.yaml` `time_now`/`time_is`). Live measurements showed 5–8s of LLM round-trip for a clock read; now ~0.01s. Date questions stay with the LLM (localized weekday/month names aren't worth the i18n surface).
+
+**Fixed:**
+- **Kaomoji no longer reach TTS** (`orchestrator.py` `_strip_emoji`). `(╯°□°）╯︵ ┻━┻`, `(・_・)`, `ಠ_ಠ` are box-drawing/geometric/CJK/Kannada glyphs outside the emoji ranges, so the stripper passed them to the speech synthesizer. Bracketed groups containing such glyphs are removed whole, leftover glyphs swept after; `21°C` and ordinary parentheses survive.
+
 ## v0.9.27 — Latency: cache-stable prompts, keep_alive, background summarization
 
 All four changes target the same number: seconds between speaking and hearing the reply on a local Ollama backend.

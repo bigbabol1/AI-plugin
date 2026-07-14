@@ -27,7 +27,9 @@ templates:
   err_process:       "Przepraszam, nie mogłem tego przetworzyć."
   note_tool_limit:   "[Uwaga: osiągnięto limit narzędzi — odpowiedź może być niepełna.]"
 
+  time_is:           "Jest {time}."
 keywords:
+  time_now:      ["która jest godzina", "ktora jest godzina", "podaj godzinę"]
   sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]
   sun_rise:      ["wschód słońca", "kiedy wschodzi słońce", "o której wschodzi słońce"]
   sun_dark:      ["jest ciemno", "jest jasno"]

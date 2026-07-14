@@ -27,7 +27,9 @@ templates:
   err_process:       "Desculpe, não consegui processar isso."
   note_tool_limit:   "[Nota: limite de ferramentas atingido — a resposta pode estar incompleta.]"
 
+  time_is:           "São {time}."
 keywords:
+  time_now:      ["que horas são", "que horas sao", "diga as horas"]
   sun_set:       ["pôr do sol", "quando se põe o sol", "a que horas se põe o sol"]
   sun_rise:      ["nascer do sol", "quando nasce o sol", "a que horas nasce o sol"]
   sun_dark:      ["está escuro", "está claro"]
