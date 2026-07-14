@@ -1,209 +1,190 @@
 # AI Plugin for Home Assistant
 
-A provider-agnostic AI orchestration layer for Home Assistant. Use any LLM — Ollama, llama.cpp, OpenAI, LM Studio, and more — with web search, MCP tool extensibility, and smart context management.
+A provider-agnostic AI orchestration layer for Home Assistant, built for **local LLMs on modest hardware**. Use any OpenAI-compatible backend — Ollama, llama.cpp, LM Studio, OpenAI, xAI — as your Assist conversation agent, with streaming voice replies, deterministic shortcuts, web search, voice timers, MCP tool extensibility, and an AI Task entity for automations.
 
 ## Features
 
-- **Any LLM backend** — Ollama, llama.cpp, OpenAI, LM Studio, xAI Grok, and any OpenAI-compatible endpoint
-- **On-demand entity discovery** — `list_areas`, `list_entities`, `get_entity`, `search_entities` tools hit HA registries in-process; no YAML dump into the prompt
-- **Assist exposure aware** — discovery tools default to entities you've marked as exposed to conversation; diagnostic sensors stay hidden unless explicitly requested
-- **Web search** — Brave Search (default), Tavily, SearXNG (self-hosted), DuckDuckGo (zero config)
-- **MCP extensibility** — connect external MCP servers (HTTP and stdio) for additional tools
-- **Smart context management** — sliding window + automatic LLM summarization prevents memory loss with local models
-- **Streaming replies** — sentence-safe deltas into HA's chat log; voice pipelines with streaming TTS start speaking before generation finishes (Ollama backend)
-- **Voice mode** — compact system prompt when triggered via HA Assist voice pipeline
+- **Any LLM backend** — Ollama (first-class, native `/api/chat`), llama.cpp, LM Studio, OpenAI, xAI Grok, any OpenAI-compatible endpoint
+- **Streaming replies** — sentence-safe deltas into HA's chat log; voice pipelines with streaming TTS start speaking after the first sentence instead of after full generation (Ollama backend)
+- **Deterministic shortcut layer** — common voice commands bypass the LLM entirely (~0.01–0.05 s instead of seconds): clock time, sunrise/sunset, room sensor readings, single-device on/off, cover open/close, media transport, volume/mute — all data-driven per language
+- **On-demand entity discovery** — `list_areas` / `list_entities` / `get_entity` / `search_entities` hit HA registries in-process; no YAML entity dump bloating the prompt
+- **Grounding verifiers** — state questions, action commands, and time-sensitive questions are checked against actual tool usage; a model that answered from imagination gets one corrective re-run
+- **Voice timers** — first-class start/cancel/pause/extend with deterministic duration parsing, plus an optional **announce mode** that plays timer completions through a media player instead of the satellite's own ring (works on satellites without timer firmware)
+- **AI Tasks** — the same backend serves `ai_task.generate_data` for automations and scripts: plain text or structured JSON
+- **Web search** — DuckDuckGo (zero config, default), Brave, Tavily, SearXNG; plus `browse_url` for reading a specific page
+- **Model introspection** — the config flow warns when a model can't call tools or when the context window exceeds what the model supports (Ollama)
+- **Smart context management** — per-request token budgeting, sliding window, background summarization, cache-stable prompt layout for Ollama's prefix cache
+- **Long-term memory** — `remember` / `recall` / `forget` with per-user fact files, auto-injected so small models answer without a tool call
+- **MCP extensibility** — connect external MCP servers (HTTP and stdio), including HA's own MCP server for `HassTurnOn`-style intents
+- **6 languages** — en, de, fr, es, pt, pl; adding a language is a YAML PR (`i18n/CONTRIBUTING.md`)
+- **Offline eval harness** — `tests/eval/` drives a live install end-to-end and scores replies, so changes get measured instead of vibed
 
-> **Tested only with Ollama.** The OpenAI-compatible endpoint should accept any of the listed backends, but only Ollama (local) has been exercised end-to-end against the prompt suite below. Reports for OpenAI / xAI / LM Studio / llama.cpp setups welcome.
+> **Tested only with Ollama.** The OpenAI-compatible endpoint should accept the other backends, but only Ollama (local) has been exercised end-to-end against the prompt suite below. Reports for OpenAI / xAI / LM Studio / llama.cpp setups welcome.
 
 ## Recommended Models
 
-The most critical factor for reliable entity control is **tool calling quality**. Models that hedge or ask unnecessary clarifying questions instead of executing commands are a poor fit, regardless of their general benchmark scores.
+The most critical factor for reliable entity control is **tool calling quality**. Models that hedge or ask clarifying questions instead of executing are a poor fit regardless of benchmark scores. The config flow now checks this for you on Ollama: models that report no `tools` capability are rejected at setup.
 
 ### 8 GB VRAM (e.g. RTX 3060 Ti, RTX 3070)
 
-Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/process` in **voice mode** (`device_id` set → `SYSTEM_PROMPT_VOICE` + `strip_urls=True`). 51 prompts covering light/climate/sensor/media/weather/web/memory/multi-step/multilingual. Plugin v0.5.47, num_ctx 16384, temperature 0.2, on Ollama against an RTX 3060 Ti (8 GB).
+Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/process` in **voice mode**. 51 prompts covering light/climate/sensor/media/weather/web/memory/multi-step/multilingual. Plugin v0.5.47, num_ctx 16384, temperature 0.2, on Ollama against an RTX 3060 Ti (8 GB).
 
-| Model | Ollama tag | Weights | Pass rate | Avg latency | Texas-class hallucinations | Notes |
-|-------|-----------|---------|-----------|-------------|----------------------------|-------|
-| **Qwen3 8B** | `qwen3:8b` | ~5.2 GB | **86.3 %** (44/51) | **1.8 s** (median 1.4 s, max 4.9 s) | 0 | **Top recommendation.** Most consistent latency, perfect on weather (5/5) and web (5/5), strong on lights (9/10). Emits CoT into `thinking`; plugin passes `think: false` so `content` is populated. The HA-Assist `homeassistant:latest` alias points here. |
-| **Qwen2.5 7B** | `qwen2.5:7b` | ~4.7 GB | **88.2 %** (45/51) | 2.6 s (median 0.7 s, max **37.8 s**) | 0 | Tied at the top by score, slightly higher tail latency on multi-step tool loops. No reasoning-mode quirks. Pick this if you want lower VRAM headroom or non-think behaviour. |
-| Mistral 7B | `mistral:7b` | ~4.1 GB | 82.4 % (42/51) | 1.3 s (median 0.4 s, max 10.0 s) | **1** (fabricated *"das Wetter in Berlin ist regnerisch und kühl"* with no tool call) | Fast and decisive on lights/climate/web (perfect on all three), but takes some commands literally wrong (`volume up bedroom` → tried to switch on bedroom lights) and dumps the system prompt verbatim on bare nouns like `weather` / `events` / `temperature`. Acceptable for English text; not the safe pick for German voice. |
-| Hermes 3 8B | `hermes3:8b` | ~4.7 GB | 74.5 % (38/51) | 2.1 s (median 1.5 s, max 23.5 s) | **1** (returned a Super Bowl LA Rams story to "events") | Llama-3.1 base, tool-calling FT. Weak on weather (2/5 — refuses or asks for location), weak on light entity resolution (6/10). Not recommended for HA. |
-| **Qwen3.5 9B (Q4_K_M)** | [`bartowski/Qwen_Qwen3.5-9B-GGUF`](https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF) — load via llama.cpp or `ollama create` from the GGUF | ~5.6 GB | _user-reported, no formal bench yet_ | _n/a_ | _n/a_ | Tighter than the 7–8B picks above: weights 5.6 GB + KV cache at num_ctx 16384 ≈ 0.2 GB/1k = 3.2 GB → ~8.8 GB total, exceeds 8 GB. Drop num_ctx to **8192** (cuts KV to 1.6 GB → ~7.2 GB total, fits) or stay at 16384 with partial CPU offload (slower). Same Qwen3 reasoning behaviour — plugin's `think: false` flag still applies. |
+| Model | Ollama tag | Weights | Pass rate | Avg latency | Hallucinated answers | Notes |
+|-------|-----------|---------|-----------|-------------|----------------------|-------|
+| **Qwen3 8B** | `qwen3:8b` | ~5.2 GB | **86.3 %** (44/51) | **1.8 s** | 0 | **Top recommendation.** Most consistent latency, perfect on weather and web, strong on lights. Reasoning model — the plugin sends `think: false` automatically. |
+| **Qwen2.5 7B** | `qwen2.5:7b` | ~4.7 GB | **88.2 %** (45/51) | 2.6 s | 0 | Highest raw score, higher tail latency on multi-step tool loops. Occasionally leaks tool-call syntax into replies; Qwen3 never did. |
+| Mistral 7B | `mistral:7b` | ~4.1 GB | 82.4 % (42/51) | 1.3 s | 1 | Fastest, but fabricated a weather answer instead of calling a tool — a hard fail for an HA agent. |
+| Hermes 3 8B | `hermes3:8b` | ~4.7 GB | 74.5 % (38/51) | 2.1 s | 1 | Weak on weather and entity resolution. Not recommended for HA. |
 
-**Headline:** Qwen2.5 7B has the highest raw score, Qwen3 8B has the most consistent latency and the cleanest voice output. Mistral 7B is the fastest of the bunch but is the only model in this round that fabricated a weather answer instead of calling a tool — a hard fail for an HA agent. Qwen3 8B remains the safer pick for voice TTS because Qwen2.5 7B occasionally leaks raw tool-call syntax (`Calling list_entities(domain='weather')...`) into the reply on short prompts; Qwen3 never did this.
-
-> **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB.
-> A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
-> The plugin's first-turn header (system prompt + HA tool schemas + home location + user facts) is ~4.2 K tokens in default mode and ~3.3 K in voice mode — leaves the rest of the window for conversation + tool results.
+> **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB. A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
 >
-> **Minimum recommended context: 16384.** Multi-step tool loops (discovery → state → confirm) routinely emit 6–10 K of intermediate tokens, and 8192 starves them — most of the false-negatives in the 8B sweep that *did* call the right tool then ran out of context to summarise the result.
-> 8192 only works for chat-only setups with no entity discovery. The integration default is **16384** for this reason.
-> Avoid values above ~24 000 on an 8 GB card with 7–8B models.
+> **Minimum recommended context: 16384** (the integration default). Multi-step tool loops routinely emit 6–10 K of intermediate tokens; 8192 starves them. Avoid values above ~24 000 on an 8 GB card. Setting a context window larger than the model supports is now rejected in Advanced settings (Ollama).
 
 ### 24 GB VRAM (e.g. RTX 3090, RTX 4090)
 
 | Model | Size | Tool calling | Notes |
 |-------|------|-------------|-------|
-| **ministral-3:14b** | ~9 GB | ⭐⭐⭐⭐⭐ | Best local choice — Mistral architecture, decisive tool calls, natural responses |
+| **ministral-3:14b** | ~9 GB | ⭐⭐⭐⭐⭐ | Best local choice — decisive tool calls, natural responses |
 | devstral-small-2:latest | ~15 GB | ⭐⭐⭐⭐⭐ | Excellent, coding-focused, slightly larger |
 | qwen2.5:32b | ~20 GB | ⭐⭐⭐⭐ | Very capable, requires more VRAM |
-| gemma4:27b | ~18 GB | ⭐⭐⭐ | Natural language quality is high, tool calling less reliable |
+| gemma4:27b | ~18 GB | ⭐⭐⭐ | High language quality, less reliable tool calling |
 
-### Cloud models
+### Recommended configuration
 
-| Model | Tool calling | Notes |
-|-------|-------------|-------|
-| GPT-4o | ⭐⭐⭐⭐⭐ | Best overall, reliable function calling |
-| GPT-4o mini | ⭐⭐⭐⭐ | Good balance of cost and reliability |
-| Claude Sonnet | ⭐⭐⭐⭐⭐ | Excellent tool use, natural responses |
-| Grok 2 | ⭐⭐⭐⭐ | Good tool calling, fast |
+| Setting | Value |
+|---------|-------|
+| Model | `qwen3:8b` (or `qwen2.5:7b`) |
+| Temperature | 0.2 |
+| top_p | 0.4 |
+| Context Window | **16384** |
+| Max Tokens (`num_predict`) | 512 |
+| Keep-alive | `30m` (`-1` on a dedicated GPU) |
+| Web Search | DuckDuckGo (default) or Tavily/Brave with a key |
+
+## How it stays fast on local models
+
+Latency on a 7–9B model is won or lost in three places, and the plugin attacks all of them:
+
+1. **Skip the LLM when possible.** The deterministic shortcut layer answers clock time, sun times, "temperature in the bedroom", "turn on the mood light" (all 6 languages), "open the blinds", "pause", "volume up", "mute" in ~0.01–0.05 s by hitting HA registries and services directly. Misses and ambiguity fall through to the LLM — the shortcut never guesses.
+2. **Reuse Ollama's prompt prefix cache.** The system prompt and tool list are byte-stable across turns; volatile context (`[CURRENT TIME]`, `[USER FACTS]`, `[LAST ACTION]`) rides in a late system message just before the newest user turn. Each request pre-fills only the new tail instead of the whole 3–6 K-token prompt. (Per-message tool-schema pruning defeats this cache and is therefore opt-in.)
+3. **Start speaking before generation finishes.** Replies stream sentence-by-sentence into HA's chat log; with a streaming-capable TTS engine the satellite starts speaking after the first sentence. Streaming is sentence-safe by design: every sentence passes the same sanitation as the final reply, the trailing sentence is held back, and streaming shuts off entirely on any turn where a grounding verifier might rewrite the reply or TTS suppression might blank it.
+
+Also in this bucket: summarization runs *after* the reply in the background instead of blocking the unlucky turn that crosses the context limit, per-request token budgeting reserves space for the tool schemas actually being sent, and the **Keep-alive** option keeps the model in VRAM between turns without any `OLLAMA_KEEP_ALIVE` server configuration.
 
 ## Ollama Configuration
 
 ### Context Window — one setting controls everything
 
-When connecting to Ollama, this plugin automatically uses Ollama's native `/api/chat` endpoint and passes `num_ctx` on every request. The **Context Window** setting in the integration UI is therefore the single number that controls both:
-
-- the plugin's internal token budget (when to summarise, when to truncate), and
-- the actual context size Ollama loads the model with.
-
-**No Modelfile changes are required.** Just set Context Window in the integration and Ollama honours it.
-
-Choosing the right value:
-- Too low (e.g. 2048) — plugin summarises after a few turns; model forgets recent context fast.
-- Too high (e.g. 32768 on 8 GB VRAM) — Ollama may OOM or fall back to CPU offload, causing slow responses.
-- **For 8 GB VRAM + 7B model: 8192 is the recommended value.** It fits entirely in VRAM and provides enough context for typical home-assistant conversations.
-- **The integration default is 16384** — change it to fit your hardware in Advanced settings.
+The plugin talks to Ollama's native `/api/chat` and passes `num_ctx` on every request, so the **Context Window** setting is the single number controlling both the plugin's internal token budget and the context size Ollama loads the model with. No Modelfile changes required.
 
 ### Temperature
 
-Set temperature to **0.1–0.3** for home control. Higher values cause models to ask clarifying questions instead of calling tools and acting. Configure via the integration's Advanced settings. **0.2 is what the benchmark below was run with.**
+**0.1–0.3** for home control. Higher values make models ask clarifying questions instead of acting. The benchmark above ran at 0.2.
 
 ### Reasoning models (qwen3, deepseek-r1)
 
-Reasoning-capable Ollama models emit chain-of-thought into a separate `thinking` field and sometimes leave `content` empty. The plugin sends `think: false` on every Ollama `/api/chat` call so final answers land in `content` where they belong — no Modelfile tweaks required. A `SYSTEM """/no_think"""` directive in a custom Modelfile is unreliable and unnecessary.
+The plugin sends `think: false` on every Ollama call so final answers land in `content`. Requires Ollama 0.20+. No Modelfile tweaks needed.
 
-## Reliability Benchmark
+### Keep-alive
 
-51-prompt matrix covering light control, climate, sensors/status, media, weather (local + named-place), web search & nearby-events, memory, multi-step regression, and multilingual input (English + German). Measured on Home Assistant Core 2026.4.x against plugin v0.5.47 via `/api/conversation/process`, **voice mode** (`device_id` set so `SYSTEM_PROMPT_VOICE` + `strip_urls=True` are active — the most common Assist usage path).
+Ollama unloads models after 5 minutes of inactivity by default, so the first command after a quiet stretch pays the full model-load cost. Set **Ollama keep-alive** in Advanced settings (`30m`, `24h`, or `-1` for always loaded) — sent per request, no server configuration. Leave empty to keep the server default.
 
-| Model | Pass rate | Median latency | Avg latency | Suspect-place hits | Best categories | Worst categories |
-|-------|-----------|----------------|-------------|--------------------|-----------------|------------------|
-| `qwen3:8b` (alias `homeassistant:latest`) | **86.3 %** (44/51) | **1.4 s** | 1.8 s | 0 | weather 5/5, web 5/5, light 9/10, media 4/4, memory 4/4 | sanity 2/3, multi 2/3 |
-| `qwen2.5:7b` | **88.2 %** (45/51) | 0.7 s | 2.6 s | 0 | sensor 6/6, multi 3/3, sanity 3/3, weather 5/5, web 5/5 | climate 5/7 (couldn't resolve thermostat target), short 2/4 |
-| `mistral:7b` | 82.4 % (42/51) | **0.4 s** | 1.3 s | **1** | climate 7/7, web 5/5, multi 3/3, light 9/10 | short 1/4 (dumps the system prompt for bare nouns), sanity 2/3, weather 4/5 (one fabricated forecast) |
-| `hermes3:8b` | 74.5 % (38/51) | 1.5 s | 2.1 s | **1** | sensor 6/6, multi 3/3, web 5/5 | weather 2/5 (asks for location), light 6/10, sanity 1/3 |
+## Voice timers
 
-**Reference setup:** RTX 3060 Ti (8 GB), Ollama 0.20+, num_ctx 16384, temperature 0.2, top_p 0.4, num_predict 512. All four models Q4_K_M. Plugin v0.5.47.
+Timers are first-class tools (`start_timer`, `cancel_timer`, `pause_timer`, `unpause_timer`, `increase_timer`, `decrease_timer`, `timer_status`) with a deterministic safety net: the spoken utterance is ground truth for the duration, so "10 seconds" can never become 10 minutes even if the model mis-fills a slot.
 
-Notes on the rubric:
-- "Pass" = HTTP 200 + non-empty reply + matches one of the per-prompt positive regexes + matches none of the per-prompt negative regexes (e.g. *"don't have"*, *"cannot"*).
-- The Hermes Texas-class hit was the prompt `"events"` in voice-short mode, which returned a fabricated US sports recap. The Mistral hit was a fabricated German forecast for `wie ist das wetter?` — answered from the model's prior, no tool call.
+**Default:** HA delivers the timer to the satellite, which shows its countdown and plays its ring sound locally. This requires timer-capable satellite firmware (HA Voice PE and current ESPHome voice satellites have it).
 
-**Recommended configuration**
+**Announce mode** (Advanced → *Announce timers instead of on-device ring*): the timer carries a `conversation_command` instead — HA's own TimerManager calls the plugin back at expiry, and the plugin plays a localized announcement ("Timer pasta is up.") via `mic_to_mediaplayer.announce` when that integration is present, else HA's native `assist_satellite.announce`. Use this when the satellite's own speaker is silenced because audio is routed to better speakers, or when the satellite has no timer firmware at all — announce-mode timers work on **any** device. Trade-offs: the satellite shows no countdown LEDs and plays no local ring; like all HA voice timers, timers don't survive an HA restart.
 
-| Setting | Value |
-|---------|-------|
-| Model | `qwen3:8b` (or `qwen2.5:7b` as fallback) |
-| Temperature | 0.2 |
-| top_p | 0.4 |
-| Context Window | **16384** (minimum — multi-step tool loops need the headroom; do not drop to 8192 unless you've disabled entity discovery) |
-| Max Tokens (`num_predict`) | 512 |
-| Keep-alive | `30m` (`-1` on a dedicated GPU) |
-| Voice Mode | on (compact system prompt — saves ~930 input tokens per turn) |
-| Web Search | Tavily or Brave (DuckDuckGo works but tie-breaks ambiguous toponyms toward US locales — v0.5.46 mitigates by injecting `city, country`) |
+## AI Tasks (automations & scripts)
 
-No custom Modelfile parameters are required — the plugin manages `think`, `num_ctx`, `temperature`, `top_p`, and `num_predict` per request on Ollama's native API.
+The integration provides an `ai_task` entity, so automations can use the same local model:
 
-### Keep-alive (optional)
+```yaml
+action: ai_task.generate_data
+data:
+  task_name: morning summary
+  instructions: Summarize today's calendar in two sentences.
+  entity_id: ai_task.ai_plugin
+```
 
-Ollama unloads models from VRAM after 5 minutes of inactivity by default, so the first voice command after a quiet stretch pays the full model-load cost. Set **Ollama keep-alive** in the integration's Advanced settings (e.g. `30m`, or `-1` for always loaded) — it is sent per request, no server-side configuration needed. If you prefer configuring the server instead, `OLLAMA_KEEP_ALIVE=-1 ollama serve` still works; leave the integration option empty then.
+With a `structure` schema, the model is instructed to return matching JSON; code fences are tolerated and invalid JSON raises a proper error instead of returning garbage.
 
 ## Conversation continuity (`Listen for follow-up after voice replies`)
 
-The integration's **Listen for follow-up after voice replies** option (Settings → Devices & Services → AI Plugin → Configure → Advanced) controls whether the satellite re-arms its microphone after every spoken reply, so the user can continue the conversation without saying the wake word again.
+When the option is on (default), every non-close-phrase reply returns `continue_conversation=True` — HA's standard mechanism. Voice satellites with their own speaker (HA Voice PE, standard ESPHome satellites) re-arm the microphone after the reply, so you can keep talking without the wake word. A close-phrase detector (`thanks`, `bye`, `das war's`, …) ends the loop cleanly.
 
-### How it works end-to-end
-
-When the option is on (default), every non-close-phrase reply returns `ConversationResult(continue_conversation=True)` ([`conversation.py`](custom_components/ai_plugin/conversation.py)) — HA's standard mechanism. Voice satellites with their own speaker (HA Voice PE, standard ESPHome satellites) then re-arm the microphone after the reply, so you can keep talking without the wake word.
-
-**Exception — TTS on a separate speaker:** satellites that route their reply audio to an external media player (e.g. via Mic to MediaPlayer) re-hear their own TTS and re-trigger listening — an acoustic feedback loop. Add those specific devices to **Advanced → Force-end conversations on these satellites**; conversations on listed devices always end after one turn (wake word required), while every other satellite honours the follow-up toggle. (Until v0.9.31 this force-end applied to *all* voice satellites, which silently disabled follow-up everywhere.)
-
-A **close-phrase detector** (`_match_close_phrase`, see `const.py` `CONVERSATION_CLOSE_PHRASES`) forces the flag to `False` whenever the user's input matches a closing utterance (`thanks`, `bye`, `done`, `okay that's all`, German `tschüss` / `danke das war's`, etc.) so the loop ends cleanly without an awkward extra listen.
-
-### Companion satellite switch — `Persistent Conversation`
-
-If you pair AI Plugin with the [SmartMic](https://github.com/bigbabol1/SmartMic) ESPHome firmware (or any satellite that exposes a similar option), the satellite has its own `Persistent Conversation` switch. The two settings stack rather than duplicate:
-
-| Setting | Owns | Triggers when |
-|---------|------|---------------|
-| **AI Plugin → Listen for follow-up** | Follow-up turns for *typed Assist / REST* sessions | After every non-close-phrase reply on non-satellite paths. No effect on voice satellites (always force-ended, see above). |
-| **SmartMic → Persistent Conversation** | Chained *voice* turns on the satellite itself | Satellite-side re-arm of STT after replies/silence, independent of HA's `continue_conversation` flag. This is the supported way to get wake-word-free follow-ups on voice. |
-
-The satellite-side `on_end` handler also detects `voice_assistant.is_running()` and skips its wake-restart branch so the two `voice_assistant.start` cycles never fight each other.
+**Exception — TTS on a separate speaker:** satellites that route reply audio to an external media player re-hear their own TTS and re-trigger listening — an acoustic feedback loop. Add those devices to **Advanced → Force-end conversations on these satellites**; conversations on listed devices always end after one turn, while every other satellite honours the toggle.
 
 ## Requirements
 
 - Home Assistant **2025.7.0** or newer
-- [HACS](https://hacs.xyz/docs/use/) installed (used to deliver the integration)
+- [HACS](https://hacs.xyz/docs/use/) (delivers the integration)
 - A reachable LLM endpoint, e.g.
   - [Ollama](https://ollama.com) — `http://<host>:11434/v1`
-  - OpenAI — `https://api.openai.com/v1` (API key required)
+  - OpenAI — `https://api.openai.com/v1` (API key)
   - LM Studio — `http://<host>:1234/v1`
   - llama.cpp server — `http://<host>:8080/v1`
-  - xAI Grok — `https://api.x.ai/v1` (API key required)
+  - xAI Grok — `https://api.x.ai/v1` (API key)
 
 ## Installation
 
-1. In Home Assistant, open **HACS → Integrations → ⋮ → Custom repositories**
-2. Add `https://github.com/bigbabol1/AI-plugin` with category **Integration**
-3. Install **AI Plugin** from HACS
-4. **Restart Home Assistant**
-5. Open **Settings → Devices & Services → Add Integration**, search for **AI Plugin**
+1. **HACS → Integrations → ⋮ → Custom repositories** → add `https://github.com/bigbabol1/AI-plugin` (category **Integration**)
+2. Install **AI Plugin**, **restart Home Assistant**
+3. **Settings → Devices & Services → Add Integration** → *AI Plugin*
+4. Wire it into voice/chat: **Settings → Voice assistants** → set **Conversation agent** = *AI Plugin*
 
-## Configuration
-
-The setup wizard walks through:
-1. **Provider URL** — your LLM endpoint (auto-detects available models if reachable). Default `http://localhost:11434/v1` (local Ollama).
-2. **Model + API key** — pick a model from the dropdown (or type one) and paste an API key if your provider needs one (OpenAI, xAI, etc.). Leave blank for local backends.
-3. **Web search** — optional, choose backend and supply its API key (see [Web Search Backends](#web-search-backends)).
-4. **Advanced** — system prompt, context window, voice mode, MCP servers, timeout.
-
-After install, wire it into voice/chat:
-- **Settings → Voice assistants → Add assistant** (or edit existing)
-- Set **Conversation agent** = *AI Plugin*
-- Optionally set the same agent for the STT/TTS pipeline
+## Configuration reference (Advanced)
 
 All settings are editable post-install via **Settings → Devices & Services → AI Plugin → Configure**.
 
+| Option | Default | What it does |
+|--------|---------|--------------|
+| System prompt | persona template | Appended to the built-in prompt (never replaces it) |
+| Context Window | 16384 | Token budget AND Ollama `num_ctx`, one number |
+| Summarization | on | Condenses old turns in the background near the limit |
+| Voice mode | off | Forces the compact voice prompt even for text |
+| Listen for follow-up | on | Keep the session open after replies |
+| Enable thinking | off | Let reasoning models emit chain-of-thought (slower; disables streaming) |
+| Max tool iterations | 10 | Cap on LLM↔tool round-trips per turn |
+| Timeout | 30 s | Per-LLM-call ceiling (MCP tools have their own 15 s cap) |
+| Temperature / top_p / Max tokens | unset | Sampling; 0.2 / 0.4 / 512 recommended |
+| Ollama keep-alive | unset | Keep the model in VRAM between requests (`30m`, `-1`) |
+| Prune tool schemas | off | Per-message schema pruning; defeats Ollama's prefix cache — leave off |
+| Announce timers | off | Timer completions via media player instead of on-device ring |
+| Force-end conversations on these satellites | none | Feedback-loop guard for TTS-on-separate-speaker setups |
+| Location bias | on | Scope "near me" web searches to your home (fails open, opt-out) |
+| Location entity | unset | Live location source instead of HA's home coordinates |
+
 ## Web Search Backends
 
-Default backend is **DuckDuckGo** (zero config, works out of the box). For
-better quality, pick Brave or Tavily in the Web Search step and supply an
-API key.
+Default is **DuckDuckGo** — zero config, works out of the box. For better quality, add an API key for Brave or Tavily.
 
 | Backend | Cost | API key | Notes |
 |---------|------|---------|-------|
-| Brave Search | Free tier / paid | [api.search.brave.com](https://api.search.brave.com/app/) | Default, reliable |
+| DuckDuckGo | Free | none | Default; may be rate-limited; US-biased on ambiguous place names (mitigated by `city, country` injection) |
+| Brave Search | Free tier / paid | [api.search.brave.com](https://api.search.brave.com/app/) | Reliable |
 | Tavily | Free tier / paid | [tavily.com](https://tavily.com/) | Best quality, AI-optimized |
-| SearXNG | Free (self-hosted) | none — needs your instance URL | Full control, no third-party traffic |
-| DuckDuckGo | Free | none | Zero config, may be rate-limited |
+| SearXNG | Free (self-hosted) | none — instance URL | Full control, no third-party traffic |
 
 ## MCP Servers
 
-Add any MCP-compatible tool server in the integration settings. Supports:
-- **HTTP transport** — `{"url": "http://localhost:8123/mcp"}`
-- **stdio transport** — `{"transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-time"]}`
+Add any MCP-compatible tool server in the integration settings — HTTP and stdio transports, presets for HA's built-in MCP server (recommended: provides `HassTurnOn`/`HassLightSet`-style intents), time, fetch, SQLite, and more. MCP tool calls are capped at 15 s so a hung server can't stall a voice reply.
+
+## Evaluating changes (`tests/eval/`)
+
+The unit suite mocks every LLM call; the eval harness measures the real thing. It drives a live install via `/api/conversation/process`, scores replies against per-prompt regex rubrics, verifies actuations against live entity state, and reports pass rates and latency percentiles. Read-only prompts by default; `--full` adds actuation/timer/memory prompts that clean up after themselves. See `tests/eval/README.md`.
 
 ## Troubleshooting
 
-- **"Cannot connect" on setup** — verify the Provider URL ends with `/v1` for OpenAI-compat backends, and that the host is reachable from the HA container/host.
-- **Model dropdown is empty** — your endpoint isn't returning `/v1/models`. Type the model name manually.
-- **Model keeps asking questions instead of acting** — lower temperature to 0.1–0.3, or switch to a higher tool-calling tier model.
-- **Slow first response** — Ollama is loading the model into VRAM. Use `OLLAMA_KEEP_ALIVE=-1` to keep it warm.
-- **OOM / CPU fallback in Ollama** — lower the **Context Window** in Advanced settings.
-- **Empty replies from reasoning models (qwen3, deepseek-r1)** — the plugin already sends `think: false`; if you still see empty content, upgrade Ollama to 0.20 or newer (earlier versions don't honour the flag).
+- **"Cannot connect" on setup** — the Provider URL must end with `/v1` for OpenAI-compat backends and be reachable from the HA host.
+- **"Model reports no tool-calling capability"** — the config flow checked Ollama's `/api/show`; pick a tool-capable model (`qwen3`, `qwen2.5`, `mistral`).
+- **Model asks questions instead of acting** — lower temperature to 0.1–0.3, or pick a stronger tool-calling model.
+- **Slow first response after idle** — set **Ollama keep-alive** in Advanced settings.
+- **Replies don't start speaking early** — streaming needs the Ollama backend and a streaming-capable TTS engine in your pipeline; other setups get the full reply at once (no harm).
+- **Timer LEDs count down but no sound** — the ring plays on the satellite's *local* speaker; if yours is silenced, enable **Announce timers** (see Voice timers above).
+- **Empty replies from reasoning models** — the plugin sends `think: false`; upgrade Ollama to 0.20+ if it persists.
 
 ## Changelog
 

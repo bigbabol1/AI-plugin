@@ -79,11 +79,6 @@ DEFAULT_PRUNE_TOOL_SCHEMAS = False
 # MCP server list (list of dicts: {transport, url|command, args, env})
 CONF_MCP_SERVERS = "mcp_servers"
 
-# Routing keys (CEO cherry-pick 2 — Week 3+ scope)
-CONF_ROUTE_HOME_CONTROL = "route_home_control"
-CONF_ROUTE_WEB_SEARCH = "route_web_search"
-CONF_ROUTE_GENERAL = "route_general"
-
 # Web search backends
 BACKEND_DUCKDUCKGO = "duckduckgo"
 BACKEND_BRAVE = "brave"

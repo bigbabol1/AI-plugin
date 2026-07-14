@@ -59,9 +59,6 @@ from .const import (
     CONF_KEEP_ALIVE,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_RESPONSE_TIMEOUT,
-    CONF_ROUTE_GENERAL,
-    CONF_ROUTE_HOME_CONTROL,
-    CONF_ROUTE_WEB_SEARCH,
     CONF_SEARXNG_URL,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
@@ -300,18 +297,6 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
             ): selector.DeviceSelector(
                 selector.DeviceSelectorConfig(multiple=True)
             ),
-            vol.Optional(
-                CONF_ROUTE_HOME_CONTROL,
-                description={"suggested_value": current.get(CONF_ROUTE_HOME_CONTROL)},
-            ): selector.TextSelector(),
-            vol.Optional(
-                CONF_ROUTE_WEB_SEARCH,
-                description={"suggested_value": current.get(CONF_ROUTE_WEB_SEARCH)},
-            ): selector.TextSelector(),
-            vol.Optional(
-                CONF_ROUTE_GENERAL,
-                description={"suggested_value": current.get(CONF_ROUTE_GENERAL)},
-            ): selector.TextSelector(),
             vol.Optional(
                 CONF_LOCATION_BIAS,
                 default=current.get(CONF_LOCATION_BIAS, DEFAULT_LOCATION_BIAS),

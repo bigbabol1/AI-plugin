@@ -30,7 +30,6 @@ import aiohttp
 
 from ..const import (
     BACKEND_BRAVE,
-    BACKEND_DUCKDUCKGO,
     BACKEND_SEARXNG,
     BACKEND_TAVILY,
     CONF_BRAVE_API_KEY,

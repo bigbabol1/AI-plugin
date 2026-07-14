@@ -182,27 +182,21 @@ class OpenAICompatProvider(AbstractProvider):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        model: str | None = None,
     ) -> ChatResponse:
-        """Dispatch to Ollama native or OpenAI-spec path based on server.
-
-        ``model`` overrides the configured model for this request — used by
-        intent routing (home-control vs web vs general model tiers).
-        """
+        """Dispatch to Ollama native or OpenAI-spec path based on server."""
         if await self._detect_ollama():
-            return await self._chat_ollama(messages, tools, model=model)
-        return await self._chat_openai(messages, tools, model=model)
+            return await self._chat_ollama(messages, tools)
+        return await self._chat_openai(messages, tools)
 
     async def _chat_openai(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
-        model: str | None = None,
     ) -> ChatResponse:
         session = self._get_session()
         url = f"{self._base_url}/chat/completions"
         payload: dict[str, Any] = {
-            "model": model or self._model,
+            "model": self._model,
             "messages": messages,
         }
         if tools:
@@ -285,7 +279,6 @@ class OpenAICompatProvider(AbstractProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         on_delta: Any = None,
-        model: str | None = None,
     ) -> ChatResponse:
         """Like async_chat, but invokes on_delta(text) for each content chunk.
 
@@ -295,15 +288,14 @@ class OpenAICompatProvider(AbstractProvider):
         replies; the deltas are a side channel for early TTS.
         """
         if on_delta is None or not await self._detect_ollama():
-            return await self.async_chat(messages, tools, model=model)
-        return await self._chat_ollama(messages, tools, on_delta=on_delta, model=model)
+            return await self.async_chat(messages, tools)
+        return await self._chat_ollama(messages, tools, on_delta=on_delta)
 
     async def _chat_ollama(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         on_delta: Any = None,
-        model: str | None = None,
     ) -> ChatResponse:
         """Call Ollama's native /api/chat so options.num_ctx actually takes effect."""
         session = self._get_session()
@@ -319,7 +311,7 @@ class OpenAICompatProvider(AbstractProvider):
         if self._context_window:
             options["num_ctx"] = self._context_window
         payload: dict[str, Any] = {
-            "model": model or self._model,
+            "model": self._model,
             "messages": messages,
             "stream": on_delta is not None,
             # Toggle qwen3-style chain-of-thought via the integration option.

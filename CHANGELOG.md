@@ -4,6 +4,16 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.34 — Debloat: multi-model routing removed; README rewritten
+
+**Removed:**
+- **Multi-model routing** (the v0.9.30 `route_*` options, classification logic, and per-request model override) is gone. It only ever worked across models on a single endpoint, added three settings and a classification layer for a niche win, and switching models per turn costs a model load unless both fit in VRAM — bloat relative to its value. Entries with `route_*` keys in options are silently ignored on next load; no migration needed. One model per config entry again.
+
+**Docs:**
+- `_handle_timer_done` now carries a step-by-step explanation of how announce-mode timers work (conversation_command → TimerManager callback → sentinel → mic_to_mediaplayer/assist_satellite announce).
+- **README rewritten** to reflect the current integration: streaming, the full shortcut layer, cache-stable prompt architecture ("How it stays fast on local models"), voice timers incl. announce mode, AI Tasks, model introspection, keep-alive option, the feedback-loop device guard, DuckDuckGo default, a complete Advanced-options reference table, and the eval harness.
+- Unused imports swept (orchestrator, web_search).
+
 ## v0.9.33 — Device-independent timer announcements
 
 **New:**
