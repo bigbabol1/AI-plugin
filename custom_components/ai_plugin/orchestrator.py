@@ -35,11 +35,13 @@ from .const import (
     CONF_BASE_URL,
     CONF_CONTEXT_WINDOW,
     CONF_ENABLE_THINKING,
+    CONF_KEEP_ALIVE,
     CONF_LOCATION_BIAS,
     CONF_LOCATION_ENTITY,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_MODEL,
+    CONF_PRUNE_TOOL_SCHEMAS,
     CONF_RESPONSE_TIMEOUT,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
@@ -50,8 +52,10 @@ from .const import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_ENABLE_THINKING,
+    DEFAULT_KEEP_ALIVE,
     DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_TOOL_ITERATIONS,
+    DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
     DOMAIN,
@@ -763,6 +767,11 @@ class Orchestrator:
         self._summarization_enabled: bool = opts.get(
             CONF_SUMMARIZATION_ENABLED, DEFAULT_SUMMARIZATION_ENABLED
         )
+        self._prune_schemas: bool = opts.get(
+            CONF_PRUNE_TOOL_SCHEMAS, DEFAULT_PRUNE_TOOL_SCHEMAS
+        )
+        # Background summarization tasks — kept referenced so they aren't GC'd.
+        self._bg_tasks: set[asyncio.Task] = set()
         self._max_tool_iterations: int = opts.get(
             CONF_MAX_TOOL_ITERATIONS, DEFAULT_MAX_TOOL_ITERATIONS
         )
@@ -836,12 +845,19 @@ class Orchestrator:
             max_tokens=int(raw_max_tokens) if raw_max_tokens else None,
             context_window=int(opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW)),
             enable_thinking=bool(opts.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING)),
+            keep_alive=str(opts.get(CONF_KEEP_ALIVE, DEFAULT_KEEP_ALIVE) or ""),
         )
 
-    async def _build_system_prompt(
-        self, voice_mode: bool, user_id: str | None = None
-    ) -> str:
-        """Return the system prompt for this request.
+    async def _build_system_prompt(self, voice_mode: bool) -> str:
+        """Return the STATIC system prompt for this request.
+
+        Only content that is byte-stable across turns belongs here (base
+        prompt, custom prompt, home location — cached after first resolve).
+        Volatile blocks ([CURRENT TIME], [USER FACTS], [LAST ACTION]) go
+        into a late system message via _build_volatile_block instead: a
+        stable prompt head lets Ollama reuse its prompt prefix cache, so
+        each turn only pre-fills the new tokens instead of the whole
+        system prompt + tool schemas + history.
 
         v0.9.0: per-language trigger hints removed. Modern multilingual
         LLMs route non-English utterances correctly without pinned hints,
@@ -849,13 +865,28 @@ class Orchestrator:
         load-bearing language-specific behaviour.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
-        time_block = self._build_time_block()
         location_block = await self._build_location_block()
-        facts_block = await self._build_user_facts_block(user_id)
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
-        parts = [base, time_block, location_block, facts_block]
+        parts = [base, location_block]
         if custom:
             parts.append(custom)
+        return "\n\n".join(p for p in parts if p)
+
+    async def _build_volatile_block(
+        self, user_id: str | None, conversation_id: str
+    ) -> str:
+        """Per-turn context ([CURRENT TIME], [USER FACTS], [LAST ACTION]).
+
+        Injected as a system message directly before the newest user turn
+        so the static prompt head above stays cache-stable.
+        """
+        parts = [
+            self._build_time_block(),
+            await self._build_user_facts_block(user_id),
+        ]
+        last = self._last_entities.get(conversation_id)
+        if last:
+            parts.append(f"[LAST ACTION]\n{last}")
         return "\n\n".join(p for p in parts if p)
 
     def _build_time_block(self) -> str:
@@ -998,17 +1029,13 @@ class Orchestrator:
         )
         # Normalize HA's BCP-47 language ("de-DE", "fr-CA") to bare ISO 639-1.
         lang = (language or "en").split("-")[0].lower()
-        base_prompt = await self._build_system_prompt(voice_mode, user_id)
-
         # v0.5.15: no more [HOME CONTEXT] YAML dump. Small LLMs drown in it and
         # hallucinate their way through inventory questions. The model instead
         # calls discovery tools (list_areas / list_entities / get_entity /
-        # search_entities) on demand.
-        sections: list[str] = [base_prompt]
-        last = self._last_entities.get(conversation_id)
-        if last:
-            sections.append(f"[LAST ACTION]\n{last}")
-        system_prompt = "\n\n".join(sections)
+        # search_entities) on demand. Volatile blocks ([CURRENT TIME],
+        # [USER FACTS], [LAST ACTION]) ride in a late system message so this
+        # prompt stays byte-stable for the runtime's prefix cache.
+        system_prompt = await self._build_system_prompt(voice_mode)
 
         # Evict conversations idle for hours; HA mints a fresh id per Assist
         # session, so these maps otherwise grow for the process lifetime.
@@ -1102,21 +1129,31 @@ class Orchestrator:
             if self._memory is not None:
                 tool_schemas = [*MEMORY_TOOL_SCHEMAS, *tool_schemas]
             if self._ha_local is not None:
-                ha_schemas = _prune_ha_local_schemas(message, self._ha_local.get_schemas())
+                ha_schemas = self._ha_local.get_schemas()
+                if self._prune_schemas:
+                    # Opt-in since v0.9.27: pruning changes the tool list per
+                    # message, which busts the runtime's prompt prefix cache.
+                    ha_schemas = _prune_ha_local_schemas(message, ha_schemas)
                 tool_schemas = [*ha_schemas, *tool_schemas]
             schema_tokens = self._context_mgr.estimate_tokens(str(tool_schemas))
 
-            # 3. Summarize old turns if we're approaching the soft token limit.
-            if self._summarization_enabled:
-                await self._context_mgr.summarize_if_needed(
-                    conversation_id, system_prompt, self._provider,
-                    tool_tokens=schema_tokens,
-                )
+            # 3. Volatile per-turn context (time, user facts, last action).
+            volatile = await self._build_volatile_block(user_id, conversation_id)
+            reserved_tokens = schema_tokens + self._context_mgr.estimate_tokens(volatile)
 
-            # 4. Build the message list (system prompt + trimmed history).
+            # 4. Build the message list (static system prompt + trimmed
+            # history), then slot the volatile block in directly before the
+            # newest user turn: everything ahead of it is byte-identical to
+            # the previous request, so the runtime's prefix cache applies.
             messages = await self._context_mgr.get_messages(
-                conversation_id, system_prompt, tool_tokens=schema_tokens
+                conversation_id, system_prompt, tool_tokens=reserved_tokens
             )
+            if volatile:
+                vol_msg = {"role": "system", "content": volatile}
+                if messages and messages[-1].get("role") == "user":
+                    messages.insert(len(messages) - 1, vol_msg)
+                else:
+                    messages.append(vol_msg)
 
             _LOGGER.debug(
                 "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
@@ -1421,7 +1458,37 @@ class Orchestrator:
                 conversation_id, history_depth, self._last_entities.get(conversation_id),
             )
 
+        # Summarize AFTER replying, in the background. Inline summarization
+        # added a full LLM round-trip to whichever unlucky turn crossed the
+        # soft limit; the hard truncation in get_messages covers the gap
+        # until the background pass lands.
+        if self._summarization_enabled:
+            self._schedule_summarization(
+                conversation_id, system_prompt, reserved_tokens
+            )
+
         return stored_reply
+
+    def _schedule_summarization(
+        self, conv_id: str, system_prompt: str, tool_tokens: int
+    ) -> None:
+        """Run summarize_if_needed as a background task under the conv lock."""
+
+        async def _run() -> None:
+            try:
+                async with self._get_conv_lock(conv_id):
+                    await self._context_mgr.summarize_if_needed(
+                        conv_id, system_prompt, self._provider,
+                        tool_tokens=tool_tokens,
+                    )
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning(
+                    "AI Plugin: background summarization failed", exc_info=True
+                )
+
+        task = asyncio.get_running_loop().create_task(_run())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     async def _tool_loop(
         self,
@@ -1666,5 +1733,11 @@ class Orchestrator:
         return "; ".join(parts) if parts else None
 
     async def async_close(self) -> None:
-        """Close provider sessions. Called on integration unload."""
+        """Close provider/tool sessions and cancel background work."""
+        for task in list(getattr(self, "_bg_tasks", ())):
+            task.cancel()
+        if self._web_search is not None:
+            await self._web_search.async_close()
+        if self._browse_url is not None:
+            await self._browse_url.async_close()
         await self._provider.async_close()

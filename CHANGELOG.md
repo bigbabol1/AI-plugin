@@ -4,6 +4,21 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.27 — Latency: cache-stable prompts, keep_alive, background summarization
+
+All four changes target the same number: seconds between speaking and hearing the reply on a local Ollama backend.
+
+**Changed:**
+- **Cache-stable prompt layout** (`orchestrator.py`). `[CURRENT TIME]` (minute-resolution) and `[LAST ACTION]` lived at the head of the system prompt, ahead of the tool schemas and history — every minute tick or actuation forced Ollama to re-prefill the entire 3–6k-token prompt. Volatile blocks (`[CURRENT TIME]`, `[USER FACTS]`, `[LAST ACTION]`) now ride in a late system message inserted directly before the newest user turn; the static head (base prompt + custom prompt + location) is byte-stable across turns, so Ollama's prompt prefix cache applies and each turn only pre-fills the new tail.
+- **Per-message ha_local schema pruning is now opt-in** (`prune_tool_schemas`, default off). Changing the tool list per message busts the same prefix cache; the few hundred tokens pruning saved are cheaper than the re-prefill. Existing installs change behaviour on upgrade — re-enable in Advanced settings if you prefer pruning.
+- **Summarization runs after the reply, in the background** (`orchestrator.py` `_schedule_summarization`). Inline summarization added a full LLM round-trip to whichever unlucky turn crossed the soft context limit; the hard truncation in `get_messages` covers the window until the background pass lands. Same per-conversation lock, so history stays consistent.
+- **Shared aiohttp session for web_search and browse_url** (one TCP+TLS handshake, not one per call).
+
+**New:**
+- **`keep_alive` option** (Advanced → *Ollama keep-alive*). Sent per request on Ollama's native API (`30m`, `24h`, or `-1` = always loaded; empty = server default of 5m). Replaces the `OLLAMA_KEEP_ALIVE` env-var dance for keeping the model warm between voice turns.
+
+**Not yet:** streaming replies (ChatLog delta streaming → streaming TTS) is the remaining big latency lever; it needs a conversation-entity rework and a live deploy-test cycle, tracked for the next minor.
+
 ## v0.9.26 — Context-budget correctness, MCP timeout, localized fallbacks, eval harness
 
 **Fixed:**

@@ -39,6 +39,8 @@ def _baseline_orch(entry=None) -> Orchestrator:
     orch._entry = entry or _make_mock_entry()
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
+    orch._prune_schemas = False
+    orch._bg_tasks = set()
     orch._mcp = None
     orch._memory = None
     orch._max_tool_iterations = 5
@@ -239,11 +241,16 @@ async def test_process_with_summarization_enabled() -> None:
     mock_provider.async_complete = AsyncMock(return_value="Summarized reply.")
     orch._provider = mock_provider
 
-    # Patch summarize_if_needed to verify it's called
+    # Patch summarize_if_needed to verify it's called. Since v0.9.27 it
+    # runs post-reply in a background task — drain it before asserting.
+    import asyncio as _aio
+
     with patch.object(
         orch._context_mgr, "summarize_if_needed", new_callable=AsyncMock
     ) as mock_summarize:
         reply = await orch.async_process("Hello", "conv-sum", "en")
+        if orch._bg_tasks:
+            await _aio.gather(*orch._bg_tasks)
 
     assert reply == "Summarized reply."
     mock_summarize.assert_awaited_once()
@@ -442,3 +449,51 @@ async def test_conversation_entity_will_remove_closes_orchestrator(
     await entity.async_will_remove_from_hass()
 
     mock_orch.async_close.assert_awaited_once()
+
+
+# ── v0.9.27: cache-stable prompt layout ───────────────────────────────────────
+
+
+async def test_volatile_context_injected_before_user_turn() -> None:
+    """[LAST ACTION] rides in a late system message, not the prompt head,
+    so the static system prompt stays byte-stable for prefix caching."""
+    orch = _baseline_orch()
+    orch._last_entities["conv-vol"] = "HassTurnOn(lamp → light.lamp @ kitchen)"
+
+    captured: dict = {}
+
+    async def _capture(messages):
+        captured["messages"] = [dict(m) for m in messages]
+        return "ok"
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(side_effect=_capture)
+    orch._provider = mock_provider
+
+    reply = await orch.async_process("turn it off please", "conv-vol", "en")
+
+    assert reply == "ok"
+    msgs = captured["messages"]
+    assert [m["role"] for m in msgs] == ["system", "system", "user"]
+    assert "[LAST ACTION]" in msgs[1]["content"]
+    # The tracked entity must ride in the volatile message, not the static
+    # head (the head may *mention* [LAST ACTION] in its instructions).
+    assert "light.lamp @ kitchen" in msgs[1]["content"]
+    assert "light.lamp" not in msgs[0]["content"]
+
+
+async def test_no_volatile_block_means_no_extra_message() -> None:
+    orch = _baseline_orch()
+
+    captured: dict = {}
+
+    async def _capture(messages):
+        captured["messages"] = [dict(m) for m in messages]
+        return "ok"
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(side_effect=_capture)
+    orch._provider = mock_provider
+
+    await orch.async_process("hello", "conv-novol", "en")
+    assert [m["role"] for m in captured["messages"]] == ["system", "user"]

@@ -355,3 +355,49 @@ async def test_abstract_provider_default_async_chat_wraps_complete() -> None:
     assert isinstance(response, ChatResponse)
     assert response.content == "hello from complete"
     assert response.tool_calls == []
+
+
+# ── v0.9.27: keep_alive ───────────────────────────────────────────────────────
+
+
+def _make_ollama_provider(keep_alive: str | None) -> OpenAICompatProvider:
+    provider = OpenAICompatProvider(
+        base_url="http://localhost:11434/v1",
+        model="qwen3:8b",
+        api_key=None,
+        timeout=30,
+        context_window=8192,
+        keep_alive=keep_alive,
+    )
+    provider._is_ollama = True  # skip the /api/version probe
+    return provider
+
+
+async def _capture_ollama_payload(provider: OpenAICompatProvider) -> dict:
+    mock_resp = _mock_response(200, {"message": {"content": "ok"}})
+    captured: dict = {}
+
+    def capturing_post(url, **kwargs):
+        captured.update(kwargs)
+        return mock_resp
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.post = capturing_post
+        await provider.async_chat([{"role": "user", "content": "hi"}])
+    return captured["json"]
+
+
+async def test_ollama_payload_includes_keep_alive_duration() -> None:
+    payload = await _capture_ollama_payload(_make_ollama_provider("30m"))
+    assert payload["keep_alive"] == "30m"
+    assert payload["options"]["num_ctx"] == 8192
+
+
+async def test_ollama_keep_alive_numeric_string_sent_as_int() -> None:
+    payload = await _capture_ollama_payload(_make_ollama_provider("-1"))
+    assert payload["keep_alive"] == -1
+
+
+async def test_ollama_keep_alive_omitted_when_unset() -> None:
+    payload = await _capture_ollama_payload(_make_ollama_provider(""))
+    assert "keep_alive" not in payload

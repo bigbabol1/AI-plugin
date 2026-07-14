@@ -47,6 +47,18 @@ CONF_TEMPERATURE = "temperature"
 CONF_TOP_P = "top_p"
 CONF_MAX_TOKENS = "max_tokens"  # 0 = omit (unlimited)
 
+# Ollama keep_alive per request ("30m", "-1" = forever, "" = omit → server
+# default of 5m). Keeps the model in VRAM between voice turns without the
+# OLLAMA_KEEP_ALIVE env var. Ignored by non-Ollama backends.
+CONF_KEEP_ALIVE = "keep_alive"
+DEFAULT_KEEP_ALIVE = ""
+
+# Per-message ha_local schema pruning. Off by default since v0.9.27: a
+# byte-stable tool list lets Ollama reuse its prompt prefix cache across
+# turns, which outweighs the few hundred tokens pruning saves.
+CONF_PRUNE_TOOL_SCHEMAS = "prune_tool_schemas"
+DEFAULT_PRUNE_TOOL_SCHEMAS = False
+
 # MCP server list (list of dicts: {transport, url|command, args, env})
 CONF_MCP_SERVERS = "mcp_servers"
 

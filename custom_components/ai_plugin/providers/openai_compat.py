@@ -64,6 +64,7 @@ class OpenAICompatProvider(AbstractProvider):
         max_tokens: int | None = None,
         context_window: int | None = None,
         enable_thinking: bool = False,
+        keep_alive: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._server_root = _strip_v1(self._base_url)
@@ -75,6 +76,7 @@ class OpenAICompatProvider(AbstractProvider):
         self._max_tokens = max_tokens
         self._context_window = context_window
         self._enable_thinking = enable_thinking
+        self._keep_alive = (keep_alive or "").strip() or None
         self._session: aiohttp.ClientSession | None = None
         self._is_ollama: bool | None = None
         self._probe_lock = asyncio.Lock()
@@ -265,6 +267,13 @@ class OpenAICompatProvider(AbstractProvider):
             payload["tools"] = tools
         if options:
             payload["options"] = options
+        if self._keep_alive:
+            # Ollama accepts duration strings ("30m", "24h") or numbers
+            # (seconds; -1 = keep loaded forever, 0 = unload immediately).
+            ka = self._keep_alive
+            payload["keep_alive"] = (
+                int(ka) if ka.lstrip("-").isdigit() else ka
+            )
 
         try:
             async with session.post(

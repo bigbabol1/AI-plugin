@@ -55,6 +55,8 @@ from .const import (
     CONF_MCP_SERVERS,
     CONF_MODEL,
     CONF_PROVIDER,
+    CONF_KEEP_ALIVE,
+    CONF_PRUNE_TOOL_SCHEMAS,
     CONF_RESPONSE_TIMEOUT,
     CONF_SEARXNG_URL,
     CONF_SUMMARIZATION_ENABLED,
@@ -72,6 +74,8 @@ from .const import (
     DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_RESULTS,
     DEFAULT_MAX_TOOL_ITERATIONS,
+    DEFAULT_KEEP_ALIVE,
+    DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
     DEFAULT_VOICE_MODE,
@@ -232,6 +236,14 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
+            vol.Optional(
+                CONF_KEEP_ALIVE,
+                description={"suggested_value": current.get(CONF_KEEP_ALIVE, DEFAULT_KEEP_ALIVE)},
+            ): selector.TextSelector(),
+            vol.Optional(
+                CONF_PRUNE_TOOL_SCHEMAS,
+                default=current.get(CONF_PRUNE_TOOL_SCHEMAS, DEFAULT_PRUNE_TOOL_SCHEMAS),
+            ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_TEMPERATURE,
                 description={"suggested_value": current.get(CONF_TEMPERATURE)},

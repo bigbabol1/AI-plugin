@@ -109,6 +109,7 @@ Notes on the rubric:
 | top_p | 0.4 |
 | Context Window | **16384** (minimum — multi-step tool loops need the headroom; do not drop to 8192 unless you've disabled entity discovery) |
 | Max Tokens (`num_predict`) | 512 |
+| Keep-alive | `30m` (`-1` on a dedicated GPU) |
 | Voice Mode | on (compact system prompt — saves ~930 input tokens per turn) |
 | Web Search | Tavily or Brave (DuckDuckGo works but tie-breaks ambiguous toponyms toward US locales — v0.5.46 mitigates by injecting `city, country`) |
 
@@ -116,11 +117,7 @@ No custom Modelfile parameters are required — the plugin manages `think`, `num
 
 ### Keep-alive (optional)
 
-Ollama unloads models from VRAM after 5 minutes of inactivity by default. If you share the GPU with other workloads this is fine. For always-on dedicated use:
-
-```bash
-OLLAMA_KEEP_ALIVE=-1 ollama serve
-```
+Ollama unloads models from VRAM after 5 minutes of inactivity by default, so the first voice command after a quiet stretch pays the full model-load cost. Set **Ollama keep-alive** in the integration's Advanced settings (e.g. `30m`, or `-1` for always loaded) — it is sent per request, no server-side configuration needed. If you prefer configuring the server instead, `OLLAMA_KEEP_ALIVE=-1 ollama serve` still works; leave the integration option empty then.
 
 ## Conversation continuity (`Listen for follow-up after voice replies`)
 

@@ -92,6 +92,20 @@ class WebSearchTool:
         self._searxng_url: str | None = options.get(CONF_SEARXNG_URL) or None
         self._tavily_key: str | None = options.get(CONF_TAVILY_API_KEY) or None
         self._max_results: int = int(options.get(CONF_MAX_RESULTS, DEFAULT_MAX_RESULTS))
+        self._session: aiohttp.ClientSession | None = None
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Reuse one session across searches — a fresh session per call paid
+        a new TCP+TLS handshake on every search, straight into voice latency."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def async_close(self) -> None:
+        """Close the shared session. Called by the orchestrator on unload."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     async def async_search(
         self,
@@ -163,16 +177,16 @@ class WebSearchTool:
             "X-Return-Format": "markdown",
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    jina_url,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-                ) as resp:
-                    if resp.status != 200:
-                        _LOGGER.debug("Jina DDG proxy returned %s, trying direct HTML", resp.status)
-                        return await self._search_duckduckgo_html(query)
-                    markdown = await resp.text()
+            session = self._get_session()
+            async with session.get(
+                jina_url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.debug("Jina DDG proxy returned %s, trying direct HTML", resp.status)
+                    return await self._search_duckduckgo_html(query)
+                markdown = await resp.text()
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("Jina DDG proxy failed: %s, trying direct HTML", exc)
             return await self._search_duckduckgo_html(query)
@@ -190,15 +204,15 @@ class WebSearchTool:
             "Accept-Language": "en-US,en;q=0.9",
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-                ) as resp:
-                    if resp.status != 200:
-                        return _FALLBACK_MSG
-                    html = await resp.text()
+            session = self._get_session()
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    return _FALLBACK_MSG
+                html = await resp.text()
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("DuckDuckGo HTML fallback failed: %s", exc)
             return _FALLBACK_MSG
@@ -218,19 +232,19 @@ class WebSearchTool:
             "X-Subscription-Token": self._brave_key,
         }
         params = {"q": query, "count": self._max_results, "result_filter": "web"}
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers=headers,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-            ) as resp:
-                if resp.status == 401:
-                    return "Brave Search: invalid API key — check AI Plugin settings."
-                if resp.status == 429:
-                    return "Brave Search quota exceeded for today. Try again tomorrow."
-                resp.raise_for_status()
-                data = await resp.json()
+        session = self._get_session()
+        async with session.get(
+            url,
+            headers=headers,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+        ) as resp:
+            if resp.status == 401:
+                return "Brave Search: invalid API key — check AI Plugin settings."
+            if resp.status == 429:
+                return "Brave Search quota exceeded for today. Try again tomorrow."
+            resp.raise_for_status()
+            data = await resp.json()
 
         items = data.get("web", {}).get("results", [])
         results = [
@@ -252,15 +266,15 @@ class WebSearchTool:
             "categories": "general",
             "language": "en",
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-            ) as resp:
-                if resp.status != 200:
-                    return _FALLBACK_MSG
-                data = await resp.json(content_type=None)
+        session = self._get_session()
+        async with session.get(
+            url,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+        ) as resp:
+            if resp.status != 200:
+                return _FALLBACK_MSG
+            data = await resp.json(content_type=None)
 
         items = data.get("results", [])[: self._max_results]
         results = [
@@ -280,18 +294,18 @@ class WebSearchTool:
             "query": query,
             "max_results": self._max_results,
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-            ) as resp:
-                if resp.status == 401:
-                    return "Tavily: invalid API key — check AI Plugin settings."
-                if resp.status == 429:
-                    return "Tavily quota exceeded. Try again tomorrow."
-                resp.raise_for_status()
-                data = await resp.json()
+        session = self._get_session()
+        async with session.post(
+            url,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+        ) as resp:
+            if resp.status == 401:
+                return "Tavily: invalid API key — check AI Plugin settings."
+            if resp.status == 429:
+                return "Tavily quota exceeded. Try again tomorrow."
+            resp.raise_for_status()
+            data = await resp.json()
 
         items = data.get("results", [])[: self._max_results]
         results = [

@@ -52,6 +52,20 @@ class BrowseUrlTool:
     by the rest of the plugin). Rate limits are generous for personal use.
     """
 
+    def __init__(self) -> None:
+        self._session: aiohttp.ClientSession | None = None
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def async_close(self) -> None:
+        """Close the shared session. Called by the orchestrator on unload."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
     async def async_browse(self, url: str, strip_urls: bool = False) -> str:
         """Fetch URL and return readable content string.
 
@@ -67,20 +81,20 @@ class BrowseUrlTool:
             "X-Return-Format": "text",
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    jina_url,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-                ) as resp:
-                    if resp.status == 422:
-                        return "Could not read page — URL may be invalid or the site blocks automated access."
-                    if resp.status != 200:
-                        return (
-                            f"Could not fetch page (HTTP {resp.status}). "
-                            "The site may be unavailable or block automated access."
-                        )
-                    content = await resp.text()
+            session = self._get_session()
+            async with session.get(
+                jina_url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+            ) as resp:
+                if resp.status == 422:
+                    return "Could not read page — URL may be invalid or the site blocks automated access."
+                if resp.status != 200:
+                    return (
+                        f"Could not fetch page (HTTP {resp.status}). "
+                        "The site may be unavailable or block automated access."
+                    )
+                content = await resp.text()
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("BrowseUrlTool: fetch failed for %s: %s", url, exc)
             return "Could not fetch page — network error or site unavailable."
