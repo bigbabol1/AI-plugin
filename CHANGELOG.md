@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.33 — Device-independent timer announcements
+
+**New:**
+- **Announce timers instead of on-device ring** (Advanced toggle, default off). The satellite's timer ring plays on its *local* speaker — useless when that speaker is silenced because audio is routed elsewhere (e.g. Mic to MediaPlayer), and unavailable on satellites without timer firmware. With this option, timers started by voice carry a `conversation_command`: HA's own TimerManager calls the agent back at expiry, and the plugin plays a localized announcement ("Timer pasta is up." / "Der Timer pasta ist abgelaufen.", all 6 languages) via `mic_to_mediaplayer.announce`, falling back to `assist_satellite.announce`. No firmware edits, no plugin-side scheduling to drift — cancel/pause/extend keep working on the single HA-managed timer, and timers now work on **any** satellite (the device-support requirement is bypassed).
+- Trade-off, by design: the device is never notified about announce-mode timers, so on-device countdown LEDs/ring don't fire.
+
 ## v0.9.32 — 'Listen for follow-up' actually works on voice satellites
 
 **Fixed:**

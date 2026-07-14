@@ -686,6 +686,7 @@ class HALocalToolRegistry:
         language: str | None = None,
         user_message: str = "",
         available_tools: set[str] | None = None,
+        announce_agent_id: str | None = None,
     ) -> str:
         """Dispatch one tool call. Never raises; errors become string replies.
 
@@ -707,6 +708,7 @@ class HALocalToolRegistry:
                 return await self._call_timer_intent(
                     name, arguments, device_id=device_id, language=language,
                     user_message=user_message,
+                    announce_agent_id=announce_agent_id,
                 )
 
             if name == "list_areas":
@@ -1574,6 +1576,7 @@ class HALocalToolRegistry:
         device_id: str | None = None,
         language: str | None = None,
         user_message: str = "",
+        announce_agent_id: str | None = None,
     ) -> str:
         """Invoke a HA built-in voice-timer intent.
 
@@ -1635,19 +1638,53 @@ class HALocalToolRegistry:
                     "[start_timer needs a duration — provide at least one of "
                     "hours / minutes / seconds.]"
                 )
+            # Timer-announce mode: instead of ringing the satellite at
+            # expiry, HA's TimerManager calls this agent back with the
+            # sentinel command and the plugin plays the announcement via
+            # mic_to_mediaplayer / assist_satellite.announce. The device
+            # is never notified (no on-device LEDs/ring), and the
+            # "device supports timers" requirement is bypassed.
+            if announce_agent_id:
+                from ..const import TIMER_DONE_SENTINEL  # noqa: PLC0415
 
+                timer_name = (slots.get("name") or {}).get("value", "")
+                slots["conversation_command"] = {
+                    "value": f"{TIMER_DONE_SENTINEL} {timer_name}".strip()
+                }
+
+        handle_kwargs: dict[str, Any] = {}
+        if announce_agent_id and tool_name == "start_timer":
+            handle_kwargs["conversation_agent_id"] = announce_agent_id
         try:
-            response = await intent.async_handle(
-                self._hass,
-                "ai_plugin",
-                intent_type,
-                slots=slots,
-                text_input=None,
-                context=Context(),
-                language=language or self._hass.config.language,
-                assistant="conversation",
-                device_id=device_id,
-            )
+            try:
+                response = await intent.async_handle(
+                    self._hass,
+                    "ai_plugin",
+                    intent_type,
+                    slots=slots,
+                    text_input=None,
+                    context=Context(),
+                    language=language or self._hass.config.language,
+                    assistant="conversation",
+                    device_id=device_id,
+                    **handle_kwargs,
+                )
+            except TypeError:
+                # Older HA cores without the conversation_agent_id kwarg —
+                # the command then runs on the default agent instead.
+                if not handle_kwargs:
+                    raise
+                response = await intent.async_handle(
+                    self._hass,
+                    "ai_plugin",
+                    intent_type,
+                    slots=slots,
+                    text_input=None,
+                    context=Context(),
+                    language=language or self._hass.config.language,
+                    assistant="conversation",
+                    device_id=device_id,
+                )
         except intent.IntentHandleError as exc:
             return f"[{intent_type} failed: {exc}]"
         except intent.UnknownIntent:

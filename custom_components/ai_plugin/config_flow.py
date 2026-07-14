@@ -65,6 +65,7 @@ from .const import (
     CONF_SEARXNG_URL,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
+    CONF_TIMER_ANNOUNCE,
     CONF_TAVILY_API_KEY,
     CONF_TEMPERATURE,
     CONF_TOP_P,
@@ -81,6 +82,7 @@ from .const import (
     DEFAULT_KEEP_ALIVE,
     DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_RESPONSE_TIMEOUT,
+    DEFAULT_TIMER_ANNOUNCE,
     DEFAULT_SUMMARIZATION_ENABLED,
     DEFAULT_VOICE_MODE,
     DEFAULT_WEB_SEARCH_BACKEND,
@@ -288,6 +290,10 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
                     mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
+            vol.Optional(
+                CONF_TIMER_ANNOUNCE,
+                default=current.get(CONF_TIMER_ANNOUNCE, DEFAULT_TIMER_ANNOUNCE),
+            ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_FEEDBACK_LOOP_DEVICES,
                 description={"suggested_value": current.get(CONF_FEEDBACK_LOOP_DEVICES)},

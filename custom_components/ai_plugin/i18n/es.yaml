@@ -28,6 +28,8 @@ templates:
   note_tool_limit:   "[Nota: se alcanzó el límite de herramientas — la respuesta puede estar incompleta.]"
 
   time_is:           "Son las {time}."
+  timer_done:        "El temporizador ha terminado."
+  timer_done_named:  "El temporizador {label} ha terminado."
 keywords:
   time_now:      ["qué hora es", "que hora es", "dime la hora"]
   sun_set:       ["puesta de sol", "cuándo se pone el sol", "a qué hora se pone el sol"]

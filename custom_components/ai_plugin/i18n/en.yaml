@@ -28,6 +28,8 @@ templates:
   note_tool_limit:   "[Note: reached tool call limit — response may be incomplete.]"
 
   time_is:           "It is {time}."
+  timer_done:        "Timer is up."
+  timer_done_named:  "Timer {label} is up."
 keywords:
   time_now:      ["what time is it", "what is the time", "what's the time", "tell me the time", "current time"]
   sun_set:       ["when is sunset", "sunset", "when does the sun set", "when does the sun go down", "when does it get dark"]

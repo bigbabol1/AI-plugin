@@ -28,6 +28,8 @@ templates:
   note_tool_limit:   "[Uwaga: osiągnięto limit narzędzi — odpowiedź może być niepełna.]"
 
   time_is:           "Jest {time}."
+  timer_done:        "Minutnik zakończył odliczanie."
+  timer_done_named:  "Minutnik {label} zakończył odliczanie."
 keywords:
   time_now:      ["która jest godzina", "ktora jest godzina", "podaj godzinę"]
   sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]

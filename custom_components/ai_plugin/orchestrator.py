@@ -49,6 +49,7 @@ from .const import (
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
     CONF_TEMPERATURE,
+    CONF_TIMER_ANNOUNCE,
     CONF_TOP_P,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_ENABLED,
@@ -61,6 +62,7 @@ from .const import (
     DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SUMMARIZATION_ENABLED,
+    DEFAULT_TIMER_ANNOUNCE,
     DOMAIN,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
@@ -950,6 +952,78 @@ class Orchestrator:
         """Public alias of _is_voice_device for callers in other modules."""
         return self._is_voice_device(device_id)
 
+    def _timer_announce_agent_id(self) -> str | None:
+        """Return this integration's conversation entity_id when timer
+        announcements are enabled, else None (default off = ring on device)."""
+        if not self._entry.options.get(CONF_TIMER_ANNOUNCE, DEFAULT_TIMER_ANNOUNCE):
+            return None
+        if self._hass is None:
+            return None
+        try:
+            return er.async_get(self._hass).async_get_entity_id(
+                "conversation", DOMAIN, self._entry.entry_id
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: agent entity lookup failed", exc_info=True)
+            return None
+
+    async def _handle_timer_done(
+        self, message: str, device_id: str | None, lang: str
+    ) -> str:
+        """Handle the sentinel callback HA fires when an announce-mode timer
+        expires: play the announcement on the satellite's routed speaker.
+
+        Prefers mic_to_mediaplayer.announce (TTS on a separate speaker),
+        falls back to assist_satellite.announce for satellites with their
+        own audio. Returns "" — the announcement IS the reply.
+        """
+        from .const import TIMER_DONE_SENTINEL  # noqa: PLC0415
+
+        timer_name = message[len(TIMER_DONE_SENTINEL):].strip()
+        if timer_name:
+            text = L.template("timer_done_named", lang, label=timer_name)
+        else:
+            text = L.template("timer_done", lang)
+
+        satellite = None
+        if device_id and self._hass is not None:
+            try:
+                ent_reg = er.async_get(self._hass)
+                for entry in er.async_entries_for_device(ent_reg, device_id):
+                    if entry.entity_id.startswith("assist_satellite."):
+                        satellite = entry.entity_id
+                        break
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: satellite lookup failed", exc_info=True)
+        if satellite is None or self._hass is None:
+            _LOGGER.warning(
+                "AI Plugin: timer expired but no satellite found for device %s — "
+                "announcement dropped", device_id,
+            )
+            return ""
+
+        try:
+            if self._hass.services.has_service("mic_to_mediaplayer", "announce"):
+                await self._hass.services.async_call(
+                    "mic_to_mediaplayer",
+                    "announce",
+                    {"satellite_entity_id": satellite, "message": text},
+                    blocking=False,
+                )
+            else:
+                await self._hass.services.async_call(
+                    "assist_satellite",
+                    "announce",
+                    {"entity_id": satellite, "message": text},
+                    blocking=False,
+                )
+            _LOGGER.info(
+                "AI Plugin: timer announcement %r → %s", text, satellite
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin: timer announcement failed")
+        return ""
+
     def _pick_route_model(self, message: str) -> str | None:
         """Classify the turn and return the route's model override, if any.
 
@@ -1180,6 +1254,13 @@ class Orchestrator:
         )
         # Normalize HA's BCP-47 language ("de-DE", "fr-CA") to bare ISO 639-1.
         lang = (language or "en").split("-")[0].lower()
+
+        # Machine callback from HA's TimerManager (announce-mode timers set
+        # a conversation_command that routes back to this agent at expiry).
+        # Handle before shortcuts/history — this is not a user utterance.
+        from .const import TIMER_DONE_SENTINEL  # noqa: PLC0415
+        if message.startswith(TIMER_DONE_SENTINEL):
+            return await self._handle_timer_done(message, device_id, lang)
 
         # Streaming gate: forward sentence-complete deltas to the voice
         # pipeline for early TTS — but only on turns where no verifier can
@@ -1838,6 +1919,7 @@ class Orchestrator:
                 language=language,
                 user_message=user_message,
                 available_tools=available_tools,
+                announce_agent_id=self._timer_announce_agent_id(),
             )
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             return await self._memory.call_tool(

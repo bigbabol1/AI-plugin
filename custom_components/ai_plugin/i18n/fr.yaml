@@ -28,6 +28,8 @@ templates:
   note_tool_limit:   "[Note : limite d'appels d'outils atteinte — la réponse peut être incomplète.]"
 
   time_is:           "Il est {time}."
+  timer_done:        "Le minuteur est terminé."
+  timer_done_named:  "Le minuteur {label} est terminé."
 keywords:
   time_now:      ["quelle heure est-il", "quelle heure il est", "l'heure actuelle"]
   sun_set:       ["coucher du soleil", "se couche le soleil", "à quelle heure se couche le soleil"]

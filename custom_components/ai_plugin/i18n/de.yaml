@@ -28,6 +28,8 @@ templates:
   note_tool_limit:   "[Hinweis: Werkzeuglimit erreicht — die Antwort ist möglicherweise unvollständig.]"
 
   time_is:           "Es ist {time} Uhr."
+  timer_done:        "Der Timer ist abgelaufen."
+  timer_done_named:  "Der Timer {label} ist abgelaufen."
 keywords:
   time_now:      ["wie spät ist es", "wie viel uhr ist es", "wieviel uhr ist es", "sag mir die uhrzeit", "wie spät"]
   sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]

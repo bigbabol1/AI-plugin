@@ -29,6 +29,18 @@ CONF_CONTEXT_WINDOW = "context_window"
 # so conversations on the listed devices always end after one turn.
 # All other satellites honour CONF_CONTINUE_CONVERSATION normally.
 CONF_FEEDBACK_LOOP_DEVICES = "feedback_loop_devices"
+
+# Announce expiring voice timers through HA instead of the satellite's own
+# ring sound. Implemented via the timer's conversation_command: HA's
+# TimerManager calls this agent back at expiry with _TIMER_DONE_SENTINEL,
+# and the agent plays the announcement via mic_to_mediaplayer.announce
+# (fallback: assist_satellite.announce). Trade-off: the device never
+# learns about the timer, so on-device ring LEDs/sounds don't fire.
+CONF_TIMER_ANNOUNCE = "timer_announce"
+DEFAULT_TIMER_ANNOUNCE = False
+
+# Machine-generated conversation_command prefix — never spoken by users.
+TIMER_DONE_SENTINEL = "AI_PLUGIN_TIMER_DONE"
 CONF_SUMMARIZATION_ENABLED = "summarization_enabled"
 CONF_VOICE_MODE = "voice_mode"
 CONF_CONTINUE_CONVERSATION = "continue_conversation"

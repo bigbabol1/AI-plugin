@@ -196,7 +196,21 @@ class _IntentResponse:
         self.speech = {"plain": {"speech": text, "extra_data": None}}
 
 
-_intent_mod = _make_module("homeassistant.helpers.intent", IntentResponse=_IntentResponse)
+class _IntentHandleError(Exception):
+    pass
+
+
+class _UnknownIntent(Exception):
+    pass
+
+
+_intent_mod = _make_module(
+    "homeassistant.helpers.intent",
+    IntentResponse=_IntentResponse,
+    IntentHandleError=_IntentHandleError,
+    UnknownIntent=_UnknownIntent,
+    async_handle=MagicMock(),
+)
 
 # ── homeassistant.helpers.device_registry ────────────────────────────────────
 
@@ -212,7 +226,11 @@ _area_reg_mod = _make_module("homeassistant.helpers.area_registry", async_get=Ma
 
 # ── homeassistant.helpers.entity_registry ────────────────────────────────────
 
-_ent_reg_mod = _make_module("homeassistant.helpers.entity_registry", async_get=MagicMock())
+_ent_reg_mod = _make_module(
+    "homeassistant.helpers.entity_registry",
+    async_get=MagicMock(),
+    async_entries_for_device=MagicMock(return_value=[]),
+)
 
 # ── homeassistant.helpers.entity_platform ────────────────────────────────────
 
