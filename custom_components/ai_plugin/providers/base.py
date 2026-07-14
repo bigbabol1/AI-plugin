@@ -38,12 +38,14 @@ class AbstractProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         on_delta: Any = None,
+        model: str | None = None,
     ) -> ChatResponse:
         """Streaming variant of async_chat: invoke on_delta(text) per chunk.
 
         Default implementation ignores the listener and delegates to the
         buffered async_chat — providers without streaming support keep
-        working; only the early-TTS benefit is lost.
+        working; only the early-TTS benefit is lost. ``model`` optionally
+        overrides the configured model for this request (intent routing).
         """
         return await self.async_chat(messages, tools)
 

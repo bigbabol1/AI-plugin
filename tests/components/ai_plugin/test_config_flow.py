@@ -342,3 +342,46 @@ def _create_mock_entry(hass: HomeAssistant) -> config_entries.ConfigEntry:
     )
     hass.config_entries._entries[entry.entry_id] = entry  # noqa: SLF001 — test helper
     return entry
+
+
+# ── v0.9.30: model introspection gates ────────────────────────────────────────
+
+
+async def test_model_step_blocks_tool_less_model(hass, mock_fetch_models) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.ai_plugin import config_flow as cf
+    from custom_components.ai_plugin.const import CONF_MODEL
+
+    flow = cf.AIPluginConfigFlow()
+    flow.hass = hass
+    flow._options = {"base_url": "http://localhost:11434/v1"}
+    flow._models = ["nontool:1b"]
+
+    with patch.object(
+        cf, "async_show_model",
+        AsyncMock(return_value={"capabilities": ["completion"]}),
+    ):
+        result = await flow.async_step_model({CONF_MODEL: "nontool:1b"})
+
+    assert result["type"] == "form"
+    assert result["errors"][CONF_MODEL] == "model_no_tools"
+
+
+async def test_model_step_passes_when_show_unavailable(hass, mock_fetch_models) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from custom_components.ai_plugin import config_flow as cf
+    from custom_components.ai_plugin.const import CONF_MODEL
+
+    flow = cf.AIPluginConfigFlow()
+    flow.hass = hass
+    flow._options = {"base_url": "http://localhost:1234/v1"}
+    flow._models = ["gpt-x"]
+
+    with patch.object(cf, "async_show_model", AsyncMock(return_value=None)):
+        result = await flow.async_step_model({CONF_MODEL: "gpt-x"})
+
+    # fail-open: non-Ollama backends can't be introspected → proceed
+    assert result.get("errors") in (None, {})
+    assert result["step_id"] != "model" or result["type"] != "form"

@@ -61,9 +61,52 @@ _cfg_entries = _make_module(
 
 class _Platform:
     CONVERSATION = "conversation"
+    AI_TASK = "ai_task"
 
 
 _make_module("homeassistant.const", Platform=_Platform)
+
+# ── homeassistant.exceptions ──────────────────────────────────────────────────
+
+class _HomeAssistantError(Exception):
+    pass
+
+
+_make_module("homeassistant.exceptions", HomeAssistantError=_HomeAssistantError)
+
+# ── homeassistant.components.ai_task ─────────────────────────────────────────
+
+class _AITaskEntity:
+    pass
+
+
+class _AITaskEntityFeature:
+    GENERATE_DATA = 1
+    SUPPORT_ATTACHMENTS = 2
+    GENERATE_IMAGE = 4
+
+
+class _GenDataTask:
+    def __init__(self, name="task", instructions="", structure=None, attachments=None):
+        self.name = name
+        self.instructions = instructions
+        self.structure = structure
+        self.attachments = attachments
+
+
+class _GenDataTaskResult:
+    def __init__(self, conversation_id="", data=None):
+        self.conversation_id = conversation_id
+        self.data = data
+
+
+_ai_task_mod = _make_module(
+    "homeassistant.components.ai_task",
+    AITaskEntity=_AITaskEntity,
+    AITaskEntityFeature=_AITaskEntityFeature,
+    GenDataTask=_GenDataTask,
+    GenDataTaskResult=_GenDataTaskResult,
+)
 
 # ── homeassistant.components.conversation ────────────────────────────────────
 
@@ -121,6 +164,12 @@ class _ConversationResult:
         self.continue_conversation = continue_conversation
 
 
+class _AssistantContent:
+    def __init__(self, agent_id="", content=""):
+        self.agent_id = agent_id
+        self.content = content
+
+
 _conv_mod = _make_module(
     "homeassistant.components.conversation",
     ConversationEntity=_ConversationEntity,
@@ -128,8 +177,13 @@ _conv_mod = _make_module(
     ConversationInput=_ConversationInput,
     ConversationResult=_ConversationResult,
     ChatLog=_StubChatLog,
+    AssistantContent=_AssistantContent,
 )
-_make_module("homeassistant.components", conversation=_conv_mod)
+_make_module(
+    "homeassistant.components",
+    conversation=_conv_mod,
+    ai_task=_ai_task_mod,
+)
 
 # ── homeassistant.helpers.intent ─────────────────────────────────────────────
 

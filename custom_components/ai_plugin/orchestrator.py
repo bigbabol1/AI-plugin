@@ -43,6 +43,9 @@ from .const import (
     CONF_MODEL,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_RESPONSE_TIMEOUT,
+    CONF_ROUTE_GENERAL,
+    CONF_ROUTE_HOME_CONTROL,
+    CONF_ROUTE_WEB_SEARCH,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
     CONF_TEMPERATURE,
@@ -900,6 +903,13 @@ class Orchestrator:
         self._prune_schemas: bool = opts.get(
             CONF_PRUNE_TOOL_SCHEMAS, DEFAULT_PRUNE_TOOL_SCHEMAS
         )
+        # Intent routing: optional per-class model overrides. Empty = the
+        # main model handles everything (single-model behaviour, default).
+        self._route_models: dict[str, str | None] = {
+            "home": (opts.get(CONF_ROUTE_HOME_CONTROL) or "").strip() or None,
+            "web": (opts.get(CONF_ROUTE_WEB_SEARCH) or "").strip() or None,
+            "general": (opts.get(CONF_ROUTE_GENERAL) or "").strip() or None,
+        }
         # Background summarization tasks — kept referenced so they aren't GC'd.
         self._bg_tasks: set[asyncio.Task] = set()
         self._max_tool_iterations: int = opts.get(
@@ -940,6 +950,31 @@ class Orchestrator:
         """Public alias of _is_voice_device for callers in other modules."""
         return self._is_voice_device(device_id)
 
+    def _pick_route_model(self, message: str) -> str | None:
+        """Classify the turn and return the route's model override, if any.
+
+        Deterministic and cheap — reuses the verifier regexes rather than an
+        LLM classifier. Precedence: web (needs the strongest reasoning over
+        search results) → home control (needs fast, decisive tool calling) →
+        general. A route without a configured model falls back to the main
+        model (returns None).
+        """
+        routes = getattr(self, "_route_models", None)
+        if not routes or not any(routes.values()):
+            return None
+        if self._web_search is not None and _is_online_query(message):
+            return routes["web"]
+        words = set(re.findall(r"[a-zäöüß_]+", (message or "").lower()))
+        if (
+            _is_action_command(message)
+            or _is_state_set_query(message)
+            or (words & _ENTITY_WORDS)
+            or (words & _AREA_WORDS)
+            or "timer" in words
+        ):
+            return routes["home"]
+        return routes["general"]
+
     def _is_voice_device(self, device_id: str | None) -> bool:
         """True only when the device_id has an assist_satellite entity.
 
@@ -961,22 +996,7 @@ class Orchestrator:
 
     def _build_provider(self) -> AbstractProvider:
         """Build provider from current entry options."""
-        opts = self._entry.options
-        raw_temp = opts.get(CONF_TEMPERATURE)
-        raw_top_p = opts.get(CONF_TOP_P)
-        raw_max_tokens = opts.get(CONF_MAX_TOKENS, 0)
-        return OpenAICompatProvider(
-            base_url=opts.get(CONF_BASE_URL, DEFAULT_BASE_URL),
-            model=opts.get(CONF_MODEL, ""),
-            api_key=opts.get(CONF_API_KEY) or None,
-            timeout=opts.get(CONF_RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT),
-            temperature=float(raw_temp) if raw_temp is not None else None,
-            top_p=float(raw_top_p) if raw_top_p is not None else None,
-            max_tokens=int(raw_max_tokens) if raw_max_tokens else None,
-            context_window=int(opts.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW)),
-            enable_thinking=bool(opts.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING)),
-            keep_alive=str(opts.get(CONF_KEEP_ALIVE, DEFAULT_KEEP_ALIVE) or ""),
-        )
+        return OpenAICompatProvider.from_options(dict(self._entry.options))
 
     async def _build_system_prompt(self, voice_mode: bool) -> str:
         """Return the STATIC system prompt for this request.
@@ -1177,6 +1197,13 @@ class Orchestrator:
             lang=lang,
             voice_mode=voice_mode,
         )
+
+        # Intent routing: optional per-class model override for this turn.
+        route_model = self._pick_route_model(message)
+        if route_model:
+            _LOGGER.info(
+                "AI Plugin: routing conv=%s to model %r", conversation_id, route_model
+            )
         # v0.5.15: no more [HOME CONTEXT] YAML dump. Small LLMs drown in it and
         # hallucinate their way through inventory questions. The model instead
         # calls discovery tools (list_areas / list_entities / get_entity /
@@ -1331,15 +1358,25 @@ class Orchestrator:
 
             # 5. Call LLM — native tool loop when tools available, plain
             #    completion otherwise.
+            # Only pass the model kwarg when routing is configured — mocks
+            # and older providers keep their unrouted signatures.
+            _route_kw = {"model": route_model} if route_model else {}
             try:
                 if tool_schemas:
                     reply, tool_msgs = await self._tool_loop(
                         messages, tool_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language, gate=gate,
+                        route_model=route_model,
                     )
                 elif gate.active:
                     response = await self._provider.async_chat_stream(
-                        messages, on_delta=gate.feed
+                        messages, on_delta=gate.feed, **_route_kw
+                    )
+                    reply = response.reply_text()
+                    tool_msgs = []
+                elif route_model:
+                    response = await self._provider.async_chat(
+                        messages, model=route_model
                     )
                     reply = response.reply_text()
                     tool_msgs = []
@@ -1377,6 +1414,7 @@ class Orchestrator:
                     reply2, tool_msgs2 = await self._tool_loop(
                         messages, tool_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
+                        route_model=route_model,
                     )
                     if _any_list_entities_call(tool_msgs2):
                         reply = reply2
@@ -1418,6 +1456,7 @@ class Orchestrator:
                     reply3, tool_msgs3 = await self._tool_loop(
                         messages, tool_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
+                        route_model=route_model,
                     )
                     if _any_tool_call(tool_msgs3, "search_entities"):
                         reply = reply3
@@ -1477,6 +1516,7 @@ class Orchestrator:
                     reply4, tool_msgs4 = await self._tool_loop(
                         messages, tool_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
+                        route_model=route_model,
                     )
                     reply = reply4
                     tool_msgs = tool_msgs + tool_msgs4
@@ -1518,6 +1558,7 @@ class Orchestrator:
                     reply5, tool_msgs5 = await self._tool_loop(
                         messages, tool_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
+                        route_model=route_model,
                     )
                     if _any_actuator_call(tool_msgs5):
                         reply = reply5
@@ -1660,6 +1701,7 @@ class Orchestrator:
         device_id: str | None = None,
         language: str | None = None,
         gate: "_DeltaGate | None" = None,
+        route_model: str | None = None,
     ) -> tuple[str, list[dict]]:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
@@ -1679,16 +1721,19 @@ class Orchestrator:
             if s.get("function", {}).get("name")
         }
 
+        _route_kw = {"model": route_model} if route_model else {}
         for iteration in range(self._max_tool_iterations):
             if gate is not None and gate.active:
                 # Drop any unemitted tail from the previous iteration —
                 # prose preceding a tool call is narration, never speech.
                 gate.new_response()
                 response = await self._provider.async_chat_stream(
-                    messages, tool_schemas, on_delta=gate.feed
+                    messages, tool_schemas, on_delta=gate.feed, **_route_kw
                 )
             else:
-                response = await self._provider.async_chat(messages, tool_schemas)
+                response = await self._provider.async_chat(
+                    messages, tool_schemas, **_route_kw
+                )
             last_response = response
 
             if not response.has_tool_calls:

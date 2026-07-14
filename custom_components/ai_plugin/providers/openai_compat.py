@@ -81,6 +81,48 @@ class OpenAICompatProvider(AbstractProvider):
         self._is_ollama: bool | None = None
         self._probe_lock = asyncio.Lock()
 
+    @classmethod
+    def from_options(cls, options: dict[str, Any]) -> "OpenAICompatProvider":
+        """Build a provider from config-entry options (single source of truth
+        for option parsing — used by the orchestrator and the ai_task entity)."""
+        from ..const import (  # noqa: PLC0415 — avoid import cycle at module load
+            CONF_API_KEY,
+            CONF_BASE_URL,
+            CONF_CONTEXT_WINDOW,
+            CONF_ENABLE_THINKING,
+            CONF_KEEP_ALIVE,
+            CONF_MAX_TOKENS,
+            CONF_MODEL,
+            CONF_RESPONSE_TIMEOUT,
+            CONF_TEMPERATURE,
+            CONF_TOP_P,
+            DEFAULT_BASE_URL,
+            DEFAULT_CONTEXT_WINDOW,
+            DEFAULT_ENABLE_THINKING,
+            DEFAULT_KEEP_ALIVE,
+            DEFAULT_RESPONSE_TIMEOUT,
+        )
+
+        raw_temp = options.get(CONF_TEMPERATURE)
+        raw_top_p = options.get(CONF_TOP_P)
+        raw_max_tokens = options.get(CONF_MAX_TOKENS, 0)
+        return cls(
+            base_url=options.get(CONF_BASE_URL, DEFAULT_BASE_URL),
+            model=options.get(CONF_MODEL, ""),
+            api_key=options.get(CONF_API_KEY) or None,
+            timeout=options.get(CONF_RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT),
+            temperature=float(raw_temp) if raw_temp is not None else None,
+            top_p=float(raw_top_p) if raw_top_p is not None else None,
+            max_tokens=int(raw_max_tokens) if raw_max_tokens else None,
+            context_window=int(
+                options.get(CONF_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW)
+            ),
+            enable_thinking=bool(
+                options.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING)
+            ),
+            keep_alive=str(options.get(CONF_KEEP_ALIVE, DEFAULT_KEEP_ALIVE) or ""),
+        )
+
     def _build_headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
@@ -140,21 +182,27 @@ class OpenAICompatProvider(AbstractProvider):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
     ) -> ChatResponse:
-        """Dispatch to Ollama native or OpenAI-spec path based on server."""
+        """Dispatch to Ollama native or OpenAI-spec path based on server.
+
+        ``model`` overrides the configured model for this request — used by
+        intent routing (home-control vs web vs general model tiers).
+        """
         if await self._detect_ollama():
-            return await self._chat_ollama(messages, tools)
-        return await self._chat_openai(messages, tools)
+            return await self._chat_ollama(messages, tools, model=model)
+        return await self._chat_openai(messages, tools, model=model)
 
     async def _chat_openai(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        model: str | None = None,
     ) -> ChatResponse:
         session = self._get_session()
         url = f"{self._base_url}/chat/completions"
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": model or self._model,
             "messages": messages,
         }
         if tools:
@@ -237,6 +285,7 @@ class OpenAICompatProvider(AbstractProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         on_delta: Any = None,
+        model: str | None = None,
     ) -> ChatResponse:
         """Like async_chat, but invokes on_delta(text) for each content chunk.
 
@@ -246,14 +295,15 @@ class OpenAICompatProvider(AbstractProvider):
         replies; the deltas are a side channel for early TTS.
         """
         if on_delta is None or not await self._detect_ollama():
-            return await self.async_chat(messages, tools)
-        return await self._chat_ollama(messages, tools, on_delta=on_delta)
+            return await self.async_chat(messages, tools, model=model)
+        return await self._chat_ollama(messages, tools, on_delta=on_delta, model=model)
 
     async def _chat_ollama(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         on_delta: Any = None,
+        model: str | None = None,
     ) -> ChatResponse:
         """Call Ollama's native /api/chat so options.num_ctx actually takes effect."""
         session = self._get_session()
@@ -269,7 +319,7 @@ class OpenAICompatProvider(AbstractProvider):
         if self._context_window:
             options["num_ctx"] = self._context_window
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": model or self._model,
             "messages": messages,
             "stream": on_delta is not None,
             # Toggle qwen3-style chain-of-thought via the integration option.
@@ -425,3 +475,56 @@ async def async_fetch_models(
         raise CannotConnect(f"Cannot reach {url}: {exc}") from exc
     except (KeyError, TypeError) as exc:
         raise CannotConnect(f"Unexpected /models response: {exc}") from exc
+
+
+_SHOW_TIMEOUT = 10
+
+
+async def async_show_model(
+    base_url: str,
+    model: str,
+    api_key: str | None = None,
+) -> dict[str, Any] | None:
+    """Ollama-only model introspection via POST /api/show.
+
+    Returns the raw show payload, or None for non-Ollama backends and any
+    failure — callers must treat None as "unknown", never as "bad model".
+    """
+    root = _strip_v1(base_url.rstrip("/"))
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.post(
+                f"{root}/api/show",
+                json={"model": model},
+                timeout=aiohttp.ClientTimeout(total=_SHOW_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+                return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def model_capabilities(show: dict[str, Any] | None) -> list[str] | None:
+    """Capability list from a show payload ("completion", "tools", ...)."""
+    if not show:
+        return None
+    caps = show.get("capabilities")
+    return caps if isinstance(caps, list) else None
+
+
+def model_context_length(show: dict[str, Any] | None) -> int | None:
+    """The model's maximum context length (arch-prefixed model_info key)."""
+    if not show:
+        return None
+    info = show.get("model_info")
+    if not isinstance(info, dict):
+        return None
+    for key, val in info.items():
+        if key.endswith(".context_length") and isinstance(val, (int, float)):
+            return int(val)
+    return None

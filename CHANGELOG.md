@@ -4,6 +4,16 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.30 — Multi-model routing, model introspection, AI Task platform
+
+**New:**
+- **Intent-based model routing** (Advanced → three optional model fields; the `route_*` keys reserved since v0.1 are finally wired). Deterministic classification — no LLM classifier: web/research turns → your strongest reasoner, home-control turns (devices, sensors, timers) → a fast decisive model, everything else → the general model. Unset routes fall back to the main model; leave all empty for the previous single-model behaviour. All routes must live on the same endpoint; note that per-turn model switching costs a load unless both fit in VRAM.
+- **Model introspection at config time** (Ollama `/api/show`, fail-open). Picking a model that reports no `tools` capability is now a config-flow error instead of a silently broken install; setting a Context Window larger than the model's maximum context length is rejected in Advanced settings.
+- **AI Task platform** (`ai_task.py`). The same backend now serves `ai_task.generate_data` for automations and scripts — plain text or structured JSON (schema rendered via voluptuous_openapi, code fences tolerated, invalid JSON raises instead of returning garbage). One more reason the local model is the home's LLM hub, not just its voice.
+
+**Changed:**
+- Provider option parsing centralised in `OpenAICompatProvider.from_options` (orchestrator + ai_task share it).
+
 ## v0.9.29 — Streaming replies (sentence-safe early TTS)
 
 **New:**

@@ -41,6 +41,7 @@ def _baseline_orch(entry=None) -> Orchestrator:
     orch._summarization_enabled = False
     orch._prune_schemas = False
     orch._bg_tasks = set()
+    orch._route_models = {"home": None, "web": None, "general": None}
     orch._mcp = None
     orch._memory = None
     orch._max_tool_iterations = 5

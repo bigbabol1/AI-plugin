@@ -401,3 +401,23 @@ async def test_ollama_keep_alive_numeric_string_sent_as_int() -> None:
 async def test_ollama_keep_alive_omitted_when_unset() -> None:
     payload = await _capture_ollama_payload(_make_ollama_provider(""))
     assert "keep_alive" not in payload
+
+
+# ── v0.9.30: /api/show introspection ─────────────────────────────────────────
+
+
+def test_model_capabilities_and_context_length_parsing() -> None:
+    from custom_components.ai_plugin.providers.openai_compat import (
+        model_capabilities,
+        model_context_length,
+    )
+
+    show = {
+        "capabilities": ["completion", "tools"],
+        "model_info": {"qwen3.context_length": 40960, "qwen3.embedding_length": 4096},
+    }
+    assert model_capabilities(show) == ["completion", "tools"]
+    assert model_context_length(show) == 40960
+    assert model_capabilities(None) is None
+    assert model_context_length({"model_info": {}}) is None
+    assert model_capabilities({"capabilities": "bogus"}) is None

@@ -11,7 +11,7 @@ from .tools.memory import MemoryTool
 from .tools.mcp_client import MCPToolRegistry
 from .tools.ha_local import HALocalToolRegistry
 
-PLATFORMS = [Platform.CONVERSATION]
+PLATFORMS = [Platform.CONVERSATION, Platform.AI_TASK]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

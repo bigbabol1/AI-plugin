@@ -58,6 +58,9 @@ from .const import (
     CONF_KEEP_ALIVE,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_RESPONSE_TIMEOUT,
+    CONF_ROUTE_GENERAL,
+    CONF_ROUTE_HOME_CONTROL,
+    CONF_ROUTE_WEB_SEARCH,
     CONF_SEARXNG_URL,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
@@ -84,12 +87,19 @@ from .const import (
     DOMAIN,
     ERROR_CANNOT_CONNECT,
     ERROR_INVALID_URL,
+    ERROR_CONTEXT_EXCEEDS_MODEL,
+    ERROR_MODEL_NO_TOOLS,
     ERROR_MODEL_REQUIRED,
     ERROR_SEARXNG_UNREACHABLE,
     PROVIDER_OPENAI_COMPAT,
 )
 from .exceptions import CannotConnect
-from .providers.openai_compat import async_fetch_models
+from .providers.openai_compat import (
+    async_fetch_models,
+    async_show_model,
+    model_capabilities,
+    model_context_length,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -278,6 +288,18 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
                 )
             ),
             vol.Optional(
+                CONF_ROUTE_HOME_CONTROL,
+                description={"suggested_value": current.get(CONF_ROUTE_HOME_CONTROL)},
+            ): selector.TextSelector(),
+            vol.Optional(
+                CONF_ROUTE_WEB_SEARCH,
+                description={"suggested_value": current.get(CONF_ROUTE_WEB_SEARCH)},
+            ): selector.TextSelector(),
+            vol.Optional(
+                CONF_ROUTE_GENERAL,
+                description={"suggested_value": current.get(CONF_ROUTE_GENERAL)},
+            ): selector.TextSelector(),
+            vol.Optional(
                 CONF_LOCATION_BIAS,
                 default=current.get(CONF_LOCATION_BIAS, DEFAULT_LOCATION_BIAS),
             ): selector.BooleanSelector(),
@@ -410,13 +432,23 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not model:
                 errors[CONF_MODEL] = ERROR_MODEL_REQUIRED
             else:
-                self._options[CONF_MODEL] = model
                 api_key = str(user_input.get(CONF_API_KEY, "")).strip()
-                if api_key:
-                    self._options[CONF_API_KEY] = api_key
-                elif CONF_API_KEY in self._options:
-                    del self._options[CONF_API_KEY]
-                return await self.async_step_web_search()
+                # Ollama introspection (fail-open): block only when the
+                # server definitively says the model can't call tools.
+                show = await async_show_model(
+                    str(self._options.get(CONF_BASE_URL, "")), model,
+                    api_key=api_key or None,
+                )
+                caps = model_capabilities(show)
+                if caps is not None and "tools" not in caps:
+                    errors[CONF_MODEL] = ERROR_MODEL_NO_TOOLS
+                else:
+                    self._options[CONF_MODEL] = model
+                    if api_key:
+                        self._options[CONF_API_KEY] = api_key
+                    elif CONF_API_KEY in self._options:
+                        del self._options[CONF_API_KEY]
+                    return await self.async_step_web_search()
 
         # Model field: dropdown if models fetched, free-text if not
         if self._models:
@@ -530,6 +562,17 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Step 4: Advanced settings + optional HA MCP quick-connect."""
         if user_input is not None:
             errors = _validate_advanced_input(user_input)
+            if not errors and user_input.get(CONF_CONTEXT_WINDOW):
+                # Fail-open Ollama check: reject a context window larger
+                # than the model can actually load.
+                _show = await async_show_model(
+                    str(self._options.get(CONF_BASE_URL, "")),
+                    str(self._options.get(CONF_MODEL, "")),
+                    api_key=self._options.get(CONF_API_KEY),
+                )
+                _limit = model_context_length(_show)
+                if _limit and int(user_input[CONF_CONTEXT_WINDOW]) > _limit:
+                    errors[CONF_CONTEXT_WINDOW] = ERROR_CONTEXT_EXCEEDS_MODEL
             if errors:
                 schema = vol.Schema(
                     {
@@ -705,8 +748,16 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
             if not model:
                 errors[CONF_MODEL] = ERROR_MODEL_REQUIRED
             else:
-                self._options[CONF_MODEL] = model
-                return self.async_create_entry(title="", data=self._options)
+                show = await async_show_model(
+                    str(self._options.get(CONF_BASE_URL, "")), model,
+                    api_key=self._options.get(CONF_API_KEY),
+                )
+                caps = model_capabilities(show)
+                if caps is not None and "tools" not in caps:
+                    errors[CONF_MODEL] = ERROR_MODEL_NO_TOOLS
+                else:
+                    self._options[CONF_MODEL] = model
+                    return self.async_create_entry(title="", data=self._options)
 
         if self._models:
             model_field: Any = selector.SelectSelector(
@@ -787,6 +838,17 @@ class AIPluginOptionsFlow(config_entries.OptionsFlow):
         """Edit advanced settings."""
         if user_input is not None:
             errors = _validate_advanced_input(user_input)
+            if not errors and user_input.get(CONF_CONTEXT_WINDOW):
+                # Fail-open Ollama check: reject a context window larger
+                # than the model can actually load.
+                _show = await async_show_model(
+                    str(self._options.get(CONF_BASE_URL, "")),
+                    str(self._options.get(CONF_MODEL, "")),
+                    api_key=self._options.get(CONF_API_KEY),
+                )
+                _limit = model_context_length(_show)
+                if _limit and int(user_input[CONF_CONTEXT_WINDOW]) > _limit:
+                    errors[CONF_CONTEXT_WINDOW] = ERROR_CONTEXT_EXCEEDS_MODEL
             if errors:
                 return self.async_show_form(
                     step_id="advanced",

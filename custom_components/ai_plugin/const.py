@@ -136,6 +136,8 @@ ERROR_INVALID_API_KEY = "invalid_api_key"
 ERROR_MODEL_REQUIRED = "model_required"
 ERROR_INVALID_URL = "invalid_url"
 ERROR_SEARXNG_UNREACHABLE = "searxng_unreachable"
+ERROR_MODEL_NO_TOOLS = "model_no_tools"
+ERROR_CONTEXT_EXCEEDS_MODEL = "context_exceeds_model"
 
 # System prompts
 SYSTEM_PROMPT_DEFAULT = (
