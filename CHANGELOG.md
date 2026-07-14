@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.35 — Self-echo filter: follow-up without the loop
+
+**New:**
+- **Self-echo filter** (Advanced → *Ignore the satellite hearing its own reply*, on by default). Satellites that play TTS through a separate speaker (Mic to MediaPlayer) re-hear the reply and STT feeds it back as a "user" turn — the self-talking loop when *Listen for follow-up* is on. Acoustic echo cancellation can't help (the satellite's AEC only cancels audio it renders itself, not sound from external speakers), so the plugin does it in software: it remembers what it just said per device and drops any incoming voice turn whose tokens are ≥80% contained in a reply from the last 30 s. The dropped turn runs no command and speaks nothing, so the loop dies — but the session stays open, so a *real* follow-up still lands. Short turns (< 4 tokens: "yes", "stop", "turn it off") are never filtered, and reply memory isn't cleared on a hit so reverb/multi-fragment echoes of the same reply are caught too.
+- This makes *Listen for follow-up* usable on TTS-rerouted setups **without** muting the microphone or losing barge-in. (Muting the mic during playback in mic_to_mediaplayer remains a complementary hardware-side option — see the repo discussion.)
+
 ## v0.9.34 — Debloat: multi-model routing removed; README rewritten
 
 **Removed:**

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 
 from homeassistant.components import conversation
 from homeassistant.components.conversation import (
@@ -22,9 +23,13 @@ from homeassistant.util import ulid as ulid_util
 from .const import (
     CONF_CONTINUE_CONVERSATION,
     CONF_FEEDBACK_LOOP_DEVICES,
+    CONF_SELF_ECHO_FILTER,
     CONVERSATION_CLOSE_PHRASES,
     DEFAULT_CONTINUE_CONVERSATION,
+    DEFAULT_SELF_ECHO_FILTER,
     DOMAIN,
+    ECHO_MATCH_THRESHOLD,
+    ECHO_MIN_TOKENS,
 )
 from .exceptions import OrchestratorError
 from .i18n import L
@@ -37,6 +42,11 @@ _LOGGER = logging.getLogger(__name__)
 # space so phrase matching survives STT trailing periods, commas, and so on.
 # Unicode flag keeps umlauts (ü, ö, ä, ß) inside word characters.
 _WORD_BREAK_RE = re.compile(r"\W+", re.UNICODE)
+
+# Self-echo filter window: replies older than this can't be the STT echo
+# currently arriving, and at most this many replies are kept per device.
+_ECHO_WINDOW_S = 30.0
+_ECHO_HISTORY = 3
 
 
 def _match_close_phrase(text: str | None) -> str | None:
@@ -55,6 +65,36 @@ def _match_close_phrase(text: str | None) -> str | None:
         if norm_phrase in normalized:
             return phrase
     return None
+
+
+def _echo_tokens(text: str) -> list[str]:
+    """Lowercase word tokens for echo comparison (Unicode-aware)."""
+    return _WORD_BREAK_RE.sub(" ", (text or "").lower()).split()
+
+
+def _is_self_echo(stt_text: str, recent_replies: list[str]) -> bool:
+    """True when the STT input looks like the agent's own TTS fed back.
+
+    A satellite whose reply audio plays through a separate speaker re-hears
+    it and STT transcribes it as a fresh turn. We can't cancel that acoustic
+    echo, but the agent knows what it just said — so we compare. The turn is
+    echo when ECHO_MATCH_THRESHOLD of its tokens appear (in order) within a
+    recent reply. STT is imperfect, so this is fuzzy containment, not
+    equality. Short turns are never filtered (ECHO_MIN_TOKENS) so real
+    follow-ups like "yes", "turn it off" always pass.
+    """
+    tokens = _echo_tokens(stt_text)
+    if len(tokens) < ECHO_MIN_TOKENS:
+        return False
+    token_set = set(tokens)
+    for reply in recent_replies:
+        reply_set = set(_echo_tokens(reply))
+        if not reply_set:
+            continue
+        overlap = len(token_set & reply_set) / len(token_set)
+        if overlap >= ECHO_MATCH_THRESHOLD:
+            return True
+    return False
 
 
 async def async_setup_entry(
@@ -91,6 +131,40 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
         )
+        # Per-device recent replies for the self-echo filter:
+        # device_id -> list of (monotonic_ts, reply_text). Only replies
+        # from the last _ECHO_WINDOW_S can be echo, so the list stays tiny.
+        self._recent_replies: dict[str, list[tuple[float, str]]] = {}
+
+    def _echo_store(self) -> dict[str, list[tuple[float, str]]]:
+        store = getattr(self, "_recent_replies", None)
+        if store is None:
+            store = {}
+            self._recent_replies = store
+        return store
+
+    def _remember_reply(self, device_id: str | None, reply: str) -> None:
+        if not device_id or not reply.strip():
+            return
+        store = self._echo_store()
+        now = time.monotonic()
+        history = [
+            (ts, txt)
+            for ts, txt in store.get(device_id, [])
+            if now - ts < _ECHO_WINDOW_S
+        ]
+        history.append((now, reply))
+        store[device_id] = history[-_ECHO_HISTORY:]
+
+    def _recent_replies_for(self, device_id: str | None) -> list[str]:
+        if not device_id:
+            return []
+        now = time.monotonic()
+        return [
+            txt
+            for ts, txt in self._echo_store().get(device_id, [])
+            if now - ts < _ECHO_WINDOW_S
+        ]
 
     async def _async_handle_message(
         self, user_input: ConversationInput, chat_log
@@ -120,6 +194,25 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             conversation_id, user_id, user_input.text[:80],
         )
 
+        # Self-echo filter: if this "user" turn is really the satellite's
+        # own TTS fed back through a separate speaker, drop it — do NOT run
+        # it as a command, and speak nothing. We keep the session open
+        # (normal follow-up rules below): the dropped turn produces no new
+        # audio, so the loop dies on its own while a real follow-up still
+        # lands. Recent replies are NOT cleared, so reverb/multi-fragment
+        # echoes of the same reply are caught too.
+        echo_filter = self._entry.options.get(
+            CONF_SELF_ECHO_FILTER, DEFAULT_SELF_ECHO_FILTER
+        )
+        is_echo = echo_filter and _is_self_echo(
+            user_input.text, self._recent_replies_for(user_input.device_id)
+        )
+        if is_echo:
+            _LOGGER.info(
+                "AI Plugin: dropped self-echo turn on device %s: %r",
+                user_input.device_id, user_input.text[:80],
+            )
+
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         consumer: asyncio.Task | None = None
         agent_id = getattr(self, "entity_id", None) or DOMAIN
@@ -145,28 +238,35 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 consumer = asyncio.get_running_loop().create_task(_consume())
 
         stream_capable = hasattr(chat_log, "async_add_delta_content_stream")
-        try:
-            reply = await self._orchestrator.async_process(
-                message=user_input.text,
-                conversation_id=conversation_id,
-                language=user_input.language,
-                device_id=user_input.device_id,
-                user_id=user_id,
-                on_delta=_on_delta if stream_capable else None,
-            )
-        except OrchestratorError as exc:
-            _LOGGER.error("AI Plugin error processing message: %s", exc)
-            _lang = (user_input.language or "en").split("-")[0].lower()
-            reply = f"{L.template('err_process', _lang)} ({exc})"
-        finally:
-            if consumer is not None:
-                queue.put_nowait(None)
-                try:
-                    await consumer
-                except Exception:  # noqa: BLE001
-                    _LOGGER.debug(
-                        "AI Plugin: delta consumer failed", exc_info=True
-                    )
+        if is_echo:
+            # Skip the LLM entirely; nothing to say, nothing to record.
+            reply = ""
+        else:
+            try:
+                reply = await self._orchestrator.async_process(
+                    message=user_input.text,
+                    conversation_id=conversation_id,
+                    language=user_input.language,
+                    device_id=user_input.device_id,
+                    user_id=user_id,
+                    on_delta=_on_delta if stream_capable else None,
+                )
+            except OrchestratorError as exc:
+                _LOGGER.error("AI Plugin error processing message: %s", exc)
+                _lang = (user_input.language or "en").split("-")[0].lower()
+                reply = f"{L.template('err_process', _lang)} ({exc})"
+            finally:
+                if consumer is not None:
+                    queue.put_nowait(None)
+                    try:
+                        await consumer
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "AI Plugin: delta consumer failed", exc_info=True
+                        )
+
+            # Record this reply so the next turn can recognise it as echo.
+            self._remember_reply(user_input.device_id, reply)
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(reply)

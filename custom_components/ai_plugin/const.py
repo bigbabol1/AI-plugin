@@ -41,6 +41,21 @@ DEFAULT_TIMER_ANNOUNCE = False
 
 # Machine-generated conversation_command prefix — never spoken by users.
 TIMER_DONE_SENTINEL = "AI_PLUGIN_TIMER_DONE"
+
+# Self-echo filter: when a satellite's TTS plays through a separate speaker,
+# the mic re-hears the reply and STT feeds it back as a "user" turn. The
+# filter compares each incoming voice turn against the agent's own recent
+# replies (normalized token containment) and silently drops matches, ending
+# the session so the loop can't continue. This makes 'Listen for follow-up'
+# usable on TTS-rerouted setups without muting anything.
+CONF_SELF_ECHO_FILTER = "self_echo_filter"
+DEFAULT_SELF_ECHO_FILTER = True
+
+# An utterance must have at least this many tokens to be considered echo —
+# short commands ("yes", "stop", "danke") are never filtered.
+ECHO_MIN_TOKENS = 4
+# Fraction of the utterance's tokens that must appear in a recent reply.
+ECHO_MATCH_THRESHOLD = 0.8
 CONF_SUMMARIZATION_ENABLED = "summarization_enabled"
 CONF_VOICE_MODE = "voice_mode"
 CONF_CONTINUE_CONVERSATION = "continue_conversation"

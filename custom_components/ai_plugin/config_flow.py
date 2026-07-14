@@ -59,6 +59,7 @@ from .const import (
     CONF_KEEP_ALIVE,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_RESPONSE_TIMEOUT,
+    CONF_SELF_ECHO_FILTER,
     CONF_SEARXNG_URL,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
@@ -79,6 +80,7 @@ from .const import (
     DEFAULT_KEEP_ALIVE,
     DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_RESPONSE_TIMEOUT,
+    DEFAULT_SELF_ECHO_FILTER,
     DEFAULT_TIMER_ANNOUNCE,
     DEFAULT_SUMMARIZATION_ENABLED,
     DEFAULT_VOICE_MODE,
@@ -287,6 +289,10 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
                     mode=selector.NumberSelectorMode.SLIDER,
                 )
             ),
+            vol.Optional(
+                CONF_SELF_ECHO_FILTER,
+                default=current.get(CONF_SELF_ECHO_FILTER, DEFAULT_SELF_ECHO_FILTER),
+            ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_TIMER_ANNOUNCE,
                 default=current.get(CONF_TIMER_ANNOUNCE, DEFAULT_TIMER_ANNOUNCE),

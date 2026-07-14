@@ -115,7 +115,10 @@ With a `structure` schema, the model is instructed to return matching JSON; code
 
 When the option is on (default), every non-close-phrase reply returns `continue_conversation=True` — HA's standard mechanism. Voice satellites with their own speaker (HA Voice PE, standard ESPHome satellites) re-arm the microphone after the reply, so you can keep talking without the wake word. A close-phrase detector (`thanks`, `bye`, `das war's`, …) ends the loop cleanly.
 
-**Exception — TTS on a separate speaker:** satellites that route reply audio to an external media player re-hear their own TTS and re-trigger listening — an acoustic feedback loop. Add those devices to **Advanced → Force-end conversations on these satellites**; conversations on listed devices always end after one turn, while every other satellite honours the toggle.
+**Exception — TTS on a separate speaker:** satellites that route reply audio to an external media player re-hear their own TTS and re-trigger listening — an acoustic feedback loop that makes the assistant talk to itself. Two mitigations, both on by default / available:
+
+- **Self-echo filter** (Advanced → *Ignore the satellite hearing its own reply*, default on) — the plugin remembers what it just said per device and silently drops any incoming voice turn that matches (≥80% token overlap within 30 s). The loop dies but the session stays open, so real follow-ups still work. Short turns are never filtered. This is the recommended fix and keeps barge-in.
+- **Force-end conversations on these satellites** (Advanced, device list) — a blunter guard that ends the session after one turn on the listed devices. Use it if a satellite's echo is too garbled by STT for the filter to catch.
 
 ## Requirements
 
