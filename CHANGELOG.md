@@ -4,6 +4,11 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.32 — 'Listen for follow-up' actually works on voice satellites
+
+**Fixed:**
+- **Voice satellites honour the follow-up toggle again** (`conversation.py`). The TTS-feedback-loop protection force-ended EVERY voice-satellite turn, which silently disabled *Listen for follow-up after voice replies* on all satellites — including ones with their own speaker and echo suppression (HA Voice PE, standard ESPHome satellites) that handle `continue_conversation` correctly. The blanket force-end is replaced by an explicit guard list: **Advanced → Force-end conversations on these satellites** (device picker). Add only satellites whose TTS plays through a separate speaker (e.g. via Mic to MediaPlayer) — those genuinely re-hear their own reply and re-trigger listening. Close phrases (`thanks`, `das war's`, …) still end any session.
+
 ## v0.9.31 — Shortcut coverage: covers and volume
 
 **New:**

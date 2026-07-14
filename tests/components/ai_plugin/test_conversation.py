@@ -516,3 +516,51 @@ def test_strip_emoji_preserves_degrees_and_parens() -> None:
 
     assert _strip_emoji("It is 21°C outside.") == "It is 21°C outside."
     assert _strip_emoji("Timer (eval) is running.") == "Timer (eval) is running."
+
+
+# ── v0.9.32: follow-up honoured on voice; per-device feedback guard ──────────
+
+
+def _entity_for_continue(options: dict, reply="ok"):
+    entity = object.__new__(
+        __import__(
+            "custom_components.ai_plugin.conversation", fromlist=["x"]
+        ).AIPluginConversationEntity
+    )
+    entity._entry = _make_mock_entry(
+        options={CONF_BASE_URL: "http://x/v1", CONF_MODEL: "m", **options}
+    )
+    entity._attr_unique_id = "test"
+    mock_orch = MagicMock()
+    mock_orch.async_process = AsyncMock(return_value=reply)
+    mock_orch.is_voice_device = MagicMock(return_value=True)
+    entity._orchestrator = mock_orch
+    return entity
+
+
+def _voice_input(text="hello", device_id="satdev"):
+    from homeassistant.components.conversation import ConversationInput
+    from homeassistant.core import Context
+
+    return ConversationInput(
+        text=text, context=Context(), conversation_id="c",
+        device_id=device_id, language="en", agent_id=None,
+    )
+
+
+async def test_voice_satellite_honours_follow_up_toggle() -> None:
+    entity = _entity_for_continue({})  # continue_conversation defaults True
+    result = await entity.async_process(_voice_input())
+    assert result.continue_conversation is True
+
+
+async def test_feedback_guard_device_force_ends() -> None:
+    entity = _entity_for_continue({"feedback_loop_devices": ["satdev"]})
+    result = await entity.async_process(_voice_input())
+    assert result.continue_conversation is False
+
+
+async def test_close_phrase_still_ends_on_voice() -> None:
+    entity = _entity_for_continue({})
+    result = await entity.async_process(_voice_input(text="thanks jarvis"))
+    assert result.continue_conversation is False

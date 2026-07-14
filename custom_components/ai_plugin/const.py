@@ -24,6 +24,11 @@ CONF_MAX_RESULTS = "max_results"
 # Advanced options
 CONF_SYSTEM_PROMPT = "system_prompt"
 CONF_CONTEXT_WINDOW = "context_window"
+# Satellites whose TTS plays through a SEPARATE speaker (e.g. via
+# Mic to MediaPlayer): their mic re-hears the reply and re-triggers STT,
+# so conversations on the listed devices always end after one turn.
+# All other satellites honour CONF_CONTINUE_CONVERSATION normally.
+CONF_FEEDBACK_LOOP_DEVICES = "feedback_loop_devices"
 CONF_SUMMARIZATION_ENABLED = "summarization_enabled"
 CONF_VOICE_MODE = "voice_mode"
 CONF_CONTINUE_CONVERSATION = "continue_conversation"

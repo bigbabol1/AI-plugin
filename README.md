@@ -126,9 +126,9 @@ The integration's **Listen for follow-up after voice replies** option (Settings 
 
 ### How it works end-to-end
 
-For **typed Assist and REST API** turns, the option (default on) makes `async_process` return `ConversationResult(continue_conversation=True)` ([`conversation.py`](custom_components/ai_plugin/conversation.py)), HA's standard mechanism for keeping a session open.
+When the option is on (default), every non-close-phrase reply returns `ConversationResult(continue_conversation=True)` ([`conversation.py`](custom_components/ai_plugin/conversation.py)) — HA's standard mechanism. Voice satellites with their own speaker (HA Voice PE, standard ESPHome satellites) then re-arm the microphone after the reply, so you can keep talking without the wake word.
 
-For **real voice satellites** (devices with an `assist_satellite` entity) the integration always returns `continue_conversation=False`, regardless of this option. Satellites whose TTS plays through a separate speaker otherwise re-hear their own reply and re-trigger STT — an acoustic feedback loop. Chained voice turns are instead handled satellite-side (see the SmartMic switch below); say the wake word to start the next turn on stock satellites.
+**Exception — TTS on a separate speaker:** satellites that route their reply audio to an external media player (e.g. via Mic to MediaPlayer) re-hear their own TTS and re-trigger listening — an acoustic feedback loop. Add those specific devices to **Advanced → Force-end conversations on these satellites**; conversations on listed devices always end after one turn (wake word required), while every other satellite honours the follow-up toggle. (Until v0.9.31 this force-end applied to *all* voice satellites, which silently disabled follow-up everywhere.)
 
 A **close-phrase detector** (`_match_close_phrase`, see `const.py` `CONVERSATION_CLOSE_PHRASES`) forces the flag to `False` whenever the user's input matches a closing utterance (`thanks`, `bye`, `done`, `okay that's all`, German `tschüss` / `danke das war's`, etc.) so the loop ends cleanly without an awkward extra listen.
 

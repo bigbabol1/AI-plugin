@@ -47,6 +47,7 @@ from .const import (
     CONF_CONTEXT_WINDOW,
     CONF_CONTINUE_CONVERSATION,
     CONF_ENABLE_THINKING,
+    CONF_FEEDBACK_LOOP_DEVICES,
     CONF_LOCATION_BIAS,
     CONF_LOCATION_ENTITY,
     CONF_MAX_RESULTS,
@@ -286,6 +287,12 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
                     step=256,
                     mode=selector.NumberSelectorMode.SLIDER,
                 )
+            ),
+            vol.Optional(
+                CONF_FEEDBACK_LOOP_DEVICES,
+                description={"suggested_value": current.get(CONF_FEEDBACK_LOOP_DEVICES)},
+            ): selector.DeviceSelector(
+                selector.DeviceSelectorConfig(multiple=True)
             ),
             vol.Optional(
                 CONF_ROUTE_HOME_CONTROL,

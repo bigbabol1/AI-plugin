@@ -21,6 +21,7 @@ from homeassistant.util import ulid as ulid_util
 
 from .const import (
     CONF_CONTINUE_CONVERSATION,
+    CONF_FEEDBACK_LOOP_DEVICES,
     CONVERSATION_CLOSE_PHRASES,
     DEFAULT_CONTINUE_CONVERSATION,
     DOMAIN,
@@ -172,19 +173,21 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         continue_conversation = self._entry.options.get(
             CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION
         )
-        # Voice satellites whose TTS is routed to a separate speaker
-        # (e.g. via Mic to MediaPlayer to media_player.wohnzimmer_2)
-        # create an acoustic feedback loop: the satellite mic picks up
-        # its own TTS played back through the bound speaker and
-        # re-recognises it as a new user turn. Force-end the conversation
-        # after every voice satellite turn to break the loop. User
-        # re-triggers by saying the wake word again. Text Assist + REST
-        # API are unaffected and still honour the global toggle.
-        if self._orchestrator.is_voice_device(user_input.device_id):
+        # Satellites whose TTS is routed to a separate speaker (e.g. via
+        # Mic to MediaPlayer) create an acoustic feedback loop: the mic
+        # re-hears the spoken reply and re-recognises it as a new turn.
+        # Until v0.9.31 this force-ended EVERY voice-satellite turn, which
+        # silently disabled 'Listen for follow-up' on normal satellites
+        # (own speaker + echo suppression, e.g. HA Voice PE). The guard is
+        # now an explicit per-device list; everything else honours the
+        # global toggle.
+        feedback_devices = self._entry.options.get(CONF_FEEDBACK_LOOP_DEVICES) or []
+        if user_input.device_id and user_input.device_id in feedback_devices:
             if continue_conversation:
                 _LOGGER.debug(
-                    "AI Plugin: voice satellite turn — forcing "
-                    "continue_conversation=False to avoid TTS feedback loop"
+                    "AI Plugin: device %s is in the feedback-loop guard list — "
+                    "forcing continue_conversation=False",
+                    user_input.device_id,
                 )
             continue_conversation = False
         close_match = _match_close_phrase(user_input.text)
