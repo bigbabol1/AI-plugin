@@ -442,12 +442,27 @@ _EMOJI_RE = re.compile(
 )
 
 
+# Kaomoji ("(╯°□°）╯︵ ┻━┻", "(・_・)") are built from box-drawing, geometric,
+# and CJK punctuation glyphs that sit outside the emoji ranges above, so they
+# slip through and TTS reads them as garbage. Two-stage strip: bracketed
+# groups containing such glyphs go first (this also removes enclosed ° and _
+# that belong to the face), then any leftover glyphs of those classes.
+# The degree sign itself is NOT a trigger — "21°C" must survive.
+_KAOMOJI_TRIGGER = "─-◿︰-﹏・･"
+_KAOMOJI_GROUP_RE = re.compile(
+    rf"[(（\[][^()（）\[\]]*[{_KAOMOJI_TRIGGER}][^()（）\[\]]*[)）\]]"
+)
+_KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏]+")
+
+
 def _strip_emoji(text: str) -> str:
-    """Remove emoji/pictographs. Safe for TTS and voice output."""
+    """Remove emoji/pictographs/kaomoji. Safe for TTS and voice output."""
     if not text:
         return text
     cleaned = _EMOJI_RE.sub("", text)
-    # Collapse residual double-spaces introduced by stripped emoji.
+    cleaned = _KAOMOJI_GROUP_RE.sub("", cleaned)
+    cleaned = _KAOMOJI_CHAR_RE.sub("", cleaned)
+    # Collapse residual double-spaces introduced by stripped glyphs.
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()
 

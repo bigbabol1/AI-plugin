@@ -497,3 +497,21 @@ async def test_no_volatile_block_means_no_extra_message() -> None:
 
     await orch.async_process("hello", "conv-novol", "en")
     assert [m["role"] for m in captured["messages"]] == ["system", "user"]
+
+
+# ── v0.9.28: kaomoji stripping ────────────────────────────────────────────────
+
+
+def test_strip_emoji_removes_kaomoji() -> None:
+    from custom_components.ai_plugin.orchestrator import _strip_emoji
+
+    assert _strip_emoji("Sorry! (╯°□°）╯︵ ┻━┻") == "Sorry!"
+    assert _strip_emoji("Nothing to cancel (・_・)") == "Nothing to cancel"
+    assert _strip_emoji("shrug ¯\\_(ツ)_/¯ done") != ""  # must not crash
+
+
+def test_strip_emoji_preserves_degrees_and_parens() -> None:
+    from custom_components.ai_plugin.orchestrator import _strip_emoji
+
+    assert _strip_emoji("It is 21°C outside.") == "It is 21°C outside."
+    assert _strip_emoji("Timer (eval) is running.") == "Timer (eval) is running."
