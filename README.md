@@ -25,35 +25,30 @@ A provider-agnostic AI orchestration layer for Home Assistant, built for **local
 
 The most critical factor for reliable entity control is **tool calling quality**. Models that hedge or ask clarifying questions instead of executing are a poor fit regardless of benchmark scores. The config flow now checks this for you on Ollama: models that report no `tools` capability are rejected at setup.
 
-### 8 GB VRAM (e.g. RTX 3060 Ti, RTX 3070)
+### Benchmark (8 GB VRAM)
 
-Bench-tested April 2026 against this plugin via HA Assist `/api/conversation/process` in **voice mode**. 51 prompts covering light/climate/sensor/media/weather/web/memory/multi-step/multilingual. Plugin v0.5.47, num_ctx 16384, temperature 0.2, on Ollama against an RTX 3060 Ti (8 GB).
+Bench-tested July 2026 against plugin v0.9.35 via HA Assist `/api/conversation/process` in **voice mode**, on an RTX 3060 Ti (8 GB) running Ollama. 29 read-only prompts covering clock/sun, room sensors, "which lights are on", inventory, climate, local + named-place weather, web search, bare-noun sanity, and a media question.
 
-| Model | Ollama tag | Weights | Pass rate | Avg latency | Hallucinated answers | Notes |
-|-------|-----------|---------|-----------|-------------|----------------------|-------|
-| **Qwen3 8B** | `qwen3:8b` | ~5.2 GB | **86.3 %** (44/51) | **1.8 s** | 0 | **Top recommendation.** Most consistent latency, perfect on weather and web, strong on lights. Reasoning model — the plugin sends `think: false` automatically. |
-| **Qwen2.5 7B** | `qwen2.5:7b` | ~4.7 GB | **88.2 %** (45/51) | 2.6 s | 0 | Highest raw score, higher tail latency on multi-step tool loops. Occasionally leaks tool-call syntax into replies; Qwen3 never did. |
-| Mistral 7B | `mistral:7b` | ~4.1 GB | 82.4 % (42/51) | 1.3 s | 1 | Fastest, but fabricated a weather answer instead of calling a tool — a hard fail for an HA agent. |
-| Hermes 3 8B | `hermes3:8b` | ~4.7 GB | 74.5 % (38/51) | 2.1 s | 1 | Weak on weather and entity resolution. Not recommended for HA. |
+Latency below is the **median over the ~20 LLM-driven turns** per run — the other 9 prompts are answered by the deterministic shortcut layer in ~10 ms regardless of model, so they don't discriminate. `minimax-m2.7` runs via Ollama Cloud and is included only as an accuracy ceiling, not as a local option.
+
+| Model | Size | Pass rate | Median latency | Notes |
+|-------|------|-----------|----------------|-------|
+| **qwen3:8b** | 5.2 GB | **86 %** (25/29) | **3.3 s** | **Top local pick.** Reliable, no fabrications, decent latency — beat every other local model here on accuracy *and* speed. Reasoning model; the plugin sends `think: false` automatically. |
+| qwen3.5:9b | 6.6 GB | 82 % (24/29) | 7.4 s | Capable but noticeably slower (9B) and missed a couple of weather/state prompts. Reasonable if you specifically want the newer model and can spare the latency. |
+| qwen3-abliterated:8b | 5.0 GB | 86 % (25/29) | 2.5 s | Fast and scores well, but fabricated a "Berlin events" answer to "what's playing?" — the confident-hallucination failure you least want in a home agent. Not recommended despite the score. |
+| hermes3:8b | 4.7 GB | 68 % (20/29) | 2.2 s | Fast but weak on weather, multi-light state, and climate. Not recommended. |
+| gemma4:e2b | Gemma 3n E2B (~2B active) | 68 % (20/29) | **0.9 s** | Fastest by far and impressively coherent for its size, but weak on multi-step tool loops. A curiosity for very constrained setups, not for reliable control. |
+| _minimax-m2.7:cloud_ | cloud (reference) | **93 %** (27/29) | 10.4 s | Accuracy ceiling — gave the only complete thermostat answer (setpoint + current temp). Cloud round-trip latency (tail ~40 s); not a local option. |
 
 > **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB. A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
 >
 > **Minimum recommended context: 16384** (the integration default). Multi-step tool loops routinely emit 6–10 K of intermediate tokens; 8192 starves them. Avoid values above ~24 000 on an 8 GB card. Setting a context window larger than the model supports is now rejected in Advanced settings (Ollama).
 
-### 24 GB VRAM (e.g. RTX 3090, RTX 4090)
-
-| Model | Size | Tool calling | Notes |
-|-------|------|-------------|-------|
-| **ministral-3:14b** | ~9 GB | ⭐⭐⭐⭐⭐ | Best local choice — decisive tool calls, natural responses |
-| devstral-small-2:latest | ~15 GB | ⭐⭐⭐⭐⭐ | Excellent, coding-focused, slightly larger |
-| qwen2.5:32b | ~20 GB | ⭐⭐⭐⭐ | Very capable, requires more VRAM |
-| gemma4:27b | ~18 GB | ⭐⭐⭐ | High language quality, less reliable tool calling |
-
 ### Recommended configuration
 
 | Setting | Value |
 |---------|-------|
-| Model | `qwen3:8b` (or `qwen2.5:7b`) |
+| Model | `qwen3:8b` (top pick; `qwen3.5:9b` if you want the newer model and can spare the latency) |
 | Temperature | 0.2 |
 | top_p | 0.4 |
 | Context Window | **16384** |
