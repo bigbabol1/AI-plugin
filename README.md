@@ -108,6 +108,20 @@ data:
 
 With a `structure` schema, the model is instructed to return matching JSON; code fences are tolerated and invalid JSON raises a proper error instead of returning garbage.
 
+## Long-term memory
+
+The assistant remembers facts across conversations — and across Home Assistant restarts — through three tools it calls from natural speech:
+
+- *"Remember that I take my coffee black."* → `remember`
+- *"What's my name?"* / *"What did I tell you about my coffee?"* → answered from memory
+- *"Forget that I take my coffee black."* → `forget`
+
+**Recall is usually free.** At the start of every turn the plugin loads the user's saved facts into a `[USER FACTS]` block in the prompt (a late, cache-stable system message, so it doesn't break Ollama's prefix cache). The model answers "what's my…" questions straight from that block with no tool round-trip — which matters on small local models, where each tool call is a full extra generation pass. The `recall` tool is only a fallback for when the block is absent.
+
+**Per-user and persistent.** Facts live as plain JSON at `<config>/.ai_plugin_memory_<user_id>.json` — one file per Home Assistant user, so users don't see each other's facts (unauthenticated turns use `…_anonymous.json`). The files are readable text in your config directory: don't ask it to remember secrets.
+
+**`forget` won't delete the wrong fact.** It prefers removing by the fact's number in `[USER FACTS]` (language-independent), falling back to a fuzzy substring match. Ask it to forget something that isn't stored and it says so rather than guessing an index and deleting a neighbour — with a cross-language check so an English request can still clear the matching German-stored fact.
+
 ## Conversation continuity (`Listen for follow-up after voice replies`)
 
 When the option is on (default), every non-close-phrase reply returns `continue_conversation=True` — HA's standard mechanism. Voice satellites with their own speaker (HA Voice PE, standard ESPHome satellites) re-arm the microphone after the reply, so you can keep talking without the wake word. A close-phrase detector (`thanks`, `bye`, `das war's`, …) ends the loop cleanly.
@@ -167,6 +181,8 @@ Default is **DuckDuckGo** — zero config, works out of the box. For better qual
 | Brave Search | Free tier / paid | [api.search.brave.com](https://api.search.brave.com/app/) | Reliable |
 | Tavily | Free tier / paid | [tavily.com](https://tavily.com/) | Best quality, AI-optimized |
 | SearXNG | Free (self-hosted) | none — instance URL | Full control, no third-party traffic |
+
+For reading one specific page (rather than searching), the model has a separate `browse_url` tool. Note it fetches through **Jina Reader** (`https://r.jina.ai/`) to convert the page to clean text, so the target URL is sent to that third-party service — the only outbound hop in an otherwise local-first integration besides your chosen search backend.
 
 ## MCP Servers
 
