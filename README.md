@@ -40,6 +40,8 @@ Latency below is the **median over the ~20 LLM-driven turns** per run — the ot
 | gemma4:e2b | Gemma 3n E2B (~2B active) | 69 % (20/29) | **1.7 s** | Fastest by far and impressively coherent for its size, but weak on multi-step tool loops (missed weather, climate, inventory). A curiosity for very constrained setups, not for reliable control. |
 | _qwen3.5:397b-cloud_ | cloud (reference) | **100 %** (29/29) | 6.2 s | Accuracy ceiling — and every pass was honest (it declined Tokyo weather rather than inventing it). Cloud round-trip; not a local option. |
 
+**What the pass rate hides:** the local models cluster tightly on score (86–93 %), but they fail in opposite ways. `qwen3.5:9b` and the cloud reference decline gracefully when live data isn't there ("I couldn't find that in the search results"); `qwen3:8b` and the abliterated model instead emit confident fictions — a concert that isn't happening, weather they never fetched. For an assistant that speaks its answers aloud, an honest miss is recoverable and a fabrication is not — so the recommendation follows the failure *mode*, not the raw percentage. Read the notes column, not just the number.
+
 > **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB. A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
 >
 > **Minimum recommended context: 16384** (the integration default). Multi-step tool loops routinely emit 6–10 K of intermediate tokens; 8192 starves them. Avoid values above ~24 000 on an 8 GB card. Setting a context window larger than the model supports is now rejected in Advanced settings (Ollama).
