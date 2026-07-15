@@ -27,18 +27,18 @@ The most critical factor for reliable entity control is **tool calling quality**
 
 ### Benchmark (8 GB VRAM)
 
-Bench-tested July 2026 against plugin v0.9.35 via HA Assist `/api/conversation/process` in **voice mode**, on an RTX 3060 Ti (8 GB) running Ollama. 29 read-only prompts covering clock/sun, room sensors, "which lights are on", inventory, climate, local + named-place weather, web search, bare-noun sanity, and a media question.
+Bench-tested July 2026 against plugin v0.9.35 via HA Assist `/api/conversation/process` in **voice mode**, on an RTX 3060 Ti (8 GB) running Ollama. 29 read-only prompts covering clock/sun, room sensors, "which lights are on", inventory, climate, local + named-place weather, web search, bare-noun sanity, and a media question. Pass counts alone hide *how* a model fails, so the notes distinguish honest misses from confident fabrications — the distinction that matters most in a home agent.
 
-Latency below is the **median over the ~20 LLM-driven turns** per run — the other 9 prompts are answered by the deterministic shortcut layer in ~10 ms regardless of model, so they don't discriminate. `minimax-m2.7` runs via Ollama Cloud and is included only as an accuracy ceiling, not as a local option.
+Latency below is the **median over the ~20 LLM-driven turns** per run — the other 9 prompts are answered by the deterministic shortcut layer in ~10 ms regardless of model, so they don't discriminate. `qwen3.5:397b-cloud` runs via Ollama Cloud and is included only as an accuracy ceiling, not as a local option.
 
 | Model | Size | Pass rate | Median latency | Notes |
 |-------|------|-----------|----------------|-------|
-| **qwen3:8b** | 5.2 GB | **86 %** (25/29) | **3.3 s** | **Top local pick.** Reliable, no fabrications, decent latency — beat every other local model here on accuracy *and* speed. Reasoning model; the plugin sends `think: false` automatically. |
-| qwen3.5:9b | 6.6 GB | 82 % (24/29) | 7.4 s | Capable but noticeably slower (9B) and missed a couple of weather/state prompts. Reasonable if you specifically want the newer model and can spare the latency. |
-| qwen3-abliterated:8b | 5.0 GB | 86 % (25/29) | 2.5 s | Fast and scores well, but fabricated a "Berlin events" answer to "what's playing?" — the confident-hallucination failure you least want in a home agent. Not recommended despite the score. |
-| hermes3:8b | 4.7 GB | 68 % (20/29) | 2.2 s | Fast but weak on weather, multi-light state, and climate. Not recommended. |
-| gemma4:e2b | Gemma 3n E2B (~2B active) | 68 % (20/29) | **0.9 s** | Fastest by far and impressively coherent for its size, but weak on multi-step tool loops. A curiosity for very constrained setups, not for reliable control. |
-| _minimax-m2.7:cloud_ | cloud (reference) | **93 %** (27/29) | 10.4 s | Accuracy ceiling — gave the only complete thermostat answer (setpoint + current temp). Cloud round-trip latency (tail ~40 s); not a local option. |
+| **qwen3.5:9b** | 6.6 GB | **93 %** (27/29) | 4.3 s | **Top local pick.** Highest local accuracy, and decisively: its only two misses were *honest* ("I couldn't find the weather in those search results"), never a fabrication. Answered the thermostat (setpoint + heating state), whole-home temperatures, and "what's playing" correctly where the 8Bs did not. ~1.5 s slower than the 8Bs — worth it. Reasoning model; the plugin sends `think: false` automatically. |
+| qwen3:8b | 5.2 GB | 86 % (25/29) | **2.5 s** | Faster, but **fabricated a concert** ("Rolling Stones at the Berlin Olympic Stadium") in answer to *"what's playing?"*, and bailed with "couldn't produce an answer" on climate and temperature. Fine for lower-latency, actuation-heavy use; less trustworthy on open questions. |
+| qwen3-abliterated:8b | 5.0 GB | 90 % (26/29) | **1.8 s** | Fastest of the capable models and scores well — but the score is **inflated by confabulation**: it invented specific Tokyo weather that the honest models declined to state. Also safety-ablated. Not recommended despite the number. |
+| mistral:7b | 4.4 GB | 86 % (25/29) | 2.4 s | Solid on actuation, but couldn't name the weekday for "what day is it?" and missed a German state query. Weaker on dates and non-English. |
+| gemma4:e2b | Gemma 3n E2B (~2B active) | 69 % (20/29) | **1.7 s** | Fastest by far and impressively coherent for its size, but weak on multi-step tool loops (missed weather, climate, inventory). A curiosity for very constrained setups, not for reliable control. |
+| _qwen3.5:397b-cloud_ | cloud (reference) | **100 %** (29/29) | 6.2 s | Accuracy ceiling — and every pass was honest (it declined Tokyo weather rather than inventing it). Cloud round-trip; not a local option. |
 
 > **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB. A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
 >
@@ -48,7 +48,7 @@ Latency below is the **median over the ~20 LLM-driven turns** per run — the ot
 
 | Setting | Value |
 |---------|-------|
-| Model | `qwen3:8b` (top pick; `qwen3.5:9b` if you want the newer model and can spare the latency) |
+| Model | `qwen3.5:9b` (top pick — best accuracy, and its failures are honest; `qwen3:8b` for ~2× lower latency if you mostly do device control) |
 | Temperature | 0.2 |
 | top_p | 0.4 |
 | Context Window | **16384** |
