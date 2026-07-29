@@ -54,8 +54,12 @@ DEFAULT_SELF_ECHO_FILTER = True
 # An utterance must have at least this many tokens to be considered echo —
 # short commands ("yes", "stop", "danke") are never filtered.
 ECHO_MIN_TOKENS = 4
-# Fraction of the utterance's tokens that must appear in a recent reply.
-ECHO_MATCH_THRESHOLD = 0.8
+# Fraction of the utterance's word BIGRAMS that must appear in a recent
+# reply. Order-preserving on purpose: an acoustic echo replays the reply's
+# word sequence, while a real command reusing the same words reorders them
+# ("turn the living room light on" after "The living room light is on") —
+# bag-of-words overlap swallowed exactly those commands.
+ECHO_MATCH_THRESHOLD = 0.7
 CONF_SUMMARIZATION_ENABLED = "summarization_enabled"
 CONF_VOICE_MODE = "voice_mode"
 CONF_CONTINUE_CONVERSATION = "continue_conversation"
@@ -285,6 +289,8 @@ SYSTEM_PROMPT_DEFAULT = (
     "    'previous' / 'go back' → media_command(command='previous')\n"
     "    'resume' / 'unpause' / 'continue' → media_command(command='resume')\n"
     "    'stop' / 'stop the music' → media_command(command='stop')\n"
+    "    'louder' / 'lauter' → media_command(command='volume_up'); 'quieter' / 'leiser' → media_command(command='volume_down')\n"
+    "    'volume to 40 percent' → media_command(command='volume_set', level=40); 'mute' / 'stumm' → media_command(command='mute')\n"
     "    'what is playing' / 'what song is this' / 'was läuft' → media_command(command='status') — read-only; then TELL the user what it returned\n"
     "  Pass area only when the user names a room ('pause hobby room'). Otherwise omit area — the plugin auto-targets whatever is actually playing right now.\n"
     "- After play_music or a playback-CHANGING media_command: the playback change IS the confirmation. Reply with an empty string so the satellite does not speak over the speaker.\n"
@@ -390,7 +396,7 @@ SYSTEM_PROMPT_VOICE = (
     "Music playback (TOOL CALLS REQUIRED, TTS suppression after):\n"
     "- ANY playback control utterance is a tool action. You MUST call the tool. Never reply with prose alone — silent prose = nothing happened.\n"
     "- 'play music in <area>', 'play Enya in the kitchen': CALL play_music(query, area). radio_mode is auto-set for single tracks so the queue continues after the song ends.\n"
-    "- 'pause' → media_command('pause'). 'next' / 'skip' → media_command('next'). 'previous' → media_command('previous'). 'resume' / 'continue' → media_command('resume'). 'stop' → media_command('stop'). 'what is playing' → media_command('status') (read-only report). Pass area only when user names a room.\n"
+    "- 'pause' → media_command('pause'). 'next' / 'skip' → media_command('next'). 'previous' → media_command('previous'). 'resume' / 'continue' → media_command('resume'). 'stop' → media_command('stop'). 'louder'/'quieter' → media_command('volume_up'/'volume_down'). 'volume to N' → media_command('volume_set', level=N). 'mute'/'unmute' → media_command('mute'/'unmute'). 'what is playing' → media_command('status') (read-only report). Pass area only when user names a room.\n"
     "- After play_music or a playback-CHANGING media_command, return an EMPTY reply. Audio is the confirmation.\n"
     "- DO speak (one short sentence) for media QUESTIONS — answer 'what is playing' from the media_command('status') result — or when tool result starts with '['.\n"
     "- Volume and mute confirm in one short sentence."

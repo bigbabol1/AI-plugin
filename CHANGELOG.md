@@ -4,6 +4,24 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.39 — Review hardening III: the rest of the audit
+
+The remaining findings from the 2026-07-29 adversarial review.
+
+**Fixed:**
+- **Self-echo filter is order-aware.** Bag-of-words overlap swallowed real commands that reuse the reply's vocabulary ("turn the living room light on" right after *"The living room light is on."* was dropped as echo). Matching is now on word *bigrams* — an acoustic echo replays the reply's word sequence, a reordered command doesn't. Truncated echo fragments and echoes with an STT error are still caught; repeat-questions now pass through.
+- **Omitted area can't silently empty the whole home.** From text Assist/REST (no satellite to infer a room from), `set_area_state` with no area swept every area, bypassing the explicit-"all" guard. It now requires the user to have actually said "all/everything/whole house" — otherwise the model gets the same refusal + specific-device recovery as an explicit `area='all'`.
+- **`get_entity` prefers exposed matches.** An unexposed diagnostic entity that happened to match first no longer shadows an exposed entity with the same name fragment; "exists but is not exposed" is only reported when *no* exposed candidate matches.
+- **`list_entities` accepts area aliases** like every other area resolver, and an unknown area now returns "Unknown area … Try list_areas." instead of a misleading empty result.
+- **`search_entities` marks truncation** ("more exist — narrow the query") instead of presenting a clipped list as exhaustive.
+- **Auto-recovery queries no longer mangle device nouns.** Filler stripping used raw substrings, so " an" ate the head of "Anlage" (query became "lage" and found nothing); it is word-bounded now.
+
+**New:**
+- **`media_command` volume family**: `volume_up`, `volume_down`, `volume_set` (with `level` 0–100), `mute`, `unmute` — until now volume only worked when the deterministic shortcut regex matched; rephrasings left the model with no valid tool. Prompts updated with the mappings.
+
+**Changed:**
+- `hvac_action` replaces the dead `hvac_mode` in the attribute surface (climate entities never expose `hvac_mode`; the current activity lives in `hvac_action`).
+
 ## v0.9.38 — Review hardening II: retries, timers, sweeps, shortcut precision
 
 **Fixed:**

@@ -339,8 +339,11 @@ async def test_set_area_state_sweep_all_keyword(patched_registries) -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_area_state_sweep_area_omitted(patched_registries) -> None:
-    """Omitted area also sweeps every area."""
+async def test_set_area_state_sweep_area_omitted_refused_without_all(
+    patched_registries,
+) -> None:
+    """Omitted area + no device + no explicit 'all' phrase must NOT sweep
+    the whole home (text Assist / REST would empty the flat silently)."""
     areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
     entities = [
         _entity("light.ceiling", area_id="a_kit"),
@@ -353,8 +356,32 @@ async def test_set_area_state_sweep_area_omitted(patched_registries) -> None:
     out = await reg.call_tool(
         "set_area_state",
         {"domain": "light", "action": "turn_on"},
+        user_message="turn on the lights",
     )
-    assert "turn_on 2 light(s) in all areas" in out
+    assert out.startswith("[set_area_state whole-home sweep refused")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_area_state_sweep_area_omitted_with_all_phrase(
+    patched_registries,
+) -> None:
+    """Omitted area sweeps every area when the user explicitly said so."""
+    areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
+    entities = [
+        _entity("light.ceiling", area_id="a_kit"),
+        _entity("light.bedroom_lamp", area_id="a_bed"),
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"domain": "light", "action": "turn_off"},
+        user_message="turn everything off",
+    )
+    assert "turn_off 2 light(s) in all areas" in out
 
 
 @pytest.mark.asyncio
@@ -632,3 +659,158 @@ def test_user_said_all_still_rejects_specific() -> None:
 
     for phrase in ("turn off the kitchen light", "mach das licht im bad aus"):
         assert not _USER_SAID_ALL_RE.search(phrase), phrase
+
+
+# ── media_command volume/mute (tool path, v0.9.39) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_media_command_volume_set_with_level(patched_registries) -> None:
+    entities = [_entity("media_player.kitchen")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = {
+        "media_player.kitchen": _media_state("media_player.kitchen", "playing"),
+    }.get
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "volume_set", "level": 40})
+    assert out.startswith("OK — volume_set")
+    args, kwargs = hass.services.async_call.await_args
+    assert args[1] == "volume_set"
+    assert args[2] == {"volume_level": 0.4}
+
+
+@pytest.mark.asyncio
+async def test_media_command_volume_set_missing_level(patched_registries) -> None:
+    entities = [_entity("media_player.kitchen")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = {
+        "media_player.kitchen": _media_state("media_player.kitchen", "playing"),
+    }.get
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "volume_set"})
+    assert out.startswith("[volume_set needs level")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_media_command_mute_targets_on_players(patched_registries) -> None:
+    """Mute applies to players merely 'on' (a TV), not just playing ones."""
+    entities = [_entity("media_player.tv")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = {
+        "media_player.tv": _media_state("media_player.tv", "on"),
+    }.get
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "mute"})
+    assert out.startswith("OK — mute")
+    args, kwargs = hass.services.async_call.await_args
+    assert args[1] == "volume_mute"
+    assert args[2] == {"is_volume_muted": True}
+
+
+# ── list_entities alias-aware area filter ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_entities_area_alias_resolves(patched_registries) -> None:
+    areas = [_area("a_liv", "Living room", aliases=("wohnzimmer",))]
+    entities = [_entity("light.sofa", area_id="a_liv")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = lambda eid: SimpleNamespace(
+        state="on", attributes={"friendly_name": "Sofa"}
+    )
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("list_entities", {"area": "wohnzimmer"})
+    assert "light.sofa" in out
+
+
+@pytest.mark.asyncio
+async def test_list_entities_unknown_area_error(patched_registries) -> None:
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[_area("a_kit", "Kitchen")], entities=[])
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("list_entities", {"area": "garden"})
+    assert out.startswith("Unknown area 'garden'")
+
+
+# ── get_entity exposure preference ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_entity_exposed_match_beats_unexposed_shadow(
+    patched_registries, monkeypatch
+) -> None:
+    """An unexposed diagnostic entity matching first must not shadow the
+    exposed entity with the same name fragment."""
+    import custom_components.ai_plugin.tools.ha_local as hl
+
+    entities = [
+        _entity("sensor.chip_temperature", name="chip temperature"),
+        _entity("sensor.bedroom_temperature", name="bedroom temperature"),
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = lambda eid: SimpleNamespace(
+        state="21", attributes={"friendly_name": eid.split(".")[1]}
+    )
+    reg = HALocalToolRegistry(hass)
+    monkeypatch.setattr(
+        hl, "_ha_should_expose",
+        lambda h, a, eid: eid != "sensor.chip_temperature",
+    )
+    monkeypatch.setattr(hl, "_EXPOSURE_API_AVAILABLE", True)
+
+    out = await reg.call_tool("get_entity", {"name_or_id": "temperature"})
+    assert "sensor.bedroom_temperature" in out
+    assert "not exposed" not in out
+
+
+@pytest.mark.asyncio
+async def test_get_entity_only_unexposed_match_reports_it(
+    patched_registries, monkeypatch
+) -> None:
+    import custom_components.ai_plugin.tools.ha_local as hl
+
+    entities = [_entity("sensor.chip_temperature", name="chip temperature")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = lambda eid: SimpleNamespace(
+        state="21", attributes={}
+    )
+    reg = HALocalToolRegistry(hass)
+    monkeypatch.setattr(hl, "_ha_should_expose", lambda h, a, eid: False)
+    monkeypatch.setattr(hl, "_EXPOSURE_API_AVAILABLE", True)
+
+    out = await reg.call_tool("get_entity", {"name_or_id": "temperature"})
+    assert "not exposed" in out
+
+
+# ── search_entities truncation marker ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_search_entities_truncation_marker(patched_registries) -> None:
+    entities = [_entity(f"light.lamp_{i}", name=f"lamp {i}") for i in range(6)]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = lambda eid: SimpleNamespace(
+        state="on", attributes={"friendly_name": eid}
+    )
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("search_entities", {"query": "lamp", "limit": 3})
+    assert "3 match(es)" in out
+    assert "more exist" in out
+
+    out_all = await reg.call_tool("search_entities", {"query": "lamp", "limit": 10})
+    assert "6 match(es)" in out_all
+    assert "more exist" not in out_all

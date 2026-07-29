@@ -92,3 +92,35 @@ async def test_filter_off_lets_echo_through() -> None:
     ent._orchestrator.async_process.reset_mock()
     await ent.async_process(_voice_input("it is sunny and twenty degrees outside"))
     ent._orchestrator.async_process.assert_awaited_once()  # filter disabled → processed
+
+
+def test_reordered_command_not_filtered() -> None:
+    """A real command reusing the reply's words in a different order must
+    pass — this was the bag-of-words false positive."""
+    from custom_components.ai_plugin.conversation import _is_self_echo
+
+    reply = "The living room light is on."
+    assert _is_self_echo("turn the living room light on", [reply]) is False
+
+
+def test_repeat_question_not_filtered() -> None:
+    from custom_components.ai_plugin.conversation import _is_self_echo
+
+    reply = "The living room light is on."
+    assert _is_self_echo("is the living room light on", [reply]) is False
+
+
+def test_truncated_echo_fragment_still_dropped() -> None:
+    """A contiguous fragment of the reply (mic caught the tail) is echo."""
+    from custom_components.ai_plugin.conversation import _is_self_echo
+
+    reply = "The living room light is on and the blinds are closed."
+    assert _is_self_echo("light is on and the blinds are closed", [reply]) is True
+
+
+def test_echo_with_one_stt_error_still_dropped() -> None:
+    from custom_components.ai_plugin.conversation import _is_self_echo
+
+    reply = "The temperature in the bedroom is twenty one degrees right now."
+    stt = "the temperature in the bedroom is twenty two degrees right now"
+    assert _is_self_echo(stt, [reply]) is True

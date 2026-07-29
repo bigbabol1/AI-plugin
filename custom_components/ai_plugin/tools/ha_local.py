@@ -61,7 +61,7 @@ _INTERESTING_ATTRS = (
     "media_title",
     "media_artist",
     "volume_level",
-    "hvac_mode",
+    "hvac_action",
     "preset_mode",
     "battery_level",
     "humidity",
@@ -358,31 +358,48 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "media_command",
             "description": (
                 "Control playback or report it: pause, resume, skip to next "
-                "track, go back to previous track, stop, or status. Examples: "
-                "'pause' / 'pause the music' → media_command('pause'). 'next "
-                "track' / 'skip this song' → media_command('next'). "
-                "'previous' → media_command('previous'). 'resume' / "
-                "'continue' / 'weiter' → media_command('resume'). 'stop the "
-                "music' → media_command('stop'). 'what's playing?' / 'was "
-                "läuft?' / 'what song is this?' → media_command('status'). "
-                "Pass area only when the user names a room ('pause hobby "
-                "room', 'next track in the kitchen'); otherwise the plugin "
-                "auto-targets whichever media_player is currently in the "
-                "matching state. For playback CHANGES the audio change IS "
-                "the confirmation — reply with an empty string. For 'status' "
-                "DO answer the user with what the tool returns."
+                "track, go back to previous track, stop, volume, mute, or "
+                "status. Examples: 'pause' / 'pause the music' → "
+                "media_command('pause'). 'next track' / 'skip this song' → "
+                "media_command('next'). 'previous' → media_command"
+                "('previous'). 'resume' / 'continue' / 'weiter' → "
+                "media_command('resume'). 'stop the music' → media_command"
+                "('stop'). 'louder' / 'lauter' → media_command('volume_up'). "
+                "'quieter' / 'leiser' → media_command('volume_down'). "
+                "'volume to 40 percent' → media_command('volume_set', "
+                "level=40). 'mute' / 'stumm' → media_command('mute'). "
+                "'what's playing?' / 'was läuft?' / 'what song is this?' → "
+                "media_command('status'). Pass area only when the user names "
+                "a room ('pause hobby room', 'next track in the kitchen'); "
+                "otherwise the plugin auto-targets whichever media_player is "
+                "currently in the matching state. For playback CHANGES the "
+                "audio change IS the confirmation — reply with an empty "
+                "string. For 'status' DO answer the user with what the tool "
+                "returns."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "enum": ["pause", "resume", "next", "previous", "stop", "status"],
+                        "enum": [
+                            "pause", "resume", "next", "previous", "stop",
+                            "volume_up", "volume_down", "volume_set",
+                            "mute", "unmute", "status",
+                        ],
                         "description": (
                             "Playback action. 'resume' un-pauses; 'next' / "
                             "'previous' move within the current queue; 'stop' "
-                            "halts and clears; 'status' is read-only and "
-                            "reports what is currently playing."
+                            "halts and clears; 'volume_set' needs level; "
+                            "'status' is read-only and reports what is "
+                            "currently playing."
+                        ),
+                    },
+                    "level": {
+                        "type": "integer",
+                        "description": (
+                            "Target volume percent 0-100. Required for "
+                            "'volume_set', ignored otherwise."
                         ),
                     },
                     "area": {
@@ -649,6 +666,11 @@ _MEDIA_COMMAND_SERVICES = {
     "next": "media_next_track",
     "previous": "media_previous_track",
     "stop": "media_stop",
+    "volume_up": "volume_up",
+    "volume_down": "volume_down",
+    "volume_set": "volume_set",
+    "mute": "volume_mute",
+    "unmute": "volume_mute",
 }
 
 
@@ -802,7 +824,12 @@ class HALocalToolRegistry:
                 # off everything in the flat (lights + thermostats + fans).
                 # Reject area='all' / sweep keywords unless the user
                 # explicitly said 'all'/'every'/'whole house'/etc.
-                if area_val.lower() in _SWEEP_ALL_KEYWORDS:
+                # An OMITTED area with no satellite device to fall back to
+                # (text Assist / REST) would sweep the whole home through the
+                # same code path — hold it to the same explicit-phrase bar.
+                if area_val.lower() in _SWEEP_ALL_KEYWORDS or (
+                    not area_val and not device_id
+                ):
                     if not _USER_SAID_ALL_RE.search(user_message or ""):
                         _LOGGER.warning(
                             "AI Plugin: rejected set_area_state(area=%r) — "
@@ -825,18 +852,21 @@ class HALocalToolRegistry:
                         )
                         if has_hass_actuators:
                             return (
-                                "[set_area_state(area='all') refused — user did "
-                                "not say 'all', 'every', or 'whole house'. "
+                                "[set_area_state whole-home sweep refused — "
+                                "user did not say 'all', 'everything', or "
+                                "'whole house', and no room could be inferred. "
                                 "Specific-device recovery results below. CALL "
                                 "HassTurnOn/HassTurnOff with the matching "
                                 "entity_id, preferring the one in the caller's "
-                                "area.]\n" + recovery
+                                "area — or pass the room the user named.]\n"
+                                + recovery
                             )
                         return (
-                            "[set_area_state(area='all') refused — user did "
-                            "not say 'all', 'every', or 'whole house'. "
-                            "Direct single-device tools are NOT available in "
-                            "this setup. Tell the user which device you found "
+                            "[set_area_state whole-home sweep refused — user "
+                            "did not say 'all', 'everything', or 'whole "
+                            "house', and no room could be inferred. Direct "
+                            "single-device tools are NOT available in this "
+                            "setup. Tell the user which device you found "
                             "(below) and that you cannot switch it directly.]\n"
                             + recovery
                         )
@@ -861,6 +891,7 @@ class HALocalToolRegistry:
                     command=_s(arguments.get("command")).strip().lower(),
                     area=_s(arguments.get("area")).strip() or None,
                     exposed_only=exposed_only,
+                    level=arguments.get("level"),
                 )
             return f"[Unknown local tool: {name!r}]"
         except Exception as exc:  # noqa: BLE001
@@ -888,20 +919,28 @@ class HALocalToolRegistry:
         dev_reg = dr.async_get(hass)
         area_reg = ar.async_get(hass)
 
-        target_area = area.lower() if area else None
         target_domain = domain.lower().strip(".") if domain else None
         target_state = state.lower().strip() if state else None
 
-        def _area_name(entry) -> str | None:
+        # Alias-aware, like every other area resolver in this module —
+        # list_entities(area='wohnzimmer') must work when 'wohnzimmer' is
+        # an alias of "Living room".
+        target_area_entry = None
+        if area:
+            target_area_entry = self._resolve_area(area)
+            if target_area_entry is None:
+                return f"Unknown area {area!r}. Try list_areas."
+
+        def _area_of(entry) -> tuple[str | None, str | None]:
             area_id = entry.area_id
             if not area_id and entry.device_id:
                 dev = dev_reg.async_get(entry.device_id)
                 if dev:
                     area_id = dev.area_id
             if not area_id:
-                return None
+                return None, None
             a = area_reg.async_get_area(area_id)
-            return _s(a.name) if a else None
+            return area_id, (_s(a.name) if a else None)
 
         rows: list[tuple[str, str, str, str]] = []
         for entity_id, entry in ent_reg.entities.items():
@@ -909,10 +948,9 @@ class HALocalToolRegistry:
                 continue
             if exposed_only and not self._is_exposed(entity_id):
                 continue
-            a_name = _area_name(entry)
-            if target_area:
-                if not a_name or a_name.lower() != target_area:
-                    continue
+            a_id, a_name = _area_of(entry)
+            if target_area_entry is not None and a_id != target_area_entry.id:
+                continue
             ent_state = hass.states.get(entity_id)
             state_val = ent_state.state if ent_state else "unknown"
             if target_state and state_val.lower() != target_state:
@@ -959,10 +997,14 @@ class HALocalToolRegistry:
             return _s(a.name) if a else None
 
         entry = None
+        shadowed_id: str | None = None
         if "." in name_or_id:
             entry = ent_reg.async_get(name_or_id)
         if entry is None:
             needle = name_or_id.strip().lower()
+            # Prefer EXPOSED matches: registry order is arbitrary, and an
+            # unexposed diagnostic entity matching first must not shadow an
+            # exposed entity carrying the same name fragment.
             for eid, e in ent_reg.entities.items():
                 candidates = [_s(e.name), _s(e.original_name)]
                 candidates.extend(_s(a) for a in (e.aliases or ()))
@@ -970,6 +1012,9 @@ class HALocalToolRegistry:
                 if st:
                     candidates.append(_s(st.attributes.get("friendly_name")))
                 if any(c and c.strip().lower() == needle for c in candidates):
+                    if exposed_only and not self._is_exposed(eid):
+                        shadowed_id = shadowed_id or eid
+                        continue
                     entry = e
                     break
             if entry is None:
@@ -980,9 +1025,18 @@ class HALocalToolRegistry:
                     if st:
                         candidates.append(_s(st.attributes.get("friendly_name")))
                     if any(c and needle in c.lower() for c in candidates):
+                        if exposed_only and not self._is_exposed(eid):
+                            shadowed_id = shadowed_id or eid
+                            continue
                         entry = e
                         break
         if entry is None:
+            if shadowed_id is not None:
+                return (
+                    f"Entity {shadowed_id!r} exists but is not exposed to the "
+                    "conversation assistant. Use exposed_only=false if you "
+                    "need to inspect it."
+                )
             return f"No entity matches {name_or_id!r}. Try search_entities."
 
         entity_id = entry.entity_id
@@ -1078,15 +1132,17 @@ class HALocalToolRegistry:
 
         Returns a formatted hit list ready to feed back to the model.
         """
-        # Strip filler: "Turn off the air purifier." → "air purifier"
+        # Strip filler: "Turn off the air purifier." → "air purifier".
+        # Word-bounded on purpose: raw substring strips mangled device
+        # nouns (" an" ate the head of "Anlage" → query 'lage').
         msg = (user_message or "").lower()
-        for verb in ("turn on", "turn off", "switch on", "switch off",
-                     "toggle", "schalte", "mach"):
-            msg = msg.replace(verb, " ")
-        for stop in (" the ", " a ", " an ", " der ", " die ", " das ",
-                     " den ", " ein ", " eine ", " on", " off", " an", " aus"):
-            msg = msg.replace(stop, " ")
-        query = " ".join(msg.split()).strip(".? ")
+        msg = re.sub(
+            r"\b(?:turn|switch|toggle|schalte?|mach|on|off|an|aus|ein|"
+            r"the|a|der|die|das|den|eine?|bitte|please)\b",
+            " ",
+            msg,
+        )
+        query = " ".join(msg.split()).strip(".?! ")
         if not query:
             query = (user_message or "").strip()
 
@@ -1176,13 +1232,18 @@ class HALocalToolRegistry:
                 friendly = _s(state.attributes.get("friendly_name")) if state else ""
                 friendly = friendly or _s(entry.name) or _s(entry.original_name) or entity_id
                 hits.append((entity_id, friendly, _area_name(entry) or "-"))
-                if len(hits) >= limit:
+                if len(hits) > limit:
                     break
 
         if not hits:
             return f"No match for {query!r}."
+        truncated = len(hits) > limit
+        hits = hits[:limit]
         lines = [f"- {eid} — {fn} @ {a}" for eid, fn, a in hits]
-        return _cap(lines, header=f"{len(hits)} match(es) for {query!r}:\n")
+        header = f"{len(hits)} match(es) for {query!r}"
+        if truncated:
+            header += " (more exist — narrow the query or raise limit)"
+        return _cap(lines, header=header + ":\n")
 
     async def _set_area_state(
         self,
@@ -1199,8 +1260,10 @@ class HALocalToolRegistry:
         - Explicit wildcard ('all', 'every', 'everywhere', '*', etc.) →
           sweep every area.
         - Empty/None area + voice satellite device_id → caller's room.
-        - Empty/None area + no device_id → sweep every area (text Assist
-          / REST API: assume whole-home).
+        - Empty/None area + no device_id → sweep every area. call_tool
+          only lets this through when the user explicitly said
+          'all'/'everything'/'whole house' — an omitted area alone must
+          not empty the whole home from a text chat.
         """
         domain = domain.lower().strip(".")
         action = action.lower()
@@ -1516,8 +1579,9 @@ class HALocalToolRegistry:
         command: str,
         area: str | None,
         exposed_only: bool = True,
+        level: int | None = None,
     ) -> str:
-        """Pause, resume, skip, or stop playback.
+        """Pause, resume, skip, stop, mute, or change volume.
 
         With ``area``: targets media_players in that area, preferring those
         already in a state the command applies to (playing for pause/next/
@@ -1537,6 +1601,18 @@ class HALocalToolRegistry:
             allowed = ", ".join(sorted([*_MEDIA_COMMAND_SERVICES, "status"]))
             return f"Unknown media command {command!r}. Use: {allowed}."
 
+        data: dict[str, Any] = {}
+        if command in ("mute", "unmute"):
+            data["is_volume_muted"] = command == "mute"
+        elif command == "volume_set":
+            try:
+                pct = int(level)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return "[volume_set needs level — an integer 0-100.]"
+            if not 0 <= pct <= 100:
+                return "[volume_set level must be 0-100.]"
+            data["volume_level"] = pct / 100
+
         # Prefer entities in a state the command actually applies to.
         relevant_states = {
             "pause": {"playing"},
@@ -1544,6 +1620,11 @@ class HALocalToolRegistry:
             "next": {"playing", "paused"},
             "previous": {"playing", "paused"},
             "stop": {"playing", "paused"},
+            "volume_up": {"playing", "paused", "on"},
+            "volume_down": {"playing", "paused", "on"},
+            "volume_set": {"playing", "paused", "on"},
+            "mute": {"playing", "paused", "on"},
+            "unmute": {"playing", "paused", "on"},
         }[command]
 
         if area:
@@ -1585,6 +1666,7 @@ class HALocalToolRegistry:
             await self._hass.services.async_call(
                 "media_player",
                 service,
+                data or None,
                 target={"entity_id": target_ids},
                 blocking=True,
             )

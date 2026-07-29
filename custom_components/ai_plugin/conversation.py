@@ -77,21 +77,29 @@ def _is_self_echo(stt_text: str, recent_replies: list[str]) -> bool:
 
     A satellite whose reply audio plays through a separate speaker re-hears
     it and STT transcribes it as a fresh turn. We can't cancel that acoustic
-    echo, but the agent knows what it just said — so we compare. The turn is
-    echo when ECHO_MATCH_THRESHOLD of its tokens appear (in order) within a
-    recent reply. STT is imperfect, so this is fuzzy containment, not
-    equality. Short turns are never filtered (ECHO_MIN_TOKENS) so real
-    follow-ups like "yes", "turn it off" always pass.
+    echo, but the agent knows what it just said — so we compare. The turn
+    is echo when ECHO_MATCH_THRESHOLD of its word BIGRAMS appear in a
+    recent reply. Order matters: an echo replays the reply's sequence,
+    while a real command reusing the same vocabulary reorders it ("turn
+    the living room light on" right after "The living room light is on"
+    shares the words but not the adjacencies) — unordered overlap
+    swallowed exactly those commands. STT is imperfect, so this is fuzzy
+    containment, not equality. Short turns are never filtered
+    (ECHO_MIN_TOKENS) so real follow-ups like "yes", "turn it off"
+    always pass.
     """
     tokens = _echo_tokens(stt_text)
     if len(tokens) < ECHO_MIN_TOKENS:
         return False
-    token_set = set(tokens)
+    turn_bigrams = set(zip(tokens, tokens[1:]))
+    if not turn_bigrams:
+        return False
     for reply in recent_replies:
-        reply_set = set(_echo_tokens(reply))
-        if not reply_set:
+        r_tokens = _echo_tokens(reply)
+        if len(r_tokens) < 2:
             continue
-        overlap = len(token_set & reply_set) / len(token_set)
+        reply_bigrams = set(zip(r_tokens, r_tokens[1:]))
+        overlap = len(turn_bigrams & reply_bigrams) / len(turn_bigrams)
         if overlap >= ECHO_MATCH_THRESHOLD:
             return True
     return False
