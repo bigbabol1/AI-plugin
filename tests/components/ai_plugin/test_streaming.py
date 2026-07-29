@@ -31,13 +31,52 @@ def test_gate_flush_sends_everything_when_nothing_streamed() -> None:
     assert got == ["Short answer."]
 
 
-def test_gate_withholds_tail_on_divergent_final() -> None:
+def test_gate_delivers_full_reply_on_divergent_final() -> None:
+    """A rewritten final reply is delivered whole through the stream —
+    once sentences streamed, the stream is what the pipeline speaks, so
+    withholding on divergence would strand the user without the answer."""
     got: list[str] = []
     gate = _DeltaGate(got.append, lang="en")
     gate.feed("The weather is nice. And more ")
     assert got == ["The weather is nice. "]
     gate.flush_final("A completely different reply.")
-    assert got == ["The weather is nice. "]  # no double-speak
+    assert got == ["The weather is nice. ", "A completely different reply."]
+
+
+def test_gate_withholds_final_contained_in_forwarded() -> None:
+    """If the final is a subset of what already streamed (a post-processor
+    trimmed the tail), nothing more is sent — no double-speak."""
+    got: list[str] = []
+    gate = _DeltaGate(got.append, lang="en")
+    gate.feed("The weather is nice. Extra tail. And more ")
+    assert got == ["The weather is nice. ", "Extra tail. "]
+    gate.flush_final("The weather is nice.")
+    assert got == ["The weather is nice. ", "Extra tail. "]
+
+
+def test_gate_closed_after_partial_forward_still_delivers_final() -> None:
+    """close() after sentences streamed must not strand the user with a
+    dangling preamble: flush_final still completes the stream with the
+    authoritative reply."""
+    got: list[str] = []
+    gate = _DeltaGate(got.append, lang="en")
+    gate.feed("Sure. And now ")
+    assert got == ["Sure. "]
+    gate.close()
+    gate.feed("this must not stream. Nor this. ")
+    assert got == ["Sure. "]
+    gate.flush_final("It's 21 degrees in the bedroom.")
+    assert got == ["Sure. ", "It's 21 degrees in the bedroom."]
+
+
+def test_gate_closed_with_nothing_forwarded_stays_silent() -> None:
+    """close() before anything streamed keeps the stream unused — the
+    plain speech field is authoritative (suppressed turns rely on this)."""
+    got: list[str] = []
+    gate = _DeltaGate(got.append, lang="en")
+    gate.close()
+    gate.flush_final("Should not stream.")
+    assert got == []
 
 
 def test_gate_drops_narration_sentences() -> None:

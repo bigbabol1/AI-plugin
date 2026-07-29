@@ -127,6 +127,23 @@ def _any_media_status_call(tool_msgs: list[dict]) -> bool:
     return False
 
 
+def _tool_results(tool_msgs: list[dict], tool_names: tuple[str, ...]) -> list[str]:
+    """Result contents of every completed call of the named tools."""
+    ids = {
+        tc.get("id")
+        for m in tool_msgs
+        for tc in (m.get("tool_calls") or [])
+        if tc.get("function", {}).get("name") in tool_names
+    }
+    if not ids:
+        return []
+    return [
+        str(m.get("content") or "")
+        for m in tool_msgs
+        if m.get("role") == "tool" and m.get("tool_call_id") in ids
+    ]
+
+
 def _any_media_success(tool_msgs: list[dict]) -> bool:
     """True if a media tool call in this turn actually changed playback.
 
@@ -135,19 +152,41 @@ def _any_media_success(tool_msgs: list[dict]) -> bool:
     command produces no audible change, so the reply must not be blanked.
     Mutating media results are prefixed "OK" by ha_local.
     """
-    media_ids = {
-        tc.get("id")
-        for m in tool_msgs
-        for tc in (m.get("tool_calls") or [])
-        if tc.get("function", {}).get("name") in _MEDIA_TOOL_NAMES
-    }
-    if not media_ids:
-        return False
     return any(
-        m.get("role") == "tool"
-        and m.get("tool_call_id") in media_ids
-        and str(m.get("content") or "").lstrip().startswith("OK")
-        for m in tool_msgs
+        r.lstrip().startswith("OK")
+        for r in _tool_results(tool_msgs, _MEDIA_TOOL_NAMES)
+    )
+
+
+# Actuators dispatched to HA's MCP intent tools. Their failure convention
+# is a "["-bracketed result (mcp_client brackets transport errors and
+# isError results); any other non-empty result means the intent ran.
+_INTENT_ACTUATOR_NAMES = (
+    "HassTurnOn", "HassTurnOff", "HassLightSet",
+    "HassClimateSetTemperature", "HassClimateSetMode",
+    "HassMediaPause", "HassMediaUnpause", "HassMediaNext",
+    "HassMediaPrevious",
+)
+
+
+def _any_actuator_success(tool_msgs: list[dict]) -> bool:
+    """True if any actuator call in this turn actually performed its action.
+
+    Suppression must never blank the model's explanation of a FAILED
+    action — the user would hear silence and assume success. ha_local
+    actuators mark success with an "OK" prefix; MCP intent actuators mark
+    failure with a "[" prefix.
+    """
+    if _any_media_success(tool_msgs):
+        return True
+    if any(
+        r.lstrip().startswith("OK")
+        for r in _tool_results(tool_msgs, ("set_area_state",))
+    ):
+        return True
+    return any(
+        r.strip() and not r.lstrip().startswith("[")
+        for r in _tool_results(tool_msgs, _INTENT_ACTUATOR_NAMES)
     )
 
 
@@ -437,26 +476,34 @@ def _parse_raw_tool_call(text: str, valid_names: set[str]) -> tuple[str, dict] |
 
 
 def _strip_narration(text: str, lang: str = "en") -> str:
-    """Remove tool-call narration lines from a model reply, in any
-    supported language.
+    """Remove tool-call narration from a model reply, in any supported
+    language.
 
-    Reads keyword + raw-pattern lists from L (i18n module). When the
-    entire reply is narration, the empty result triggers the
-    'I couldn't produce' fallback in async_process — see the empty-reply
-    branch downstream of this call.
+    Reads keyword + raw-pattern lists from L (i18n module). Sentence-
+    granular, not line-granular: voice replies are single-line, so killing
+    the whole line on a keyword hit destroys answers that share a sentence
+    boundary with the narration ("I'm checking. It's 21 degrees." lost
+    both). A sentence containing a digit is always kept — narration
+    phrases co-occurring with concrete data ("I'm looking at the sensor —
+    it reads 21 degrees") mean the model answered while narrating, and
+    the answer outranks the style rule. When the entire reply is
+    narration, the empty result triggers the 'I couldn't produce'
+    fallback in async_process — see the empty-reply branch downstream.
     """
     if not text:
         return text
     cleaned = text
     keyword_re = L.keyword_re("narration", lang)
     if keyword_re is not None:
-        # Strip any line containing a narration keyword.
-        cleaned = re.sub(
-            rf"^.*(?:{keyword_re.pattern}).*$",
-            "",
-            cleaned,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
+        out_lines = []
+        for line in cleaned.splitlines():
+            parts = _SENTENCE_SPLIT_RE.split(line)
+            kept = [
+                p for p in parts
+                if not (keyword_re.search(p) and not re.search(r"\d", p))
+            ]
+            out_lines.append(" ".join(p for p in kept if p).strip())
+        cleaned = "\n".join(out_lines)
     for pattern in L.pattern_list("narration_full", lang):
         cleaned = pattern.sub("", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -682,19 +729,27 @@ class _DeltaGate:
         self._lang = lang
         self._voice = voice_mode
         self._buf = ""
+        self._closed = False
         self._forwarded: list[str] = []
 
     @property
     def active(self) -> bool:
-        return self._listener is not None
+        return self._listener is not None and not self._closed
 
     @property
     def forwarded_text(self) -> str:
         return " ".join(self._forwarded)
 
     def close(self) -> None:
-        """Stop forwarding for the rest of the turn (safety trigger hit)."""
-        self._listener = None
+        """Stop live forwarding for the rest of the turn (safety trigger hit).
+
+        The listener is retained: once sentences have been spoken, the
+        delta stream is the pipeline's audio channel, so flush_final must
+        still be able to deliver the final authoritative reply through it.
+        Dropping the listener here would strand the user with a dangling
+        preamble ("Sure.") and no answer.
+        """
+        self._closed = True
         self._buf = ""
 
     def new_response(self) -> None:
@@ -708,7 +763,7 @@ class _DeltaGate:
 
     def feed(self, fragment: str) -> None:
         """Provider callback: accumulate and emit completed sentences."""
-        if self._listener is None or not fragment:
+        if self._listener is None or self._closed or not fragment:
             return
         self._buf += fragment
         if "<think" in self._buf:
@@ -739,9 +794,13 @@ class _DeltaGate:
         """Send whatever part of the finished reply was not yet streamed.
 
         When nothing streamed, the whole reply goes out in one delta (chat
-        log stays the single source of what was said). When the processed
-        reply no longer starts with the streamed prefix (a post-processor
-        rewrote it), the tail is withheld rather than double-spoken.
+        log stays the single source of what was said) — except on a closed
+        gate, where the plain speech field is authoritative and streaming
+        would bypass the suppression that closed the gate. Once sentences
+        HAVE been streamed, the stream is what the pipeline speaks: a final
+        reply that no longer extends the streamed prefix (a verifier or a
+        later tool round rewrote it) is delivered in full — repeating a
+        short preamble beats losing the answer.
         """
         if self._listener is None:
             return
@@ -749,7 +808,7 @@ class _DeltaGate:
         self._listener = None
         final_text = (final_text or "").strip()
         if not self._forwarded:
-            if final_text:
+            if final_text and not self._closed:
                 try:
                     listener(final_text)
                 except Exception:  # noqa: BLE001
@@ -764,10 +823,15 @@ class _DeltaGate:
                     listener(rest)
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug("AI Plugin: delta listener raised", exc_info=True)
-        else:
+        elif norm_final and norm_final not in norm_fwd:
             _LOGGER.debug(
-                "AI Plugin: streamed prefix diverged from final reply — tail withheld"
+                "AI Plugin: streamed prefix diverged from final reply — "
+                "delivering the full reply through the stream"
             )
+            try:
+                listener(final_text)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: delta listener raised", exc_info=True)
 
 
 class LocationProvider:
@@ -1675,25 +1739,15 @@ class Orchestrator:
             # TTS suppression for actuator tool calls — the visible/audible
             # change IS the confirmation. Speaking "OK lights on" while the
             # lights are visibly on is redundant and annoying for voice
-            # users. Force-blank the reply when any of these tools was
-            # invoked, regardless of what the model produced. Only suppress
-            # for actual voice satellites; text Assist still gets a
-            # confirmation since the user can't see the device.
-            # Media tools are result-gated: a failed or read-only call
-            # (unknown command, 'status', nothing playing) changes no audio,
-            # so blanking would leave the user with silence — the reply
-            # (often the answer to a media QUESTION) must survive.
-            _ACTUATOR_TOOLS = (
-                "HassTurnOn", "HassTurnOff", "HassLightSet",
-                "HassClimateSetTemperature", "HassClimateSetMode",
-                "HassMediaPause", "HassMediaUnpause", "HassMediaNext",
-                "HassMediaPrevious", "set_area_state",
-            )
+            # users. Only suppress for actual voice satellites; text Assist
+            # still gets a confirmation since the user can't see the device.
+            # All actuators are result-gated: a FAILED call performed no
+            # visible change, so the model's explanation (or the empty-reply
+            # fallback below) must reach the user instead of silence that
+            # reads as success.
             media_acted = _any_media_success(tool_msgs)
-            actuator_invoked = media_acted or any(
-                _any_tool_call(tool_msgs, t) for t in _ACTUATOR_TOOLS
-            )
-            if actuator_invoked and voice_mode:
+            actuator_acted = _any_actuator_success(tool_msgs)
+            if actuator_acted and voice_mode:
                 stored_reply = ""
                 reply = ""
             elif media_acted:

@@ -184,3 +184,56 @@ def test_malformed_args_not_detected() -> None:
         },
     ]
     assert _any_media_status_call(msgs) is False
+
+
+# ── result-gated suppression for non-media actuators ─────────────────────────
+
+
+def test_failed_intent_actuator_does_not_suppress() -> None:
+    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+
+    msgs = [
+        _call_msg("HassTurnOn", "c1"),
+        _result_msg("c1", "[Tool 'HassTurnOn' failed: no entities matched]"),
+    ]
+    assert _any_actuator_success(msgs) is False
+
+
+def test_successful_intent_actuator_suppresses() -> None:
+    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+
+    msgs = [
+        _call_msg("HassTurnOn", "c1"),
+        _result_msg("c1", "Turned on the light"),
+    ]
+    assert _any_actuator_success(msgs) is True
+
+
+def test_failed_set_area_state_does_not_suppress() -> None:
+    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+
+    msgs = [
+        _call_msg("set_area_state", "c1"),
+        _result_msg("c1", "Unknown area 'garden'. Try list_areas."),
+    ]
+    assert _any_actuator_success(msgs) is False
+
+
+def test_successful_set_area_state_suppresses() -> None:
+    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+
+    msgs = [
+        _call_msg("set_area_state", "c1"),
+        _result_msg("c1", "OK — turned off 3 lights in Kitchen."),
+    ]
+    assert _any_actuator_success(msgs) is True
+
+
+def test_media_success_counts_as_actuator_success() -> None:
+    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+
+    msgs = [
+        _call_msg("media_command", "c1"),
+        _result_msg("c1", "OK — pause on media_player.wohnzimmer."),
+    ]
+    assert _any_actuator_success(msgs) is True

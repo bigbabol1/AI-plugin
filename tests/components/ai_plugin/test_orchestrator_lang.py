@@ -40,3 +40,36 @@ def test_strip_narration_unknown_lang_falls_back_to_en():
     text = "I'm checking the weather."
     # zz is unknown; L falls back to en, which strips this English narration.
     assert _strip_narration(text, lang="zz") == ""
+
+
+def test_strip_narration_keeps_answer_sharing_a_line() -> None:
+    """A narration sentence and the answer on ONE line: only the
+    narration sentence dies."""
+    from custom_components.ai_plugin.orchestrator import _strip_narration
+
+    out = _strip_narration("I'm checking the temperature. It's 21 degrees.", "en")
+    assert out == "It's 21 degrees."
+
+
+def test_strip_narration_keeps_digit_bearing_narration_sentence() -> None:
+    """Narration phrase + concrete data in the same sentence: the answer
+    outranks the style rule."""
+    from custom_components.ai_plugin.orchestrator import _strip_narration
+
+    out = _strip_narration(
+        "I'm looking at the sensor — it reads 21 degrees.", "en"
+    )
+    assert "21 degrees" in out
+
+
+def test_strip_narration_pure_narration_still_blanked() -> None:
+    from custom_components.ai_plugin.orchestrator import _strip_narration
+
+    assert _strip_narration("I'm checking the temperature for you.", "en") == ""
+
+
+def test_strip_narration_german_sentence_granular() -> None:
+    from custom_components.ai_plugin.orchestrator import _strip_narration
+
+    out = _strip_narration("Ich schaue nach. Im Schlafzimmer sind es 19 Grad.", "de")
+    assert out == "Im Schlafzimmer sind es 19 Grad."

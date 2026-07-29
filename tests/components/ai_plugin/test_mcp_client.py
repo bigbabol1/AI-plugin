@@ -26,12 +26,13 @@ def _mock_tool(name: str, description: str = "", schema: dict | None = None) -> 
     return tool
 
 
-def _mock_call_result(text: str) -> MagicMock:
+def _mock_call_result(text: str, is_error: bool = False) -> MagicMock:
     """Build a minimal MCP call_tool result with one text content block."""
     block = MagicMock()
     block.text = text
     result = MagicMock()
     result.content = [block]
+    result.isError = is_error
     return result
 
 
@@ -499,3 +500,36 @@ async def test_call_tool_times_out(monkeypatch) -> None:
     result = await conn.call_tool("slow_tool", {})
     assert "timed out" in result
     assert "slow_tool" in result
+
+
+async def test_server_connection_call_tool_brackets_iserror_results() -> None:
+    """An MCP isError result must come back "["-bracketed so downstream
+    success checks (TTS suppression) never mistake a failed action for a
+    performed one."""
+    conn = _MCPServerConnection({"transport": "http", "url": "http://test"})
+    conn._state = _State.CONNECTED
+
+    mock_session = AsyncMock()
+    mock_session.call_tool = AsyncMock(
+        return_value=_mock_call_result("No entities matched", is_error=True)
+    )
+    conn._session = mock_session
+
+    result = await conn.call_tool("HassTurnOn", {})
+    assert result.startswith("[")
+    assert "No entities matched" in result
+
+
+async def test_server_connection_call_tool_iserror_already_bracketed() -> None:
+    """Already-bracketed isError text is not double-wrapped."""
+    conn = _MCPServerConnection({"transport": "http", "url": "http://test"})
+    conn._state = _State.CONNECTED
+
+    mock_session = AsyncMock()
+    mock_session.call_tool = AsyncMock(
+        return_value=_mock_call_result("[upstream failure]", is_error=True)
+    )
+    conn._session = mock_session
+
+    result = await conn.call_tool("HassTurnOn", {})
+    assert result == "[upstream failure]"

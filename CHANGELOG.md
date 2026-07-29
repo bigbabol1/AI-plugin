@@ -4,6 +4,17 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.37 — Review hardening: no more silent failures
+
+Five defects from an adversarial review of the reply pipeline, all sharing one root pattern: post-processing keyed on tool *invocation* or regex *presence* instead of *results* or *intent*.
+
+**Fixed:**
+- **Failed actions no longer sound like success.** Voice TTS suppression is now result-gated for ALL actuators (it already was for media tools since v0.9.36): a `HassTurnOn`/`set_area_state` call that *failed* keeps the model's spoken explanation instead of being blanked — silence after "turn off the heating" no longer means "maybe". MCP `isError` results are now bracketed like transport errors so downstream success checks can't mistake a failed intent for a performed one.
+- **Streaming no longer loses answers.** Once sentences have streamed, the delta stream is what the pipeline speaks — so the gate now delivers a rewritten final reply in full instead of withholding it (repeating a short preamble beats losing the answer), and a safety-close after a partial stream still completes the stream with the authoritative reply instead of stranding the user on "Sure."
+- **Narration stripping is sentence-granular and keeps data.** "I'm checking. It's 21 degrees." previously died as one line and became "I couldn't produce an answer"; now only the narration sentence is removed, and any sentence carrying a digit always survives.
+- **Media shortcut: questions are never commands.** "What does stop mean?" / "when is the next bus" no longer stop/skip playback with an empty reply; German modal "halt" and conversational "weiter" ("und so weiter") only count as playback commands in ≤3-word utterances; and the shortcut finally respects the conversation exposure list like every other path.
+- **German area targeting works with articles.** "pause die musik in der küche" used to swallow the article, miss the area, and silently pause the *whole home*; the suffix regex now matches "in der/dem" before bare "in", with a de-articling fallback in resolution.
+
 ## v0.9.36 — "What's playing?" answered; media suppression result-gated
 
 **Fixed:**

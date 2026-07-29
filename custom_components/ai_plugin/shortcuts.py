@@ -613,8 +613,29 @@ _MEDIA_TRIGGERS: list[tuple[str, re.Pattern[str]]] = [
     ),
 ]
 
+# Questions must never trigger playback changes: "what does stop mean?",
+# "when is the next bus?" contain trigger words but ask, not command.
+# Ambiguity falls through to the LLM, which can still act via tools.
+_MEDIA_QUESTION_RE = re.compile(
+    r"\?\s*$|\b(?:"
+    r"what|what's|who|who's|whose|when|where|why|how|which|"
+    r"was|wer|wann|wo|warum|wieso|weshalb|wie|welche\w*"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# German homographs of playback verbs: bare "halt" is usually a modal
+# particle ("das ist halt so") and bare "weiter" continues *speech* as
+# often as music ("erzähl weiter", "und so weiter"). Only trust them as
+# playback commands in very short utterances.
+_AMBIGUOUS_BARE_TRIGGERS = {"halt", "weiter"}
+
+# German definite articles must match BEFORE the bare "in " branch —
+# regex alternation is ordered, and "in\s+(?:the\s+)?" wins otherwise,
+# swallowing the article into the area name ("in der küche" → "der küche"
+# → no area match → command silently broadens to the whole home).
 _AREA_SUFFIX_RE = re.compile(
-    r"\b(?:in\s+(?:the\s+)?|im\s+|in\s+der\s+|in\s+dem\s+|in\s+der\s+the\s+)"
+    r"\b(?:in\s+der\s+|in\s+dem\s+|im\s+|in\s+(?:the\s+)?)"
     r"(?P<area>[\w\s\-]+?)\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
@@ -659,13 +680,17 @@ def _extract_area_from_media_message(hass: HomeAssistant, message: str):
     if not m:
         return None
     raw = m.group("area").strip().lower()
+    # Defensive: strip a leading article that slipped past the suffix
+    # regex (case variants like "in die küche") so the name still resolves.
+    dearticled = re.sub(
+        r"^(?:the|a|an|der|die|das|dem|den)\s+", "", raw, flags=re.IGNORECASE
+    )
     area_reg = ar.async_get(hass)
     for a in area_reg.async_list_areas():
-        if (a.name or "").lower() == raw:
+        names = [(a.name or "").lower()]
+        names.extend((al or "").lower() for al in (getattr(a, "aliases", None) or ()))
+        if raw in names or dearticled in names:
             return a
-        for al in (getattr(a, "aliases", None) or ()):
-            if (al or "").lower() == raw:
-                return a
     return None
 
 
@@ -692,10 +717,19 @@ async def async_try_media_shortcut(
     if not msg or len(msg.split()) > 10:
         return None
 
+    # Questions fall through to the LLM — a trigger word inside a question
+    # ("what does stop mean?") must not change playback with an empty reply.
+    if _MEDIA_QUESTION_RE.search(msg):
+        return None
+
     detected = _detect_media_command(msg)
     if detected is None:
         return None
     cmd, match = detected
+
+    matched_text = match.group(0).strip().lower()
+    if matched_text in _AMBIGUOUS_BARE_TRIGGERS and len(msg.split()) > 3:
+        return None
 
     area = _extract_area_from_media_message(hass, msg)
 
@@ -707,6 +741,15 @@ async def async_try_media_shortcut(
     for eid, entry in ent_reg.entities.items():
         if not eid.startswith("media_player."):
             continue
+        if async_should_expose is not None:
+            try:
+                if not async_should_expose(hass, _CONVERSATION_ASSISTANT, eid):
+                    continue
+            except Exception:  # noqa: BLE001 — never block on registry quirks
+                _LOGGER.debug(
+                    "AI Plugin: should_expose check failed for %s", eid,
+                    exc_info=True,
+                )
         if area is not None:
             area_id = entry.area_id
             if not area_id and entry.device_id:

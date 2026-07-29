@@ -177,7 +177,14 @@ class _MCPServerConnection:
                     parts.append(f"[binary data: {len(block.data)} bytes]")
                 else:
                     parts.append(str(block))
-            return "\n".join(parts) or "(empty result)"
+            text = "\n".join(parts) or "(empty result)"
+            # MCP error results (isError) arrive as ordinary content blocks —
+            # e.g. HA's intent tools report "no entities matched" this way.
+            # Bracket them so downstream success checks (TTS suppression)
+            # never mistake a failed action for a performed one.
+            if getattr(result, "isError", False) and not text.lstrip().startswith("["):
+                return f"[Tool {name!r} failed: {text}]"
+            return text
         except TimeoutError:
             _LOGGER.warning(
                 "AI Plugin MCP: tool %r on %r timed out after %.0fs",
