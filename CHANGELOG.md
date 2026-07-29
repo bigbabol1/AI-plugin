@@ -4,6 +4,14 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.36 — "What's playing?" answered; media suppression result-gated
+
+**Fixed:**
+- **"What's playing?" got dead silence on voice.** Root cause was a two-part failure: (1) `media_command` had no read-only query, so the model probed the non-existent `command='status'` and got an error; (2) the TTS-suppression pass blanked the reply because a media tool had been *invoked* — even though the call failed and the model had recovered with a correct spoken answer ("Nothing is playing right now."). Suppression is now **result-gated**: only a media call whose result confirms an actual playback change (the `OK` prefix) blanks the reply. Failed calls and read-only queries keep the model's answer audible.
+
+**New:**
+- **`media_command('status')`** — read-only now-playing report: title, artist, and player for everything playing (paused listed separately), area-filterable, exposure-respecting, never calls a service. The model was already guessing this command existed; now it does. Prompts (voice + default) route "what is playing / what song is this / was läuft" to it, and a `status` call counts as grounding for the state-set verifier so the turn doesn't pay for a pointless `list_entities` retry loop.
+
 ## v0.9.35 — Self-echo filter: follow-up without the loop
 
 **New:**

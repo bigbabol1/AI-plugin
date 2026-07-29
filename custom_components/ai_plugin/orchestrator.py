@@ -104,6 +104,53 @@ def _any_tool_call(tool_msgs: list[dict], tool_name: str) -> bool:
     return False
 
 
+_MEDIA_TOOL_NAMES = ("play_music", "media_command")
+
+
+def _any_media_status_call(tool_msgs: list[dict]) -> bool:
+    """True if the tool-loop queried playback via media_command('status')."""
+    import json as _json  # noqa: PLC0415
+
+    for m in tool_msgs:
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function", {})
+            if fn.get("name") != "media_command":
+                continue
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = _json.loads(args)
+                except ValueError:
+                    continue
+            if isinstance(args, dict) and args.get("command") == "status":
+                return True
+    return False
+
+
+def _any_media_success(tool_msgs: list[dict]) -> bool:
+    """True if a media tool call in this turn actually changed playback.
+
+    Media TTS suppression keys on the RESULT, not the attempt: a rejected
+    call (unknown command, nothing playing) or the read-only 'status'
+    command produces no audible change, so the reply must not be blanked.
+    Mutating media results are prefixed "OK" by ha_local.
+    """
+    media_ids = {
+        tc.get("id")
+        for m in tool_msgs
+        for tc in (m.get("tool_calls") or [])
+        if tc.get("function", {}).get("name") in _MEDIA_TOOL_NAMES
+    }
+    if not media_ids:
+        return False
+    return any(
+        m.get("role") == "tool"
+        and m.get("tool_call_id") in media_ids
+        and str(m.get("content") or "").lstrip().startswith("OK")
+        for m in tool_msgs
+    )
+
+
 # Action-command grounding verifier.
 # Short STT inputs like "Lights on." / "Bedroom off." make weak local
 # models narrate ("I'll turn the lights on.") instead of calling an
@@ -1427,6 +1474,10 @@ class Orchestrator:
                 tool_schemas
                 and _is_state_set_query(message)
                 and not _any_list_entities_call(tool_msgs)
+                # media_command('status') already grounds media questions
+                # ("what's playing?") deterministically — a list_entities
+                # retry would only add tool-loop latency.
+                and not _any_media_status_call(tool_msgs)
             ):
                 _LOGGER.info(
                     "AI Plugin: grounding retry — state-set query had no list_entities call"
@@ -1628,22 +1679,24 @@ class Orchestrator:
             # invoked, regardless of what the model produced. Only suppress
             # for actual voice satellites; text Assist still gets a
             # confirmation since the user can't see the device.
+            # Media tools are result-gated: a failed or read-only call
+            # (unknown command, 'status', nothing playing) changes no audio,
+            # so blanking would leave the user with silence — the reply
+            # (often the answer to a media QUESTION) must survive.
             _ACTUATOR_TOOLS = (
-                "play_music", "media_command",
                 "HassTurnOn", "HassTurnOff", "HassLightSet",
                 "HassClimateSetTemperature", "HassClimateSetMode",
                 "HassMediaPause", "HassMediaUnpause", "HassMediaNext",
                 "HassMediaPrevious", "set_area_state",
             )
-            actuator_invoked = any(
+            media_acted = _any_media_success(tool_msgs)
+            actuator_invoked = media_acted or any(
                 _any_tool_call(tool_msgs, t) for t in _ACTUATOR_TOOLS
             )
             if actuator_invoked and voice_mode:
                 stored_reply = ""
                 reply = ""
-            elif actuator_invoked and any(
-                _any_tool_call(tool_msgs, t) for t in ("play_music", "media_command")
-            ):
+            elif media_acted:
                 # Music tools always suppress regardless of voice/text —
                 # the audio change IS the confirmation and TTS would talk
                 # over it on the same speaker.

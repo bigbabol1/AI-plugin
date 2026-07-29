@@ -432,3 +432,138 @@ async def test_device_noun_recovery_unknown_tools_keeps_old_behaviour(
     )
     assert "refused" in out
     assert "HassTurnOn" in out
+
+
+# ── media_command 'status' (read-only now-playing report) ─────────────────────
+
+
+def _media_state(
+    entity_id: str,
+    state: str,
+    title: str | None = None,
+    artist: str | None = None,
+    friendly: str | None = None,
+) -> SimpleNamespace:
+    attrs: dict = {"friendly_name": friendly or entity_id}
+    if title:
+        attrs["media_title"] = title
+    if artist:
+        attrs["media_artist"] = artist
+    return SimpleNamespace(entity_id=entity_id, state=state, attributes=attrs)
+
+
+def test_media_command_schema_has_status_enum() -> None:
+    """'status' must be offered to the LLM in the command enum."""
+    schema = next(
+        s for s in TOOL_SCHEMAS if s["function"]["name"] == "media_command"
+    )
+    assert "status" in schema["function"]["parameters"]["properties"]["command"]["enum"]
+
+
+@pytest.mark.asyncio
+async def test_media_status_reports_playing_track(patched_registries) -> None:
+    """status lists title/artist/player of the playing entity, no service call."""
+    entities = [_entity("media_player.wohnzimmer"), _entity("media_player.kueche")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    states = {
+        "media_player.wohnzimmer": _media_state(
+            "media_player.wohnzimmer", "playing",
+            title="Orinoco Flow", artist="Enya", friendly="Wohnzimmer",
+        ),
+        "media_player.kueche": _media_state("media_player.kueche", "idle"),
+    }
+    hass.states.get.side_effect = states.get
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "status"})
+    assert "Orinoco Flow" in out
+    assert "Enya" in out
+    assert "Wohnzimmer" in out
+    # "OK" prefix marks a mutating success and triggers TTS suppression —
+    # a status answer must never carry it.
+    assert not out.startswith("OK")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_media_status_nothing_playing(patched_registries) -> None:
+    """All players idle → explicit 'Nothing is playing' reply."""
+    entities = [_entity("media_player.wohnzimmer")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = {
+        "media_player.wohnzimmer": _media_state("media_player.wohnzimmer", "idle"),
+    }.get
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "status"})
+    assert out == "Nothing is playing right now."
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_media_status_paused_reported_separately(patched_registries) -> None:
+    """A paused player shows under 'Paused:', not 'Now playing:'."""
+    entities = [_entity("media_player.kueche")]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = {
+        "media_player.kueche": _media_state(
+            "media_player.kueche", "paused", title="Hotel California",
+        ),
+    }.get
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "status"})
+    assert out.startswith("Paused:")
+    assert "Hotel California" in out
+    assert "Now playing" not in out
+
+
+@pytest.mark.asyncio
+async def test_media_status_area_filter(patched_registries) -> None:
+    """With an area, only that area's players are reported."""
+    areas = [_area("a_kit", "Kitchen")]
+    entities = [
+        _entity("media_player.kueche", area_id="a_kit"),
+        _entity("media_player.wohnzimmer", area_id="a_liv"),
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    hass.states.get.side_effect = {
+        "media_player.kueche": _media_state(
+            "media_player.kueche", "playing", title="Kitchen Song",
+        ),
+        "media_player.wohnzimmer": _media_state(
+            "media_player.wohnzimmer", "playing", title="Living Room Song",
+        ),
+    }.get
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "status", "area": "kitchen"})
+    assert "Kitchen Song" in out
+    assert "Living Room Song" not in out
+
+
+@pytest.mark.asyncio
+async def test_media_status_unknown_area(patched_registries) -> None:
+    """Unknown area falls back to the standard error string."""
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[_area("a_kit", "Kitchen")], entities=[])
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "status", "area": "garden"})
+    assert out.startswith("Unknown area 'garden'")
+
+
+@pytest.mark.asyncio
+async def test_media_command_unknown_lists_status(patched_registries) -> None:
+    """The unknown-command error must advertise 'status' so the model recovers."""
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=[])
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool("media_command", {"command": "nonsense"})
+    assert out.startswith("Unknown media command")
+    assert "status" in out

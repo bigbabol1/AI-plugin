@@ -357,28 +357,32 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "media_command",
             "description": (
-                "Control playback: pause, resume, skip to next track, go "
-                "back to previous track, or stop. Examples: 'pause' / 'pause "
-                "the music' → media_command('pause'). 'next track' / 'skip "
-                "this song' → media_command('next'). 'previous' → "
-                "media_command('previous'). 'resume' / 'continue' / 'weiter' "
-                "→ media_command('resume'). 'stop the music' → media_command"
-                "('stop'). Pass area only when the user names a room ('pause "
-                "hobby room', 'next track in the kitchen'); otherwise the "
-                "plugin auto-targets whichever media_player is currently in "
-                "the matching state. The audio change IS the confirmation — "
-                "reply with an empty string."
+                "Control playback or report it: pause, resume, skip to next "
+                "track, go back to previous track, stop, or status. Examples: "
+                "'pause' / 'pause the music' → media_command('pause'). 'next "
+                "track' / 'skip this song' → media_command('next'). "
+                "'previous' → media_command('previous'). 'resume' / "
+                "'continue' / 'weiter' → media_command('resume'). 'stop the "
+                "music' → media_command('stop'). 'what's playing?' / 'was "
+                "läuft?' / 'what song is this?' → media_command('status'). "
+                "Pass area only when the user names a room ('pause hobby "
+                "room', 'next track in the kitchen'); otherwise the plugin "
+                "auto-targets whichever media_player is currently in the "
+                "matching state. For playback CHANGES the audio change IS "
+                "the confirmation — reply with an empty string. For 'status' "
+                "DO answer the user with what the tool returns."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "enum": ["pause", "resume", "next", "previous", "stop"],
+                        "enum": ["pause", "resume", "next", "previous", "stop", "status"],
                         "description": (
                             "Playback action. 'resume' un-pauses; 'next' / "
                             "'previous' move within the current queue; 'stop' "
-                            "halts and clears."
+                            "halts and clears; 'status' is read-only and "
+                            "reports what is currently playing."
                         ),
                     },
                     "area": {
@@ -1505,9 +1509,14 @@ class HALocalToolRegistry:
         currently in the relevant state. This covers terse phrasings like
         bare "pause" or "next track" where the LLM has no area to pass —
         the plugin finds whatever is actually playing right now.
+
+        ``status`` is the read-only exception: it reports what is playing
+        (media questions like "what's playing?") and never calls a service.
         """
+        if command == "status":
+            return self._media_status(area, exposed_only)
         if command not in _MEDIA_COMMAND_SERVICES:
-            allowed = ", ".join(sorted(_MEDIA_COMMAND_SERVICES))
+            allowed = ", ".join(sorted([*_MEDIA_COMMAND_SERVICES, "status"]))
             return f"Unknown media command {command!r}. Use: {allowed}."
 
         # Prefer entities in a state the command actually applies to.
@@ -1568,6 +1577,56 @@ class HALocalToolRegistry:
         preview = ", ".join(target_ids[:3])
         more = f" (+{len(target_ids) - 3} more)" if len(target_ids) > 3 else ""
         return f"OK — {command} on {preview}{more}."
+
+    def _media_status(self, area: str | None, exposed_only: bool = True) -> str:
+        """Report what is currently playing (``media_command('status')``).
+
+        Read-only: never calls a service. The result must NOT carry the
+        "OK" success prefix — the orchestrator suppresses TTS on "OK"
+        media results, and a status answer is exactly what the user asked
+        to hear.
+        """
+        if area:
+            target_area = self._resolve_area(area)
+            if target_area is None:
+                return f"Unknown area {area!r}. Try list_areas."
+            candidates = self._media_players_in_area(target_area, exposed_only)
+        else:
+            ent_reg = er.async_get(self._hass)
+            candidates = [
+                eid
+                for eid in ent_reg.entities
+                if eid.startswith("media_player.")
+                and (not exposed_only or self._is_exposed(eid))
+            ]
+
+        playing: list[str] = []
+        paused: list[str] = []
+        for eid in sorted(candidates):
+            st = self._hass.states.get(eid)
+            if st is None or st.state not in ("playing", "paused"):
+                continue
+            name = st.attributes.get("friendly_name") or eid
+            title = st.attributes.get("media_title")
+            artist = st.attributes.get("media_artist")
+            if title and artist:
+                desc = f"{title!r} by {artist}"
+            elif title:
+                desc = f"{title!r}"
+            else:
+                desc = "unknown media"
+            (playing if st.state == "playing" else paused).append(
+                f"{desc} on {name}"
+            )
+
+        parts: list[str] = []
+        if playing:
+            parts.append("Now playing: " + "; ".join(playing[:4]))
+        if paused:
+            parts.append("Paused: " + "; ".join(paused[:4]))
+        if not parts:
+            return "Nothing is playing right now."
+        return ". ".join(parts) + "."
 
     async def _call_timer_intent(
         self,
