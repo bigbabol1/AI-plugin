@@ -72,6 +72,23 @@ _EXTRA_PATH_DIRS = [
 ]
 
 
+def _server_label(config: dict[str, Any]) -> str:
+    """Human-readable server identity for logs and error strings.
+
+    stdio servers include their args: every uvx-launched server would
+    otherwise log as bare 'uvx', so a failure message could not say WHICH
+    server failed when several are configured.
+    """
+    url = config.get("url")
+    if url:
+        return str(url)
+    command = str(config.get("command", "") or "")
+    if not command:
+        return "unknown"
+    args = config.get("args") or []
+    return " ".join([command, *(str(a) for a in args)]).strip()
+
+
 def _resolve_command(command: str) -> str:
     """Return the full path to *command* if found in known extra directories.
 
@@ -127,7 +144,7 @@ class _MCPServerConnection:
         self._task: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
         self._shutdown = asyncio.Event()
-        self._name = config.get("url") or config.get("command", "unknown")
+        self._name = _server_label(config)
 
     # ── public ───────────────────────────────────────────────────────────────
 
@@ -334,18 +351,27 @@ class _MCPServerConnection:
         )
         # Use a real temp file so anyio gets a valid file descriptor for stderr.
         # We read and log its contents after the session ends (or fails).
+        connected = False
         with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errfile:
             try:
                 async with stdio_client(params, errlog=errfile) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         await self._on_connected(session)
+                        connected = True
                         await self._shutdown.wait()
             finally:
                 errfile.seek(0)
                 stderr_out = errfile.read().strip()
                 if stderr_out:
-                    _LOGGER.warning(
+                    # Servers that work fine still write to stderr (startup
+                    # banners, dependency-install chatter, request logs).
+                    # Logging that at WARNING makes a healthy server look
+                    # broken and buries the servers that genuinely failed —
+                    # so it is only a warning when the handshake never
+                    # completed.
+                    _LOGGER.log(
+                        logging.DEBUG if connected else logging.WARNING,
                         "AI Plugin MCP subprocess stderr for %r:\n%s",
                         self._name,
                         stderr_out,

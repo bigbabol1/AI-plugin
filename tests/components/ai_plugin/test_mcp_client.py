@@ -533,3 +533,103 @@ async def test_server_connection_call_tool_iserror_already_bracketed() -> None:
 
     result = await conn.call_tool("HassTurnOn", {})
     assert result == "[upstream failure]"
+
+
+# ── stderr log level + server labels (v0.9.40) ───────────────────────────────
+
+
+def test_server_label_includes_stdio_args() -> None:
+    """Every uvx server would otherwise log as bare 'uvx' — a failure
+    message must say WHICH server failed."""
+    from custom_components.ai_plugin.tools.mcp_client import _server_label
+
+    assert _server_label(
+        {"transport": "stdio", "command": "uvx", "args": ["--with", "mcp<2", "mcp-server-time"]}
+    ) == "uvx --with mcp<2 mcp-server-time"
+    assert _server_label({"transport": "stdio", "command": "uvx", "args": []}) == "uvx"
+    assert _server_label(
+        {"transport": "http", "url": "http://localhost:8123/api/mcp"}
+    ) == "http://localhost:8123/api/mcp"
+    assert _server_label({}) == "unknown"
+
+
+async def test_stderr_logged_at_debug_when_handshake_succeeds(caplog) -> None:
+    """A healthy but chatty server (startup banner on stderr) must not
+    raise a WARNING — that made wikipedia-mcp look broken for weeks."""
+    import logging as _logging
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch as _patch
+
+    import custom_components.ai_plugin.tools.mcp_client as mc
+
+    conn = _MCPServerConnection(
+        {"transport": "stdio", "command": "uvx", "args": ["wikipedia-mcp"]}
+    )
+
+    @asynccontextmanager
+    async def _fake_stdio(params, errlog=None):
+        errlog.write("INFO Starting MCP server 'Wikipedia'\n")
+        yield (MagicMock(), MagicMock())
+
+    class _FakeSession:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def initialize(self):
+            return None
+
+        async def list_tools(self):
+            result = MagicMock()
+            result.tools = [_mock_tool("get_article")]
+            return result
+
+    conn._shutdown.set()  # return immediately after connecting
+    with _patch.object(mc, "stdio_client", _fake_stdio), _patch.object(
+        mc, "ClientSession", _FakeSession
+    ):
+        with caplog.at_level(_logging.DEBUG, logger=mc.__name__):
+            await conn._run_stdio()
+
+    stderr_records = [
+        r for r in caplog.records if "subprocess stderr" in r.getMessage()
+    ]
+    assert stderr_records, "stderr should still be logged (at DEBUG)"
+    assert all(r.levelno == _logging.DEBUG for r in stderr_records)
+    assert "uvx wikipedia-mcp" in stderr_records[0].getMessage()
+
+
+async def test_stderr_logged_at_warning_when_handshake_fails(caplog) -> None:
+    """A server that dies on import keeps its stderr at WARNING."""
+    import logging as _logging
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch as _patch
+
+    import custom_components.ai_plugin.tools.mcp_client as mc
+
+    conn = _MCPServerConnection(
+        {"transport": "stdio", "command": "uvx", "args": ["mcp-server-time"]}
+    )
+
+    @asynccontextmanager
+    async def _fake_stdio(params, errlog=None):
+        errlog.write("ImportError: cannot import name 'McpError'\n")
+        raise RuntimeError("Connection closed")
+        yield  # pragma: no cover
+
+    with _patch.object(mc, "stdio_client", _fake_stdio):
+        with caplog.at_level(_logging.DEBUG, logger=mc.__name__):
+            with pytest.raises(RuntimeError):
+                await conn._run_stdio()
+
+    stderr_records = [
+        r for r in caplog.records if "subprocess stderr" in r.getMessage()
+    ]
+    assert stderr_records
+    assert all(r.levelno == _logging.WARNING for r in stderr_records)
+    assert "uvx mcp-server-time" in stderr_records[0].getMessage()

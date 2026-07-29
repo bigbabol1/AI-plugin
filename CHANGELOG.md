@@ -4,6 +4,14 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.40 — MCP logs that point at the actual problem
+
+**Fixed:**
+- **A healthy MCP server no longer logs like a broken one.** Subprocess stderr was logged at WARNING unconditionally, but working servers write there routinely — startup banners, dependency-install chatter, request logs. `wikipedia-mcp` looked broken for weeks purely because it announces itself on stderr, while the servers that genuinely failed (an unpinned `mcp` 2.x dependency breaking their imports) drowned in the same noise. Stderr is now DEBUG when the handshake completed and WARNING only when the connection attempt failed.
+- **Failure messages name the server.** Every stdio server was labelled by its bare command, so several `uvx`-launched servers all reported as `'uvx'` and "connection to 'uvx' failed" could not be traced to one of them. Labels now include the args (`uvx --with mcp<2 mcp-server-time`), in both log lines and the "server not connected" tool error.
+
+*Tip for stdio servers whose upstream doesn't cap its `mcp` dependency (`mcp-server-time`, `mcp-server-fetch`, `mcp-server-calculator`): set args to `--with mcp<2 <package>`. The args field is whitespace-split, not shell-parsed — do not quote.*
+
 ## v0.9.39 — Review hardening III: the rest of the audit
 
 The remaining findings from the 2026-07-29 adversarial review.
