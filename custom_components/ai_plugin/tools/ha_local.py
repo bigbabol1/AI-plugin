@@ -76,9 +76,9 @@ _ACTION_DOMAINS = {"light", "switch", "fan", "cover", "climate"}
 # call. Multilingual; conservative.
 _USER_SAID_ALL_RE = re.compile(
     r"\b(?:"
-    r"all|every|everywhere|anywhere|whole\s+(?:house|flat|home)|"
+    r"all|every(?:thing)?|everywhere|anywhere|whole\s+(?:house|flat|home)|"
     r"entire\s+(?:house|flat|home)|every\s+room|"
-    r"alle|jede(?:[srn])?|j[eé]des|"
+    r"alles?|jede(?:[srn])?|j[eé]des|s[äa]mtliche[srn]?|"
     r"[uü]berall|im\s+ganzen?\s+haus|in\s+der\s+ganzen\s+wohnung|"
     r"komplett(?:e[srn]?)?"
     r")\b",
@@ -585,19 +585,37 @@ _DURATION_UNIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# One CONTIGUOUS duration expression: "1 minute 30 seconds", "1 Stunde und
+# 15 Minuten". Contiguity is the disambiguator — in "add 5 minutes to the
+# 10 minute timer" the two numbers belong to different things (delta vs.
+# the timer's NAME) and must never be combined.
+_DURATION_PHRASE_RE = re.compile(
+    r"\d+\s*(?:hours?|hrs?|stunden?|minutes?|mins?|minuten?|seconds?|secs?|sekunden?)"
+    r"(?:\s*(?:and|und)?\s*\d+\s*"
+    r"(?:hours?|hrs?|stunden?|minutes?|mins?|minuten?|seconds?|secs?|sekunden?))*",
+    re.IGNORECASE,
+)
+
 
 def _parse_utterance_duration(text: str) -> dict[str, int] | None:
     """Extract an explicit h/m/s duration from a spoken utterance (EN + DE).
 
-    Sums repeated units (e.g. '1 minute 30 seconds' / '1 Minute 30 Sekunden')
-    and returns any of {'hours','minutes','seconds'} found, else None. Used to
+    Returns any of {'hours','minutes','seconds'}, else None. Used to
     override model slot-filling, which sometimes assigns the wrong unit
     (e.g. '10 seconds' → minutes=10).
+
+    Only trusts the utterance when it contains exactly ONE contiguous
+    duration phrase. "Add 5 minutes to the 10 minute timer" has two — the
+    second names the timer — and summing them (15) armed the wrong
+    duration; ambiguity keeps the model's slots instead.
     """
     if not text:
         return None
+    phrases = _DURATION_PHRASE_RE.findall(text)
+    if len(phrases) != 1:
+        return None
     out: dict[str, int] = {}
-    for num, unit in _DURATION_UNIT_RE.findall(text):
+    for num, unit in _DURATION_UNIT_RE.findall(phrases[0]):
         u = unit.lower()
         if u.startswith(("hour", "hr", "stunde")):
             key = "hours"

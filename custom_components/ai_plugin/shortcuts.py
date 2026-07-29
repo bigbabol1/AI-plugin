@@ -335,6 +335,23 @@ def _pick_climate_humidity(entities: list[Any], hass: HomeAssistant) -> tuple[An
     return None
 
 
+# Verbs that mark a message as a COMMAND, not a question. try_shortcut's
+# answers (time, sun, sensor readings) are informational — firing them on
+# a command swallows the action the user asked for.
+_ACTION_VERB_RE = re.compile(
+    r"\b(?:turn|switch|toggle|dim|brighten|set|start|stop|open|close|"
+    r"play|pause|mach|schalt\w*|stell\w*|dreh\w*|starte?|"
+    r"öffne\w*|schließ\w*|spiel\w*)\b",
+    re.IGNORECASE,
+)
+
+# "in <word>" after a time/sun question names a PLACE ("what time is it
+# in Tokyo") — the local clock/sun cannot answer that; the LLM (with
+# web_search) can. Sensor questions legitimately use "in <area>", so this
+# guard applies only inside the time and sun shortcuts.
+_PLACE_TAIL_RE = re.compile(r"\bin\s+\w", re.IGNORECASE)
+
+
 def _try_sun_shortcut(hass: HomeAssistant, message: str, lang: str = "en") -> str | None:
     """Deterministic reply for sun/daylight questions, in the user's language.
 
@@ -355,6 +372,8 @@ def _try_sun_shortcut(hass: HomeAssistant, message: str, lang: str = "en") -> st
         or (sun_is_up_re and sun_is_up_re.search(msg_lower))
     )
     if not matched:
+        return None
+    if _PLACE_TAIL_RE.search(msg_lower):
         return None
 
     state = hass.states.get("sun.sun")
@@ -415,6 +434,8 @@ def _try_time_shortcut(hass: HomeAssistant, message: str, lang: str) -> str | No
     time_re = L.keyword_re("time_now", lang)
     if time_re is None or not time_re.search(message.lower()):
         return None
+    if _PLACE_TAIL_RE.search(message.lower()):
+        return None
     try:
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -442,6 +463,13 @@ def try_shortcut(hass: HomeAssistant, message: str, *, lang: str = "en") -> str 
     LLM can still try via search_entities / web_search.
     """
     if not message or not hass:
+        return None
+
+    # Q&A shortcuts only: a message carrying an action verb is a COMMAND
+    # ("turn on the heating, it's cold in the living room" / "mach es warm
+    # im schlafzimmer") — answering it with a sensor reading swallows the
+    # action. Long messages are compound requests; both go to the LLM.
+    if len(message.split()) > 12 or _ACTION_VERB_RE.search(message):
         return None
 
     time_reply = _try_time_shortcut(hass, message, lang)

@@ -567,3 +567,68 @@ async def test_media_command_unknown_lists_status(patched_registries) -> None:
     out = await reg.call_tool("media_command", {"command": "nonsense"})
     assert out.startswith("Unknown media command")
     assert "status" in out
+
+
+# ── timer duration parsing (contiguous-phrase disambiguation) ─────────────────
+
+
+def test_duration_single_phrase_parsed() -> None:
+    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+
+    assert _parse_utterance_duration("set a timer for 10 minutes") == {"minutes": 10}
+    assert _parse_utterance_duration("10 seconds") == {"seconds": 10}
+    assert _parse_utterance_duration("timer für 5 Minuten") == {"minutes": 5}
+
+
+def test_duration_compound_phrase_summed() -> None:
+    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+
+    assert _parse_utterance_duration("set a timer for 1 minute 30 seconds") == {
+        "minutes": 1,
+        "seconds": 30,
+    }
+    assert _parse_utterance_duration("1 Stunde und 15 Minuten") == {
+        "hours": 1,
+        "minutes": 15,
+    }
+
+
+def test_duration_two_separate_phrases_ambiguous() -> None:
+    """Numbers belonging to different things (delta vs. the timer's NAME)
+    must never be combined — ambiguity keeps the model's slots."""
+    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+
+    assert _parse_utterance_duration("add 5 minutes to the 10 minute timer") is None
+    assert (
+        _parse_utterance_duration("set a 10 minute timer for the 3 minute eggs")
+        is None
+    )
+
+
+def test_duration_no_numbers() -> None:
+    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+
+    assert _parse_utterance_duration("set an egg timer") is None
+
+
+# ── explicit whole-home sweep phrases ─────────────────────────────────────────
+
+
+def test_user_said_all_accepts_everything_and_alles() -> None:
+    from custom_components.ai_plugin.tools.ha_local import _USER_SAID_ALL_RE
+
+    for phrase in (
+        "turn everything off",
+        "mach alles aus",
+        "schalte alles aus",
+        "turn off all the lights",
+        "überall licht aus",
+    ):
+        assert _USER_SAID_ALL_RE.search(phrase), phrase
+
+
+def test_user_said_all_still_rejects_specific() -> None:
+    from custom_components.ai_plugin.tools.ha_local import _USER_SAID_ALL_RE
+
+    for phrase in ("turn off the kitchen light", "mach das licht im bad aus"):
+        assert not _USER_SAID_ALL_RE.search(phrase), phrase

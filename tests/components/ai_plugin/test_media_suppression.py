@@ -237,3 +237,24 @@ def test_media_success_counts_as_actuator_success() -> None:
         _result_msg("c1", "OK — pause on media_player.wohnzimmer."),
     ]
     assert _any_actuator_success(msgs) is True
+
+
+# ── read-only schema subset for grounding retries ────────────────────────────
+
+
+def test_readonly_schemas_drop_all_actuators() -> None:
+    from custom_components.ai_plugin.orchestrator import _readonly_schemas
+
+    def schema(name):
+        return {"type": "function", "function": {"name": name}}
+
+    schemas = [
+        schema(n)
+        for n in (
+            "list_entities", "get_entity", "search_entities", "web_search",
+            "HassTurnOn", "HassMediaNext", "media_command", "play_music",
+            "set_area_state",
+        )
+    ]
+    kept = [s["function"]["name"] for s in _readonly_schemas(schemas)]
+    assert kept == ["list_entities", "get_entity", "search_entities", "web_search"]

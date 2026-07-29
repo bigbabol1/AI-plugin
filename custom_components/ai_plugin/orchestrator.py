@@ -245,6 +245,14 @@ def _any_actuator_call(tool_msgs: list[dict]) -> bool:
     return any(_any_tool_call(tool_msgs, t) for t in _ACTUATOR_TOOL_NAMES)
 
 
+def _readonly_schemas(schemas: list[dict]) -> list[dict]:
+    """Schemas minus actuators — for grounding retries that must not act."""
+    return [
+        s for s in schemas
+        if s.get("function", {}).get("name") not in _ACTUATOR_TOOL_NAMES
+    ]
+
+
 # Online-query grounding verifier.
 #
 # Rather than enumerating every possible trigger phrase (a losing battle),
@@ -1534,8 +1542,14 @@ class Orchestrator:
             # ("any lights on?", "which switches are off?") and the tool loop
             # never called list_entities, the model is answering from imagination.
             # Inject a corrective system turn and re-run the tool loop ONCE.
+            #
+            # Grounding retries (5b-5d) are informational — they re-run the
+            # loop WITHOUT actuator schemas so a retry can never re-execute
+            # the turn's action (double next-track, double toggle). 5e keeps
+            # the full set: forcing the action is its purpose.
+            readonly_schemas = _readonly_schemas(tool_schemas)
             if (
-                tool_schemas
+                readonly_schemas
                 and _is_state_set_query(message)
                 and not _any_list_entities_call(tool_msgs)
                 # media_command('status') already grounds media questions
@@ -1558,7 +1572,7 @@ class Orchestrator:
                 })
                 try:
                     reply2, tool_msgs2 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode, message,
+                        messages, readonly_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
                     )
                     if _any_list_entities_call(tool_msgs2):
@@ -1575,7 +1589,7 @@ class Orchestrator:
             missed_name = _get_entity_missed(tool_msgs)
             if (
                 missed_name is not None
-                and tool_schemas
+                and readonly_schemas
                 and not _any_tool_call(tool_msgs, "search_entities")
             ):
                 _LOGGER.info(
@@ -1599,7 +1613,7 @@ class Orchestrator:
                 })
                 try:
                     reply3, tool_msgs3 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode, message,
+                        messages, readonly_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
                     )
                     if _any_tool_call(tool_msgs3, "search_entities"):
@@ -1618,7 +1632,7 @@ class Orchestrator:
             # web search result ("when exactly did that happen?").
             _needs_search = (
                 self._web_search is not None
-                and tool_schemas
+                and readonly_schemas
                 and not _any_tool_call(tool_msgs, "web_search")
                 and (
                     _is_online_query(message)
@@ -1658,7 +1672,7 @@ class Orchestrator:
                 })
                 try:
                     reply4, tool_msgs4 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode, message,
+                        messages, readonly_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
                     )
                     reply = reply4

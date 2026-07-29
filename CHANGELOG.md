@@ -4,6 +4,14 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.38 — Review hardening II: retries, timers, sweeps, shortcut precision
+
+**Fixed:**
+- **Grounding retries can no longer re-execute actions.** The state-set, fuzzy-resolve, and web-search verifier retries re-ran the tool loop with the full schema set, so a retry could call `HassMediaNext`/`HassTurnOn` a second time (track skipped twice). Retries now run with a read-only schema subset; the action-command verifier keeps actuators — forcing the action is its purpose.
+- **Timer durations no longer absorb numbers from the timer's name.** "Add 5 minutes to the 10 minute timer" summed both numbers into a 15-minute change. The utterance parser now only overrides model slots when the message contains exactly one *contiguous* duration phrase ("1 minute 30 seconds" still works); ambiguity defers to the model's slots.
+- **"Turn everything off" / "mach alles aus" work.** The explicit-sweep guard knew "all"/"alle" but not "everything"/"alles" (and now also "sämtliche"), so it refused exactly the phrasings people use most.
+- **Sensor/time/sun shortcuts no longer hijack commands and place questions.** "Turn on the heating, it's cold in the living room" was answered with a temperature reading instead of acting; "what time is it in Tokyo" got the local clock; "set an alarm for sunset" got the sunset time. The Q&A shortcuts now skip messages carrying action verbs or >12 words, and the time/sun shortcuts skip "in <place>" questions — all of these fall through to the LLM, which can act or search.
+
 ## v0.9.37 — Review hardening: no more silent failures
 
 Five defects from an adversarial review of the reply pipeline, all sharing one root pattern: post-processing keyed on tool *invocation* or regex *presence* instead of *results* or *intent*.
