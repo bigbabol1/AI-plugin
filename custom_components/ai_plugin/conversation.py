@@ -89,6 +89,7 @@ _MAX_FOLLOW_UP_CHAIN = 4
 # quiet and the turn reaching us. Measured on the three recorded echoes:
 # 2.9s, 3.1s and 3.9s.
 _PLAYBACK_ECHO_GRACE_S = 6.0
+_PLAYBACK_START_SLACK_S = 1.0
 _PLAYBACK_IDLE_STATES = frozenset({"idle", "paused", "standby", "off", "unavailable"})
 
 
@@ -148,12 +149,19 @@ def _is_self_echo(stt_text: str, recent_replies: list[str]) -> bool:
     return False
 
 
-def _speaker_was_playing(hass: HomeAssistant, device_id: str | None) -> bool:
-    """True when a speaker in the caller's room is playing, or just stopped.
+def _speaker_was_playing(
+    hass: HomeAssistant, device_id: str | None, reply_age: float
+) -> bool:
+    """True when a speaker in the caller's room was playing OUR reply.
 
     Only speakers OTHER than the calling device count: the satellite's own
     player is the one whose end re-arms the mic, and it also plays the
     wake-word chime, so including it would flag ordinary first turns.
+
+    A player that is still playing only counts when it STARTED after we
+    produced the reply (``reply_age`` seconds ago). Otherwise the living-room
+    TV, or an hour-old music queue, would satisfy this for every follow-up in
+    the room.
     """
     if not device_id or hass is None:
         return False
@@ -182,12 +190,15 @@ def _speaker_was_playing(hass: HomeAssistant, device_id: str | None) -> bool:
             state = hass.states.get(eid)
             if state is None:
                 continue
+            since_change = (now - state.last_changed).total_seconds()
             if state.state == "playing":
-                return True
+                # Started after our reply → it is our TTS, not the TV.
+                if since_change <= reply_age + _PLAYBACK_START_SLACK_S:
+                    return True
+                continue
             if (
                 state.state in _PLAYBACK_IDLE_STATES
-                and (now - state.last_changed).total_seconds()
-                <= _PLAYBACK_ECHO_GRACE_S
+                and since_change <= _PLAYBACK_ECHO_GRACE_S
             ):
                 return True
     except Exception:  # noqa: BLE001 — never let this block a real turn
@@ -353,13 +364,19 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         store[device_id] = count
         return count
 
-    def _is_chain_link(self, device_id: str | None) -> bool:
-        """True when our previous reply could still have been playing."""
+    def _last_reply_age(self, device_id: str | None) -> float | None:
+        """Age of our most recent reply on this device, if it could still play."""
         recent = self._recent_replies_with_age(device_id)
         if not recent:
-            return False
+            return None
         age, reply = recent[-1]
-        return age <= _tail_echo_deadline(len(_echo_tokens(reply)))
+        if age > _tail_echo_deadline(len(_echo_tokens(reply))):
+            return None
+        return age
+
+    def _is_chain_link(self, device_id: str | None) -> bool:
+        """True when our previous reply could still have been playing."""
+        return self._last_reply_age(device_id) is not None
 
     def _reset_chain_turns(self, device_id: str | None) -> None:
         store = getattr(self, "_chain_turns", None)
@@ -382,12 +399,15 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         tokens = _echo_tokens(text)
         if not tokens or len(tokens) >= ECHO_MIN_TOKENS:
             return False
-        if not self._is_chain_link(user_input.device_id):
+        reply_age = self._last_reply_age(user_input.device_id)
+        if reply_age is None:
             return False
         lang = (user_input.language or "en").split("-")[0].lower()
         if looks_like_command(text, lang):
             return False
-        if not _speaker_was_playing(getattr(self, "hass", None), user_input.device_id):
+        if not _speaker_was_playing(
+            getattr(self, "hass", None), user_input.device_id, reply_age
+        ):
             return False
         _LOGGER.info(
             "AI Plugin: %r arrived while a speaker in the room was still "

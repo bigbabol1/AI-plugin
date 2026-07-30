@@ -369,11 +369,25 @@ async def test_mangled_tail_over_playback_is_dropped(monkeypatch) -> None:
 
 
 async def test_speaker_still_playing_also_counts(monkeypatch) -> None:
-    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="playing"))
+    """Playback that began with our reply still counts while it runs."""
+    ent = _entity_with_hass(
+        monkeypatch, *_hass_with_speaker(state="playing", seconds_ago=0.5)
+    )
 
     result = await _first_then(ent, " tremble down.", REPLY)
 
     assert result.response.speech["plain"]["speech"] == ""
+
+
+async def test_tv_playing_in_the_room_is_not_our_tts(monkeypatch) -> None:
+    """A TV running for five minutes must not make every short turn echo."""
+    ent = _entity_with_hass(
+        monkeypatch, *_hass_with_speaker(state="playing", seconds_ago=300.0)
+    )
+
+    await _first_then(ent, "and the bedroom", REPLY)
+
+    assert ent._orchestrator.async_process.await_count == 1
 
 
 async def test_real_short_command_over_playback_is_kept(monkeypatch) -> None:

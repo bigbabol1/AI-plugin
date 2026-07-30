@@ -4,6 +4,15 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.44 — the echo net has to live with the room's other speakers
+
+The playback-overlap rule from v0.9.43 asks whether a speaker in the caller's room was playing. In this install the living room also holds a TV and two Chromecast targets, all area-assigned — so "something in the room is playing" was true for entire evenings, and every short follow-up during a film would have been read as echo.
+
+**Fixed:**
+- **Only playback that began with our own reply counts.** A player that is still playing now qualifies only if it *started* after we produced the reply (within a second of slack). Our TTS starts a second or two after generation and therefore always passes; a TV that has been running for an hour, or a music queue from before the conversation, never does. The just-stopped branch is unchanged — it is already bounded to six seconds.
+
+*This is the trade-off of routing TTS to room speakers rather than the satellite: the mic re-arms before the room goes quiet, so the filters have to tell our own audio apart from everything else in the room. They now do it by origin, not just by presence.*
+
 ## v0.9.43 — the echo HA can see but no matcher can read
 
 v0.9.42 cut the recorded loop from ten turns to two. This closes the case it could not:
