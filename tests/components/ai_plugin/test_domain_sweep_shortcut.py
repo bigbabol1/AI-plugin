@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.ai_plugin import shortcuts
+from custom_components.ai_plugin.i18n import L
 from custom_components.ai_plugin.shortcuts import async_try_domain_sweep_shortcut
 
 
@@ -109,7 +110,13 @@ async def test_all_lights_sweeps_every_area(patched, msg, lang, service):
 
     result = await async_try_domain_sweep_shortcut(hass, msg, lang=lang)
 
-    assert result == (True, ""), f"{msg!r} ({lang}) should sweep silently"
+    # Whole-home sweeps confirm out loud — the user cannot see the other rooms.
+    expected = L.template(
+        "sweep_all_on" if service == "turn_on" else "sweep_all_off",
+        lang,
+        label=L.label("lights", lang),
+    )
+    assert result == (True, expected), f"{msg!r} ({lang}) should confirm the sweep"
     domain, svc, ids = _call(hass)
     assert (domain, svc) == ("homeassistant", service)
     assert ids == [
@@ -131,7 +138,7 @@ async def test_all_lights_beats_caller_area(patched):
         hass, "switch all lights off", lang="en", device_id="sat_bed"
     )
 
-    assert result == (True, "")
+    assert result == (True, "OK, all lights are off.")
     _, _, ids = _call(hass)
     assert len(ids) == 4
 
@@ -252,3 +259,59 @@ async def test_service_failure_falls_through(patched):
     )
 
     assert result is None
+
+
+# ── spoken confirmation, whole-home only ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_room_scoped_sweep_stays_silent(patched):
+    """Only whole-home sweeps confirm — a room you're in speaks for itself."""
+    hass, ent_reg, dev_reg, area_reg = _make_hass()
+    patched(hass, ent_reg, dev_reg, area_reg)
+
+    result = await async_try_domain_sweep_shortcut(
+        hass, "turn off all lights in the kitchen", lang="en"
+    )
+
+    assert result == (True, "")
+
+
+@pytest.mark.asyncio
+async def test_caller_room_sweep_stays_silent(patched):
+    devices = [SimpleNamespace(id="sat_bed", area_id="a_bed")]
+    hass, ent_reg, dev_reg, area_reg = _make_hass(devices=devices)
+    patched(hass, ent_reg, dev_reg, area_reg)
+
+    result = await async_try_domain_sweep_shortcut(
+        hass, "lights off", lang="en", device_id="sat_bed"
+    )
+
+    assert result == (True, "")
+
+
+@pytest.mark.asyncio
+async def test_confirmation_names_the_domain(patched):
+    hass, ent_reg, dev_reg, area_reg = _make_hass()
+    patched(hass, ent_reg, dev_reg, area_reg)
+
+    lights = await async_try_domain_sweep_shortcut(
+        hass, "turn on all lights", lang="en"
+    )
+    hass.services.async_call = AsyncMock()
+    fans = await async_try_domain_sweep_shortcut(hass, "turn off all fans", lang="en")
+
+    assert lights == (True, "OK, all lights are on.")
+    assert fans == (True, "OK, all fans are off.")
+
+
+@pytest.mark.asyncio
+async def test_confirmation_localized_de(patched):
+    hass, ent_reg, dev_reg, area_reg = _make_hass()
+    patched(hass, ent_reg, dev_reg, area_reg)
+
+    result = await async_try_domain_sweep_shortcut(
+        hass, "mach alle Lichter aus", lang="de"
+    )
+
+    assert result == (True, "OK, alle Lichter sind aus.")

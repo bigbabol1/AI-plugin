@@ -965,6 +965,8 @@ _SWEEP_DOMAIN_NOUNS: tuple[tuple[str, str], ...] = (
         r"gniazdka",
     ),
 )
+# i18n label key per domain, for the whole-home spoken confirmation.
+_SWEEP_LABEL_KEYS = {"light": "lights", "fan": "fans", "switch": "switches"}
 _SWEEP_DOMAIN_RES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (domain, re.compile(rf"^(?:{alt})$", re.IGNORECASE))
     for domain, alt in _SWEEP_DOMAIN_NOUNS
@@ -1052,7 +1054,10 @@ async def async_try_domain_sweep_shortcut(
     With no room, no "all" and no satellite (text chat / REST) the scope is
     genuinely ambiguous, so fall through to the LLM instead of guessing.
 
-    Returns (handled, reply) with reply="" for TTS suppression, or None.
+    Returns (handled, reply), or None. A whole-home sweep gets a short spoken
+    confirmation — the user cannot see the rooms they are not in, so silence
+    there is indistinguishable from "nothing happened". Room-scoped and
+    caller-room sweeps stay silent: the change is right in front of them.
     """
     if not message:
         return None
@@ -1113,6 +1118,10 @@ async def async_try_domain_sweep_shortcut(
         "AI Plugin sweep shortcut: %s %d %s(s) in %s (lang=%s)",
         service, len(ids), domain, scope, lang,
     )
+    if area_id is None:
+        key = "sweep_all_on" if service == "turn_on" else "sweep_all_off"
+        label = L.label(_SWEEP_LABEL_KEYS[domain], lang)
+        return (True, L.template(key, lang, label=label))
     return (True, "")
 
 

@@ -13,6 +13,9 @@ labels:
   energy: "zużycie"
   battery: "bateria"
   brightness: "jasność"
+  lights: "światła"
+  fans: "wentylatory"
+  switches: "gniazdka"
 
 templates:
   attr_state:        "{label} wynosi {val}{unit}."
@@ -26,6 +29,8 @@ templates:
   err_no_answer:     "Nie udało mi się znaleźć odpowiedzi. Spróbuj przeformułować."
   err_process:       "Przepraszam, nie mogłem tego przetworzyć."
   err_action_failed: "Nie udało mi się tego wykonać. Podaj urządzenie lub pomieszczenie."
+  sweep_all_on:  "OK, wszystko włączone."
+  sweep_all_off: "OK, wszystko wyłączone."
   note_tool_limit:   "[Uwaga: osiągnięto limit narzędzi — odpowiedź może być niepełna.]"
 
   time_is:           "Jest {time}."

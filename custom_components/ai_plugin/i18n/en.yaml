@@ -13,6 +13,9 @@ labels:
   energy: "energy"
   battery: "battery"
   brightness: "brightness"
+  lights: "lights"
+  fans: "fans"
+  switches: "switches"
 
 templates:
   attr_state:        "The {label} is {val}{unit}."
@@ -26,6 +29,8 @@ templates:
   err_no_answer:     "I couldn't produce an answer for that. Try rephrasing."
   err_process:       "Sorry, I couldn't process that."
   err_action_failed: "I couldn't carry that out. Try naming the device or the room."
+  sweep_all_on:  "OK, all {label} are on."
+  sweep_all_off: "OK, all {label} are off."
   note_tool_limit:   "[Note: reached tool call limit — response may be incomplete.]"
 
   time_is:           "It is {time}."

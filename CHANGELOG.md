@@ -4,6 +4,23 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.42 — follow-up listening stops talking to itself
+
+**New:**
+- **Whole-home sweeps confirm out loud.** "All lights off" now answers "OK, all lights are off." (localised, and it names the domain — lights, fans, sockets). Only whole-home sweeps speak: a room-scoped or caller-room sweep is happening in front of you, so it stays silent as before.
+
+**Fixed — 'Listen for follow-up' feedback loop:**
+
+A recorded loop from this install (ten consecutive runs, 11:17–11:20, of which two turns were human) shows exactly how it sustained itself, and it was not one bug but three.
+
+- **Short tails are now recognised as echo.** The mic re-arms as TTS playback ends, so it catches the reply's last words — "…in your home now!" comes back as "home now". Fragments that short sit below `ECHO_MIN_TOKENS`, where the bigram filter deliberately doesn't look, so they ran as fresh commands. A new tail rule matches a short turn against the reply's *ending*, in order, allowing one STT slip once the fragment is 3+ words; a single word must be the reply's very last word, so "stop" and "louder" still get through. Its window follows playback rather than the clock: the stored timestamp is from when the reply was *generated*, and a 60-word reply is still being spoken 20 seconds later.
+- **A detected echo now ends the session.** This is the one that mattered. Echoes were already being dropped — but the reply kept the mic armed, handing the reverb another go, and one fragment we happened not to recognise restarted the loop for real. In the recorded loop, turn 2 was correctly dropped and turns 3–10 followed anyway. Ending the session there stops all eight.
+- **Undetectable tails are bounded by a chain breaker.** "…list all areas and entities we have connected!" was heard as "and I choose to be out connected" — two words in common, no shared word pairs, too long for the tail rule. Nothing can match that reliably, so the chain is capped instead: after four turns that each arrive while the previous reply could still be playing, no further follow-up is offered. Measuring against playback (not a fixed gap) is what makes it fire — the chatty replies feeding these loops take 20–30s to speak, so every link looked unhurried by wall clock. The recorded worst case drops from 10+ turns to 5.
+
+Both replays are committed as regression tests, with the recorded timings.
+
+*Trade-off worth knowing: a real follow-up that repeats the end of what was just said, or the fifth turn of a rapid-fire chain, ends the session too. The wake word restarts it.*
+
 ## v0.9.41 — "all lights off" actually turns off all the lights
 
 Reported: asking the bedroom satellite to switch all lights on/off did nothing.

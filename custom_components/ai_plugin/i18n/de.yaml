@@ -13,6 +13,9 @@ labels:
   energy: "Energieverbrauch"
   battery: "Batterieladung"
   brightness: "Helligkeit"
+  lights: "Lichter"
+  fans: "Ventilatoren"
+  switches: "Schalter"
 
 templates:
   attr_state:        "Die {label} ist {val}{unit}."
@@ -26,6 +29,8 @@ templates:
   err_no_answer:     "Darauf habe ich gerade keine Antwort. Bitte formuliere es anders."
   err_process:       "Entschuldigung, das konnte ich nicht verarbeiten."
   err_action_failed: "Das konnte ich nicht ausführen. Nenne bitte das Gerät oder den Raum."
+  sweep_all_on:  "OK, alle {label} sind an."
+  sweep_all_off: "OK, alle {label} sind aus."
   note_tool_limit:   "[Hinweis: Werkzeuglimit erreicht — die Antwort ist möglicherweise unvollständig.]"
 
   time_is:           "Es ist {time} Uhr."

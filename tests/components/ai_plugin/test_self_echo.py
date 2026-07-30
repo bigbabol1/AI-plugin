@@ -124,3 +124,167 @@ def test_echo_with_one_stt_error_still_dropped() -> None:
     reply = "The temperature in the bedroom is twenty one degrees right now."
     stt = "the temperature in the bedroom is twenty two degrees right now"
     assert _is_self_echo(stt, [reply]) is True
+
+
+# ── v0.9.42: tail echo (the follow-up feedback loop) ──────────────────────────
+# 'Listen for follow-up' re-arms the mic exactly as TTS ends, so it catches the
+# reply's last words. Those fragments are below ECHO_MIN_TOKENS, so the bigram
+# filter ignored them by design — they ran as commands, got answered, and the
+# new reply's tail started the next round.
+
+
+def test_tail_fragment_of_reply_is_echo() -> None:
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    reply = "I'll turn off all the lights in your home now!"
+    assert _is_tail_echo("your home now", [(1.0, reply)]) is True
+    assert _is_tail_echo("home now", [(1.0, reply)]) is True
+    assert _is_tail_echo("now", [(1.0, reply)]) is True
+
+
+def test_tail_fragment_de() -> None:
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    assert _is_tail_echo("sind aus", [(1.0, "OK, alle Lichter sind aus.")]) is True
+    assert _is_tail_echo("aus", [(1.0, "OK, alle Lichter sind aus.")]) is True
+
+
+def test_tail_echo_survives_one_stt_error() -> None:
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    reply = "The bedroom light is on."
+    assert _is_tail_echo("bedroom light on", [(1.0, reply)]) is True
+
+
+def test_real_short_commands_are_not_tail_echo() -> None:
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    reply = "The living room light is on."
+    for text in ("stop", "louder", "turn it off", "and the fan", "thanks"):
+        assert _is_tail_echo(text, [(1.0, reply)]) is False, text
+
+
+def test_single_word_only_matches_the_last_word() -> None:
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    reply = "The bedroom light is on."
+    assert _is_tail_echo("on", [(1.0, reply)]) is True       # the actual last word
+    assert _is_tail_echo("bedroom", [(1.0, reply)]) is False  # mid-sentence word
+
+
+def test_long_turns_left_to_the_bigram_filter() -> None:
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    reply = "The living room light is on and the blinds are closed."
+    assert _is_tail_echo("the blinds are closed", [(1.0, reply)]) is False
+
+
+def test_tail_echo_needs_a_recent_reply() -> None:
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    assert _is_tail_echo("home now", []) is False
+
+
+async def test_tail_echo_ends_the_session() -> None:
+    """The loop breaker: after an echo we stop offering a follow-up."""
+    ent = _entity()
+    ent._orchestrator.async_process = AsyncMock(
+        return_value="I'll turn off all the lights in your home now!"
+    )
+    first = await ent.async_process(_voice_input("switch all lights off"))
+    assert first.continue_conversation is True
+
+    ent._orchestrator.async_process.reset_mock()
+    echo = await ent.async_process(_voice_input("home now"))
+
+    assert echo.response.speech["plain"]["speech"] == ""
+    ent._orchestrator.async_process.assert_not_awaited()
+    assert echo.continue_conversation is False
+
+
+async def test_chain_cap_breaks_undetected_loops() -> None:
+    """Even a garbled tail we don't recognise cannot loop forever."""
+    ent = _entity()
+    # Each reply is distinct prose, so neither echo rule ever fires.
+    replies = iter([f"Reply number {n} about something else entirely." for n in range(9)])
+    ent._orchestrator.async_process = AsyncMock(
+        side_effect=lambda **kw: next(replies)
+    )
+
+    outcomes = [
+        (await ent.async_process(_voice_input(f"question {n} please"))).continue_conversation
+        for n in range(6)
+    ]
+
+    # Four back-to-back follow-ups are allowed; the fifth ends the session.
+    assert outcomes[:4] == [True, True, True, True]
+    assert outcomes[4] is False
+    # Counter reset after ending, so a fresh chain starts clean.
+    assert outcomes[5] is True
+
+
+async def test_pause_between_turns_resets_the_chain(monkeypatch) -> None:
+    ent = _entity()
+    replies = iter([f"Reply number {n} about something else entirely." for n in range(9)])
+    ent._orchestrator.async_process = AsyncMock(side_effect=lambda **kw: next(replies))
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(
+        "custom_components.ai_plugin.conversation.time.monotonic",
+        lambda: clock["t"],
+    )
+    outcomes = []
+    for n in range(6):
+        clock["t"] += 60.0  # a normal pause between turns
+        outcomes.append(
+            (await ent.async_process(_voice_input(f"question {n} please"))).continue_conversation
+        )
+
+    assert all(outcomes), "paced turns must never hit the loop breaker"
+
+
+def test_tail_echo_window_scales_with_playback_length() -> None:
+    """The stored timestamp is from generation — playback still has to happen,
+    so a long reply's tail can legitimately arrive many seconds later."""
+    from custom_components.ai_plugin.conversation import _is_tail_echo
+
+    short = "Lights off."
+    long_reply = (
+        "The living room is twenty one degrees, the kitchen is nineteen, "
+        "and the bedroom is eighteen degrees with the window open."
+    )
+    # A short reply finished speaking long ago — 15s later it can't be echo.
+    assert _is_tail_echo("off", [(15.0, short)]) is False
+    assert _is_tail_echo("off", [(2.0, short)]) is True
+    # A 21-word reply takes ~8s to speak, so its tail can still land at 12s.
+    assert _is_tail_echo("window open", [(12.0, long_reply)]) is True
+    # ...but not once well past any plausible playback.
+    assert _is_tail_echo("window open", [(18.0, long_reply)]) is False
+
+
+async def test_chain_cap_fires_on_slow_chatty_loops(monkeypatch) -> None:
+    """The shape of the real loop: 60-word replies, ~17s between turns.
+
+    Measured by wall clock those turns look unhurried, so a flat "back to
+    back" window never fired. Measured against playback — 60 words take
+    ~24s to speak — every one of them arrives mid-reply.
+    """
+    ent = _entity()
+    chatty = " ".join(f"word{n}" for n in range(60))
+    replies = iter([f"{chatty} ending {n}." for n in range(9)])
+    ent._orchestrator.async_process = AsyncMock(side_effect=lambda **kw: next(replies))
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(
+        "custom_components.ai_plugin.conversation.time.monotonic",
+        lambda: clock["t"],
+    )
+    outcomes = []
+    for n in range(6):
+        clock["t"] += 17.0
+        outcomes.append(
+            (await ent.async_process(_voice_input(f"unrelated question {n} here"))).continue_conversation
+        )
+
+    assert outcomes[:4] == [True, True, True, True]
+    assert outcomes[4] is False

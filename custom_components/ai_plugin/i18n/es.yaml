@@ -13,6 +13,9 @@ labels:
   energy: "consumo"
   battery: "batería"
   brightness: "brillo"
+  lights: "luces"
+  fans: "ventiladores"
+  switches: "enchufes"
 
 templates:
   attr_state:        "La {label} es {val}{unit}."
@@ -26,6 +29,8 @@ templates:
   err_no_answer:     "No pude generar una respuesta. Intenta reformularla."
   err_process:       "Lo siento, no pude procesar eso."
   err_action_failed: "No pude ejecutar eso. Indica el dispositivo o la habitación."
+  sweep_all_on:  "Listo, todo encendido."
+  sweep_all_off: "Listo, todo apagado."
   note_tool_limit:   "[Nota: se alcanzó el límite de herramientas — la respuesta puede estar incompleta.]"
 
   time_is:           "Son las {time}."
