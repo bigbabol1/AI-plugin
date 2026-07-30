@@ -51,13 +51,13 @@ def _entity(options=None):
     return ent
 
 
-def _voice_input(text, device_id="sat1"):
+def _voice_input(text, device_id="sat1", language="en"):
     from homeassistant.components.conversation import ConversationInput
     from homeassistant.core import Context
 
     return ConversationInput(
         text=text, context=Context(), conversation_id="c",
-        device_id=device_id, language="en", agent_id=None,
+        device_id=device_id, language=language, agent_id=None,
     )
 
 
@@ -288,3 +288,164 @@ async def test_chain_cap_fires_on_slow_chatty_loops(monkeypatch) -> None:
 
     assert outcomes[:4] == [True, True, True, True]
     assert outcomes[4] is False
+
+
+# ── v0.9.43: playback-overlap echo ────────────────────────────────────────────
+# The tail STT rewrites into different words entirely ("…like Trumbull County!"
+# → "tremble down"). Nothing lexical survives, but HA's state says the mic was
+# open while a speaker in the room was still playing.
+
+
+def _hass_with_speaker(state: str = "idle", seconds_ago: float = 2.0,
+                       speaker_is_caller: bool = False):
+    """hass whose living-room speaker is playing / just stopped."""
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from homeassistant.util import dt as dt_util
+
+    speaker_device = "dev_sat" if speaker_is_caller else "dev_speaker"
+    devices = {
+        "dev_sat": SimpleNamespace(id="dev_sat", area_id="a_liv"),
+        "dev_speaker": SimpleNamespace(id="dev_speaker", area_id="a_liv"),
+    }
+    entities = {
+        "media_player.big_speaker": SimpleNamespace(
+            entity_id="media_player.big_speaker", area_id=None,
+            device_id=speaker_device,
+        ),
+    }
+    hass = MagicMock()
+    hass.states.get.return_value = SimpleNamespace(
+        state=state,
+        last_changed=dt_util.utcnow() - timedelta(seconds=seconds_ago),
+    )
+    return hass, devices, entities
+
+
+def _entity_with_hass(monkeypatch, hass, devices, entities):
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity()
+    ent.hass = hass
+    dev_reg = MagicMock()
+    dev_reg.async_get.side_effect = devices.get
+    ent_reg = MagicMock()
+    ent_reg.entities = entities
+    monkeypatch.setattr(conv.dr, "async_get", lambda h: dev_reg)
+    monkeypatch.setattr(conv.er, "async_get", lambda h: ent_reg)
+    monkeypatch.setattr(conv.er, "async_entries_for_device", lambda r, d: [])
+    return ent
+
+
+async def _first_then(ent, second_text: str, first_reply: str, language: str = "en"):
+    """Answer one real turn, then feed `second_text` as the follow-up."""
+    ent._orchestrator.async_process = AsyncMock(return_value=first_reply)
+    await ent.async_process(
+        _voice_input("why is it so hot today", device_id="dev_sat", language=language)
+    )
+    ent._orchestrator.async_process.reset_mock()
+    return await ent.async_process(
+        _voice_input(second_text, device_id="dev_sat", language=language)
+    )
+
+
+REPLY = (
+    "Today's extreme heat is caused by a high-pressure system from the south "
+    "that has been keeping temperatures elevated for about five days and "
+    "pushing us toward 95 degrees in some areas like Trumbull County!"
+)
+
+
+async def test_mangled_tail_over_playback_is_dropped(monkeypatch) -> None:
+    """The verbatim failure: two words with no relation to what was said."""
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(seconds_ago=2.0))
+
+    result = await _first_then(ent, " tremble down.", REPLY)
+
+    assert result.response.speech["plain"]["speech"] == ""
+    ent._orchestrator.async_process.assert_not_awaited()
+    assert result.continue_conversation is False
+
+
+async def test_speaker_still_playing_also_counts(monkeypatch) -> None:
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="playing"))
+
+    result = await _first_then(ent, " tremble down.", REPLY)
+
+    assert result.response.speech["plain"]["speech"] == ""
+
+
+async def test_real_short_command_over_playback_is_kept(monkeypatch) -> None:
+    """A recognisable command is never dropped, however the timing looks."""
+    for text, lang in (("turn it off", "en"), ("next", "en"),
+                       ("lights off", "en"), ("licht aus", "de"),
+                       ("alle lichter aus", "de")):
+        ent = _entity_with_hass(monkeypatch, *_hass_with_speaker())
+        result = await _first_then(ent, text, REPLY, language=lang)
+        assert ent._orchestrator.async_process.await_count == 1, text
+        assert result.response.speech["plain"]["speech"], text
+
+
+async def test_bare_answer_over_playback_is_kept(monkeypatch) -> None:
+    """"yes" answers the question the agent just asked — never swallow it."""
+    for text in ("yes", "no", "ja", "louder", "again"):
+        ent = _entity_with_hass(monkeypatch, *_hass_with_speaker())
+        result = await _first_then(ent, text, "Do you want me to cool the room?")
+        assert ent._orchestrator.async_process.await_count == 1, text
+        assert result.response.speech["plain"]["speech"], text
+
+
+async def test_wake_word_chime_does_not_trigger_the_rule(monkeypatch) -> None:
+    """The satellite's OWN player plays the chime — it must not count."""
+    ent = _entity_with_hass(
+        monkeypatch, *_hass_with_speaker(speaker_is_caller=True)
+    )
+
+    result = await _first_then(ent, " tremble down.", REPLY)
+
+    assert ent._orchestrator.async_process.await_count == 1
+
+
+async def test_no_recent_reply_means_no_playback_echo(monkeypatch) -> None:
+    """Music playing in the room + a fresh wake-word turn is not echo."""
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="playing"))
+
+    # No prior turn at all → nothing of ours could be playing.
+    ent._orchestrator.async_process = AsyncMock(return_value="Sure thing.")
+    result = await ent.async_process(_voice_input(" tremble down.", device_id="dev_sat"))
+
+    assert ent._orchestrator.async_process.await_count == 1
+    assert result.response.speech["plain"]["speech"] == "Sure thing."
+
+
+async def test_long_turn_over_playback_is_kept(monkeypatch) -> None:
+    """Four words or more carry enough signal for the text matchers."""
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker())
+
+    result = await _first_then(ent, "what about tomorrow morning", REPLY)
+
+    assert ent._orchestrator.async_process.await_count == 1
+    assert result.response.speech["plain"]["speech"]
+
+
+async def test_recorded_playback_gap_is_covered(monkeypatch) -> None:
+    """The measured gaps between speaker-idle and the turn: 2.9s, 3.1s, 3.9s.
+
+    Recorded on 2026-07-30 15:22-15:26 UTC on the living-room satellite,
+    whose TTS is mirrored to wohnzimmer_2 / big_speaker_2 / small_speaker_2.
+    """
+    for gap in (2.9, 3.1, 3.9):
+        ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(seconds_ago=gap))
+        result = await _first_then(ent, " tremble down.", REPLY)
+        assert result.response.speech["plain"]["speech"] == "", gap
+        assert result.continue_conversation is False, gap
+
+
+async def test_playback_gap_beyond_grace_is_not_echo(monkeypatch) -> None:
+    """Long after the room went quiet, a short turn is just a short turn."""
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(seconds_ago=9.0))
+
+    await _first_then(ent, " tremble down.", REPLY)
+
+    assert ent._orchestrator.async_process.await_count == 1

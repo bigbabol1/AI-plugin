@@ -15,10 +15,15 @@ from homeassistant.components.conversation import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import intent
+from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
+    entity_registry as er,
+    intent,
+)
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.util import ulid as ulid_util
+from homeassistant.util import dt as dt_util, ulid as ulid_util
 
 from .const import (
     CONF_CONTINUE_CONVERSATION,
@@ -34,6 +39,7 @@ from .const import (
 from .exceptions import OrchestratorError
 from .i18n import L
 from .orchestrator import Orchestrator
+from .shortcuts import looks_like_command
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +75,21 @@ _ECHO_TAIL_TOKENS = 6
 # after this many consecutive links, stop offering a follow-up. A real
 # dialogue that hits the cap just needs the wake word again.
 _MAX_FOLLOW_UP_CHAIN = 4
+
+
+# Playback-overlap echo. Satellites that mirror their TTS to other speakers
+# re-arm the mic when their OWN playback ends — about a second before the
+# room actually goes quiet — so the first thing recorded is the tail of the
+# reply. Recorded on this install: satellite listening at 15:25:21, external
+# speakers idle at 15:25:22, voice detected at 15:25:22, and "…like Trumbull
+# County!" reached the agent as "tremble down". No text matcher can catch
+# that — STT invented both words — but HA's own state says the microphone
+# was open while a speaker was still playing.
+# Grace covers capture + VAD silence + STT latency between the speaker going
+# quiet and the turn reaching us. Measured on the three recorded echoes:
+# 2.9s, 3.1s and 3.9s.
+_PLAYBACK_ECHO_GRACE_S = 6.0
+_PLAYBACK_IDLE_STATES = frozenset({"idle", "paused", "standby", "off", "unavailable"})
 
 
 def _match_close_phrase(text: str | None) -> str | None:
@@ -124,6 +145,53 @@ def _is_self_echo(stt_text: str, recent_replies: list[str]) -> bool:
         overlap = len(turn_bigrams & reply_bigrams) / len(turn_bigrams)
         if overlap >= ECHO_MATCH_THRESHOLD:
             return True
+    return False
+
+
+def _speaker_was_playing(hass: HomeAssistant, device_id: str | None) -> bool:
+    """True when a speaker in the caller's room is playing, or just stopped.
+
+    Only speakers OTHER than the calling device count: the satellite's own
+    player is the one whose end re-arms the mic, and it also plays the
+    wake-word chime, so including it would flag ordinary first turns.
+    """
+    if not device_id or hass is None:
+        return False
+    try:
+        dev_reg = dr.async_get(hass)
+        ent_reg = er.async_get(hass)
+        dev = dev_reg.async_get(device_id)
+        area_id = dev.area_id if dev else None
+        if not area_id:
+            for entry in er.async_entries_for_device(ent_reg, device_id):
+                if entry.area_id:
+                    area_id = entry.area_id
+                    break
+        if not area_id:
+            return False
+        now = dt_util.utcnow()
+        for eid, entry in ent_reg.entities.items():
+            if not eid.startswith("media_player.") or entry.device_id == device_id:
+                continue
+            entry_area = entry.area_id
+            if not entry_area and entry.device_id:
+                other = dev_reg.async_get(entry.device_id)
+                entry_area = other.area_id if other else None
+            if entry_area != area_id:
+                continue
+            state = hass.states.get(eid)
+            if state is None:
+                continue
+            if state.state == "playing":
+                return True
+            if (
+                state.state in _PLAYBACK_IDLE_STATES
+                and (now - state.last_changed).total_seconds()
+                <= _PLAYBACK_ECHO_GRACE_S
+            ):
+                return True
+    except Exception:  # noqa: BLE001 — never let this block a real turn
+        _LOGGER.debug("playback-overlap check failed", exc_info=True)
     return False
 
 
@@ -281,19 +349,52 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         if store is None:
             store = {}
             self._chain_turns = store
-        recent = self._recent_replies_with_age(device_id)
-        linked = False
-        if recent:
-            age, reply = recent[-1]
-            linked = age <= _tail_echo_deadline(len(_echo_tokens(reply)))
-        count = store.get(device_id, 0) + 1 if linked else 1
+        count = store.get(device_id, 0) + 1 if self._is_chain_link(device_id) else 1
         store[device_id] = count
         return count
+
+    def _is_chain_link(self, device_id: str | None) -> bool:
+        """True when our previous reply could still have been playing."""
+        recent = self._recent_replies_with_age(device_id)
+        if not recent:
+            return False
+        age, reply = recent[-1]
+        return age <= _tail_echo_deadline(len(_echo_tokens(reply)))
 
     def _reset_chain_turns(self, device_id: str | None) -> None:
         store = getattr(self, "_chain_turns", None)
         if store and device_id:
             store.pop(device_id, None)
+
+    def _is_playback_overlap_echo(self, user_input: ConversationInput) -> bool:
+        """True when a short, meaningless turn was recorded over our own TTS.
+
+        Last line of defence, for tails the text matchers cannot see: STT
+        substitutes words wholesale ("Trumbull County" → "tremble down"), so
+        there is nothing left to compare. Four conditions have to hold at
+        once — the turn is one to three words, our own reply could still have
+        been playing, a speaker in the room was playing (or had just
+        stopped), and the words are not something the user could plausibly
+        have said. A recognisable command or a bare "yes" is never dropped
+        here, however the timing looks.
+        """
+        text = user_input.text or ""
+        tokens = _echo_tokens(text)
+        if not tokens or len(tokens) >= ECHO_MIN_TOKENS:
+            return False
+        if not self._is_chain_link(user_input.device_id):
+            return False
+        lang = (user_input.language or "en").split("-")[0].lower()
+        if looks_like_command(text, lang):
+            return False
+        if not _speaker_was_playing(getattr(self, "hass", None), user_input.device_id):
+            return False
+        _LOGGER.info(
+            "AI Plugin: %r arrived while a speaker in the room was still "
+            "playing and means nothing on its own — treating as TTS echo",
+            text[:60],
+        )
+        return True
 
     async def _async_handle_message(
         self, user_input: ConversationInput, chat_log
@@ -341,6 +442,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 user_input.text,
                 self._recent_replies_with_age(user_input.device_id),
             )
+            or self._is_playback_overlap_echo(user_input)
         )
         if is_echo:
             _LOGGER.info(

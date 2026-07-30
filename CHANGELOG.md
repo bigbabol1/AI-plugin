@@ -4,6 +4,25 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.43 — the echo HA can see but no matcher can read
+
+v0.9.42 cut the recorded loop from ten turns to two. This closes the case it could not:
+
+```
+15:25:21  satellite -> listening        (mic opens; its own player is idle)
+15:25:22  wohnzimmer_2/big/small speaker -> idle    <- TTS still playing here
+15:25:22  voice detected
+          "...like Trumbull County!"  reaches the agent as  "tremble down"
+```
+
+The satellite mirrors its TTS to other speakers in the room and re-arms the microphone when its **own** playback ends — about a second before the room actually goes quiet. STT then rewrites that last second into different words entirely, so there is nothing left for a text matcher to compare: "tremble down" shares no letters worth matching with "Trumbull County". The bigram filter, the tail rule and every threshold in between are blind to it by construction.
+
+**Fixed:**
+- **Playback-overlap echo detection.** HA's own state records what the text cannot: a `media_player` in the caller's room was playing, or had just stopped, while the microphone was open. A turn is now treated as echo when four things hold at once — it is one to three words, our own reply could still have been playing, a speaker in that room was playing or stopped within six seconds (measured gaps on the recorded echoes: 2.9s, 3.1s, 3.9s), and the words are not something the user could plausibly have said. The dropped turn ends the session, so the chain stops there.
+- **Never swallowed:** a recognisable command in any supported language ("turn it off", "next", "lights off", "alle Lichter aus") or a bare answer ("yes", "no", "louder", "again") is kept no matter how the timing looks — those are exactly the short turns a real follow-up consists of. The satellite's own player is excluded too, so the wake-word chime can't trigger the rule, and a fresh wake-word turn is never affected because it requires a recent reply of ours.
+
+*Root cause worth knowing: this class of loop only exists because TTS is mirrored to speakers whose playback the satellite cannot see the end of. Playing replies on the satellite itself — which has echo cancellation — removes it entirely. The filters here are a net under that, not a substitute for it.*
+
 ## v0.9.42 — follow-up listening stops talking to itself
 
 **New:**
