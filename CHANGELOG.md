@@ -20,6 +20,8 @@ Falls back cleanly: satellites that don't advertise `START_CONVERSATION` keep th
 
 The echo filters from v0.9.42–v0.9.44 stay as a net underneath — with a real quiet gap they should have nothing left to catch.
 
+**v0.9.46:** the wait-for-quiet loop measured "is a speaker playing" against the maximum wait rather than the age of our own reply, so a TV already running in the room would have held the microphone shut until the 90-second cap. Only playback that started with our reply holds it now.
+
 ## v0.9.44 — the echo net has to live with the room's other speakers
 
 The playback-overlap rule from v0.9.43 asks whether a speaker in the caller's room was playing. In this install the living room also holds a TV and two Chromecast targets, all area-assigned — so "something in the room is playing" was true for entire evenings, and every short follow-up during a film would have been read as echo.

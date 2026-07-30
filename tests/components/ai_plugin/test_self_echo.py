@@ -596,3 +596,28 @@ async def test_delayed_follow_up_keeps_conversation_history(monkeypatch) -> None
     assert second_id == first_id, "follow-up lost the conversation it continues"
     for coro in created:
         coro.close()
+
+
+async def test_reopen_is_not_stalled_by_unrelated_playback(monkeypatch) -> None:
+    """A TV already running in the room must not hold the mic shut."""
+    from custom_components.ai_plugin import conversation as conv
+
+    ent, hass, _ = _entity_with_satellite(monkeypatch)
+
+    async def _fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
+    seen_ages: list[float] = []
+
+    def _playing(hass_, device_id, reply_age):
+        seen_ages.append(reply_age)
+        # Started 10 minutes ago → never "ours", whatever the reply age.
+        return 600.0 <= reply_age
+
+    monkeypatch.setattr(conv, "_speaker_was_playing", _playing)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", "two words", 3.0)
+
+    assert max(seen_ages) < conv._PLAYBACK_WAIT_CAP_S, "reply age must stay bounded"
+    hass.services.async_call.assert_awaited_once()

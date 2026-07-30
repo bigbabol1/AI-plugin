@@ -432,13 +432,16 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             # the estimated end AND until every speaker in the room is quiet,
             # so a slow external speaker can't be cut short.
             spoken_for = len(_echo_tokens(reply)) / _TTS_WORDS_PER_S
-            waited = 0.0
-            await asyncio.sleep(min(spoken_for + 1.0, _PLAYBACK_WAIT_CAP_S))
-            while waited < _PLAYBACK_WAIT_CAP_S:
-                if not _speaker_was_playing(hass, device_id, _PLAYBACK_WAIT_CAP_S):
+            elapsed = min(spoken_for + 1.0, _PLAYBACK_WAIT_CAP_S)
+            await asyncio.sleep(elapsed)
+            while elapsed < _PLAYBACK_WAIT_CAP_S:
+                # `elapsed` is the age of our reply, so only playback that
+                # started with it holds the microphone shut — a TV that was
+                # already running must not stall the follow-up forever.
+                if not _speaker_was_playing(hass, device_id, elapsed):
                     break
                 await asyncio.sleep(_PLAYBACK_POLL_S)
-                waited += _PLAYBACK_POLL_S
+                elapsed += _PLAYBACK_POLL_S
             await asyncio.sleep(delay)
 
             state = hass.states.get(satellite)
