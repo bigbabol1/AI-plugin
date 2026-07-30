@@ -63,6 +63,13 @@ ECHO_MATCH_THRESHOLD = 0.7
 CONF_SUMMARIZATION_ENABLED = "summarization_enabled"
 CONF_VOICE_MODE = "voice_mode"
 CONF_CONTINUE_CONVERSATION = "continue_conversation"
+# Seconds of quiet to insert between a spoken reply and the microphone
+# reopening for a follow-up. 0 = let the satellite reopen it itself
+# (unchanged behaviour). Above 0, the plugin ends the turn instead and
+# reopens the microphone itself via assist_satellite.start_conversation
+# once the room is actually quiet — the fix for satellites whose TTS plays
+# on separate speakers they cannot see the end of.
+CONF_FOLLOW_UP_DELAY = "follow_up_delay"
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
 CONF_ENABLE_THINKING = "enable_thinking"
@@ -118,6 +125,7 @@ DEFAULT_WEB_SEARCH_BACKEND = BACKEND_DUCKDUCKGO
 DEFAULT_SUMMARIZATION_ENABLED = True
 DEFAULT_VOICE_MODE = False
 DEFAULT_CONTINUE_CONVERSATION = True
+DEFAULT_FOLLOW_UP_DELAY = 0.0
 DEFAULT_LOCATION_BIAS = True
 DEFAULT_ENABLE_THINKING = False
 

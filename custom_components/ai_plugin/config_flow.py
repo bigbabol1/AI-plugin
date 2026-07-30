@@ -46,6 +46,7 @@ from .const import (
     CONF_BRAVE_API_KEY,
     CONF_CONTEXT_WINDOW,
     CONF_CONTINUE_CONVERSATION,
+    CONF_FOLLOW_UP_DELAY,
     CONF_ENABLE_THINKING,
     CONF_FEEDBACK_LOOP_DEVICES,
     CONF_LOCATION_BIAS,
@@ -73,6 +74,7 @@ from .const import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_CONTINUE_CONVERSATION,
+    DEFAULT_FOLLOW_UP_DELAY,
     DEFAULT_ENABLE_THINKING,
     DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_RESULTS,
@@ -222,6 +224,17 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
                 CONF_CONTINUE_CONVERSATION,
                 default=current.get(CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION),
             ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_FOLLOW_UP_DELAY,
+                default=current.get(CONF_FOLLOW_UP_DELAY, DEFAULT_FOLLOW_UP_DELAY),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=10,
+                    step=0.5,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
             vol.Optional(
                 CONF_ENABLE_THINKING,
                 default=current.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING),

@@ -28,9 +28,11 @@ from homeassistant.util import dt as dt_util, ulid as ulid_util
 from .const import (
     CONF_CONTINUE_CONVERSATION,
     CONF_FEEDBACK_LOOP_DEVICES,
+    CONF_FOLLOW_UP_DELAY,
     CONF_SELF_ECHO_FILTER,
     CONVERSATION_CLOSE_PHRASES,
     DEFAULT_CONTINUE_CONVERSATION,
+    DEFAULT_FOLLOW_UP_DELAY,
     DEFAULT_SELF_ECHO_FILTER,
     DOMAIN,
     ECHO_MATCH_THRESHOLD,
@@ -75,6 +77,20 @@ _ECHO_TAIL_TOKENS = 6
 # after this many consecutive links, stop offering a follow-up. A real
 # dialogue that hits the cap just needs the wake word again.
 _MAX_FOLLOW_UP_CHAIN = 4
+
+# Delayed follow-up. A satellite reopens its microphone the moment ITS OWN
+# playback ends, which on a TTS-rerouted setup is a second before the room
+# goes quiet — nothing in the conversation API can move that. So take the
+# job away from it: end the turn (mic stays shut), wait for the speakers to
+# actually stop, wait the configured quiet gap, then reopen the microphone
+# with assist_satellite.start_conversation (empty message, no preannounce =
+# silent listen). Requires the satellite to advertise START_CONVERSATION.
+_SATELLITE_START_CONVERSATION_FEATURE = 2
+_PLAYBACK_POLL_S = 0.5
+_PLAYBACK_WAIT_CAP_S = 90.0
+# A delayed follow-up arrives as a NEW HA conversation, so the history key is
+# remapped back to the conversation it continues for this long.
+_FOLLOW_UP_CONTINUITY_S = 120.0
 
 
 # Playback-overlap echo. Satellites that mirror their TTS to other speakers
@@ -304,6 +320,10 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         self._recent_replies: dict[str, list[tuple[float, str]]] = {}
         # Loop breaker state: device_id -> consecutive follow-up chain length.
         self._chain_turns: dict[str, int] = {}
+        # Delayed follow-up: pending reopen task and the conversation it
+        # continues, per device.
+        self._follow_up_tasks: dict[str, asyncio.Task] = {}
+        self._follow_up_convs: dict[str, tuple[float, str]] = {}
 
     def _echo_store(self) -> dict[str, list[tuple[float, str]]]:
         store = getattr(self, "_recent_replies", None)
@@ -383,6 +403,128 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         if store and device_id:
             store.pop(device_id, None)
 
+    def _satellite_for_device(self, device_id: str | None) -> str | None:
+        """assist_satellite entity of the calling device, if it can be reopened."""
+        hass = getattr(self, "hass", None)
+        if not device_id or hass is None:
+            return None
+        try:
+            for entry in er.async_entries_for_device(er.async_get(hass), device_id):
+                if not entry.entity_id.startswith("assist_satellite."):
+                    continue
+                state = hass.states.get(entry.entity_id)
+                features = (
+                    state.attributes.get("supported_features", 0) if state else 0
+                )
+                if features & _SATELLITE_START_CONVERSATION_FEATURE:
+                    return entry.entity_id
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("satellite lookup failed", exc_info=True)
+        return None
+
+    async def _reopen_after_quiet(
+        self, device_id: str, satellite: str, reply: str, delay: float
+    ) -> None:
+        """Wait for our own TTS to finish, pause, then reopen the microphone."""
+        hass = self.hass
+        try:
+            # Playback has not even started yet when we get here; hold until
+            # the estimated end AND until every speaker in the room is quiet,
+            # so a slow external speaker can't be cut short.
+            spoken_for = len(_echo_tokens(reply)) / _TTS_WORDS_PER_S
+            waited = 0.0
+            await asyncio.sleep(min(spoken_for + 1.0, _PLAYBACK_WAIT_CAP_S))
+            while waited < _PLAYBACK_WAIT_CAP_S:
+                if not _speaker_was_playing(hass, device_id, _PLAYBACK_WAIT_CAP_S):
+                    break
+                await asyncio.sleep(_PLAYBACK_POLL_S)
+                waited += _PLAYBACK_POLL_S
+            await asyncio.sleep(delay)
+
+            state = hass.states.get(satellite)
+            if state is not None and state.state != "idle":
+                _LOGGER.debug(
+                    "AI Plugin: %s is %s — not reopening the microphone",
+                    satellite, state.state,
+                )
+                return
+            _LOGGER.info(
+                "AI Plugin: reopening %s for a follow-up (%.1fs after the room "
+                "went quiet)", satellite, delay,
+            )
+            await hass.services.async_call(
+                "assist_satellite",
+                "start_conversation",
+                {
+                    "entity_id": satellite,
+                    "start_message": "",
+                    "preannounce": False,
+                },
+                blocking=False,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "AI Plugin: could not reopen %s for a follow-up", satellite,
+                exc_info=True,
+            )
+
+    def _schedule_follow_up(
+        self, device_id: str, satellite: str, reply: str, delay: float,
+        conversation_id: str,
+    ) -> None:
+        """Replace the satellite's own re-arm with our delayed one."""
+        self._cancel_follow_up(device_id)
+        task = self.hass.async_create_task(
+            self._reopen_after_quiet(device_id, satellite, reply, delay)
+        )
+        self._follow_up_store()[device_id] = task
+        self._follow_up_conv_store()[device_id] = (time.monotonic(), conversation_id)
+
+    def _follow_up_store(self) -> dict[str, asyncio.Task]:
+        store = getattr(self, "_follow_up_tasks", None)
+        if store is None:
+            store = {}
+            self._follow_up_tasks = store
+        return store
+
+    def _follow_up_conv_store(self) -> dict[str, tuple[float, str]]:
+        store = getattr(self, "_follow_up_convs", None)
+        if store is None:
+            store = {}
+            self._follow_up_convs = store
+        return store
+
+    def _cancel_follow_up(self, device_id: str | None) -> None:
+        task = self._follow_up_store().pop(device_id, None) if device_id else None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _continued_conversation_id(
+        self, device_id: str | None, conversation_id: str
+    ) -> str:
+        """Map a delayed follow-up back onto the conversation it continues.
+
+        Reopening the microphone starts a fresh HA conversation, so without
+        this the follow-up would lose every turn of context — "and in the
+        bedroom?" would arrive with nothing to attach to.
+        """
+        if not device_id:
+            return conversation_id
+        pending = self._follow_up_conv_store().get(device_id)
+        if not pending:
+            return conversation_id
+        started, prior = pending
+        if time.monotonic() - started > _FOLLOW_UP_CONTINUITY_S:
+            self._follow_up_conv_store().pop(device_id, None)
+            return conversation_id
+        if prior != conversation_id:
+            _LOGGER.debug(
+                "AI Plugin: delayed follow-up continues conversation %s", prior
+            )
+        return prior
+
     def _is_playback_overlap_echo(self, user_input: ConversationInput) -> bool:
         """True when a short, meaningless turn was recorded over our own TTS.
 
@@ -439,9 +581,17 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             or user_input.conversation_id
             or ulid_util.ulid_now()
         )
+        # A turn arrived, so any microphone reopen we still had pending for
+        # this device is moot — the user (or an echo) got there first.
+        self._cancel_follow_up(user_input.device_id)
+        # A delayed follow-up arrives as a brand-new HA conversation; keep
+        # writing history under the conversation it continues.
+        history_id = self._continued_conversation_id(
+            user_input.device_id, conversation_id
+        )
         _LOGGER.info(
             "AI Plugin: conv_id=%s user_id=%s input=%r",
-            conversation_id, user_id, user_input.text[:80],
+            history_id, user_id, user_input.text[:80],
         )
 
         # Self-echo filter: if this "user" turn is really the satellite's
@@ -503,7 +653,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             try:
                 reply = await self._orchestrator.async_process(
                     message=user_input.text,
-                    conversation_id=conversation_id,
+                    conversation_id=history_id,
                     language=user_input.language,
                     device_id=user_input.device_id,
                     user_id=user_id,
@@ -574,6 +724,24 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             continue_conversation = False
         if not continue_conversation:
             self._reset_chain_turns(user_input.device_id)
+            self._follow_up_conv_store().pop(user_input.device_id or "", None)
+        else:
+            # Delayed follow-up: take the re-arm away from the satellite so
+            # the microphone opens only once the room is genuinely quiet.
+            delay = float(
+                self._entry.options.get(CONF_FOLLOW_UP_DELAY, DEFAULT_FOLLOW_UP_DELAY)
+                or 0.0
+            )
+            satellite = (
+                self._satellite_for_device(user_input.device_id)
+                if delay > 0 and reply.strip()
+                else None
+            )
+            if satellite:
+                self._schedule_follow_up(
+                    user_input.device_id, satellite, reply, delay, history_id
+                )
+                continue_conversation = False
         return ConversationResult(
             response=intent_response,
             conversation_id=conversation_id,
@@ -582,4 +750,6 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Close provider sessions when the entity is removed."""
+        for device_id in list(getattr(self, "_follow_up_tasks", {})):
+            self._cancel_follow_up(device_id)
         await self._orchestrator.async_close()

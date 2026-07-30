@@ -463,3 +463,136 @@ async def test_playback_gap_beyond_grace_is_not_echo(monkeypatch) -> None:
     await _first_then(ent, " tremble down.", REPLY)
 
     assert ent._orchestrator.async_process.await_count == 1
+
+
+# ── v0.9.45: delayed follow-up (plugin reopens the mic itself) ────────────────
+# The satellite reopens its microphone when its OWN playback ends, ~1s before
+# mirrored speakers stop. Nothing in the conversation API moves that, so the
+# plugin ends the turn and reopens the mic itself once the room is quiet.
+
+
+def _entity_with_satellite(monkeypatch, delay: float = 3.0, features: int = 3):
+    from types import SimpleNamespace
+
+    from custom_components.ai_plugin import conversation as conv
+    from custom_components.ai_plugin.const import (
+        CONF_BASE_URL, CONF_FOLLOW_UP_DELAY, CONF_MODEL,
+    )
+
+    ent = _entity(options={
+        CONF_BASE_URL: "http://x/v1", CONF_MODEL: "m",
+        CONF_FOLLOW_UP_DELAY: delay,
+    })
+    hass = MagicMock()
+    hass.states.get.return_value = SimpleNamespace(
+        state="idle", attributes={"supported_features": features},
+    )
+    hass.services.async_call = AsyncMock()
+    created: list = []
+    hass.async_create_task = lambda coro: created.append(coro) or MagicMock()
+    ent.hass = hass
+    monkeypatch.setattr(
+        conv.er, "async_entries_for_device",
+        lambda reg, dev: [SimpleNamespace(entity_id="assist_satellite.sat")],
+    )
+    monkeypatch.setattr(conv.er, "async_get", lambda h: MagicMock())
+    return ent, hass, created
+
+
+async def test_delay_hands_the_rearm_to_the_plugin(monkeypatch) -> None:
+    ent, hass, created = _entity_with_satellite(monkeypatch)
+
+    result = await ent.async_process(_voice_input("what's the weather", device_id="d1"))
+
+    # The satellite is told NOT to reopen; we scheduled it instead.
+    assert result.continue_conversation is False
+    assert len(created) == 1
+    for coro in created:
+        coro.close()
+
+
+async def test_zero_delay_keeps_satellite_behaviour(monkeypatch) -> None:
+    ent, hass, created = _entity_with_satellite(monkeypatch, delay=0.0)
+
+    result = await ent.async_process(_voice_input("what's the weather", device_id="d1"))
+
+    assert result.continue_conversation is True
+    assert created == []
+
+
+async def test_satellite_without_start_conversation_is_left_alone(monkeypatch) -> None:
+    """supported_features without START_CONVERSATION → don't break follow-up."""
+    ent, hass, created = _entity_with_satellite(monkeypatch, features=1)
+
+    result = await ent.async_process(_voice_input("what's the weather", device_id="d1"))
+
+    assert result.continue_conversation is True
+    assert created == []
+
+
+async def test_reopen_waits_for_quiet_then_starts_conversation(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent, hass, _ = _entity_with_satellite(monkeypatch)
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
+    # Room already quiet, so the wait loop exits immediately.
+    monkeypatch.setattr(conv, "_speaker_was_playing", lambda *a: False)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", "Two words", 3.0)
+
+    assert 3.0 in slept, "the configured quiet gap must be honoured"
+    hass.services.async_call.assert_awaited_once()
+    args, kwargs = hass.services.async_call.await_args
+    assert args[0] == "assist_satellite" and args[1] == "start_conversation"
+    assert args[2]["entity_id"] == "assist_satellite.sat"
+    assert args[2]["preannounce"] is False
+    assert args[2]["start_message"] == ""
+
+
+async def test_reopen_skipped_when_satellite_is_busy(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from custom_components.ai_plugin import conversation as conv
+
+    ent, hass, _ = _entity_with_satellite(monkeypatch)
+    hass.states.get.return_value = SimpleNamespace(
+        state="responding", attributes={"supported_features": 3}
+    )
+
+    async def _fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(conv, "_speaker_was_playing", lambda *a: False)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", "hi", 3.0)
+
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_delayed_follow_up_keeps_conversation_history(monkeypatch) -> None:
+    """The reopened mic starts a NEW HA conversation — history must follow."""
+    ent, hass, created = _entity_with_satellite(monkeypatch)
+
+    await ent.async_process(_voice_input("what's the weather", device_id="d1"))
+    first_id = ent._orchestrator.async_process.await_args.kwargs["conversation_id"]
+
+    # HA mints a fresh conversation id for the reopened session.
+    from homeassistant.components.conversation import ConversationInput
+    from homeassistant.core import Context
+
+    ent._orchestrator.async_process = AsyncMock(return_value="Sure.")
+    await ent.async_process(ConversationInput(
+        text="and tomorrow", context=Context(), conversation_id="brand-new-id",
+        device_id="d1", language="en", agent_id=None,
+    ))
+    second_id = ent._orchestrator.async_process.await_args.kwargs["conversation_id"]
+
+    assert second_id == first_id, "follow-up lost the conversation it continues"
+    for coro in created:
+        coro.close()

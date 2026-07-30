@@ -4,6 +4,22 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.45 — the plugin reopens the microphone, not the satellite
+
+Three releases of filters, and the loop kept coming back. The recorded runs show why: every echo is the tail of a reply, and the tails STT mangles beyond recognition ("I don't know what I could roll into that", "so we just want to check") carry nothing left to match. Filtering was always downstream of the real problem — **the microphone opens too early**.
+
+A satellite reopens its mic when its **own** playback ends. With replies routed to separate speakers (Google/Cast via Mic to MediaPlayer — the only way to use speakers whose vendor won't run the Assist pipeline), that is about a second before the room goes quiet, and nothing in the conversation API can move it.
+
+**New — `Quiet gap before listening again (seconds)`** (Advanced options, default 0 = unchanged):
+
+Above 0, AI Plugin takes the re-arm away from the satellite. It ends the turn so the mic stays shut, waits for the speakers in that room to actually stop, waits the configured gap, then reopens the microphone itself with `assist_satellite.start_conversation` — empty message, no preannounce, so it is a silent listen with no chime and nothing spoken. **3 seconds** is a good starting point.
+
+The follow-up arrives as a new Home Assistant conversation, so history is remapped back onto the conversation it continues — "and in the bedroom?" still knows what came before.
+
+Falls back cleanly: satellites that don't advertise `START_CONVERSATION` keep the old behaviour, as does a delay of 0, an empty (TTS-suppressed) reply, or any error reopening the mic. A turn arriving from the device cancels a pending reopen, so the wake word always wins.
+
+The echo filters from v0.9.42–v0.9.44 stay as a net underneath — with a real quiet gap they should have nothing left to catch.
+
 ## v0.9.44 — the echo net has to live with the room's other speakers
 
 The playback-overlap rule from v0.9.43 asks whether a speaker in the caller's room was playing. In this install the living room also holds a TV and two Chromecast targets, all area-assigned — so "something in the room is playing" was true for entire evenings, and every short follow-up during a film would have been read as echo.
