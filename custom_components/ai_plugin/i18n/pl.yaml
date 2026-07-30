@@ -25,6 +25,7 @@ templates:
   fallback_no_sensor: "Nie mam czujnika {label} w {area}."
   err_no_answer:     "Nie udało mi się znaleźć odpowiedzi. Spróbuj przeformułować."
   err_process:       "Przepraszam, nie mogłem tego przetworzyć."
+  err_action_failed: "Nie udało mi się tego wykonać. Podaj urządzenie lub pomieszczenie."
   note_tool_limit:   "[Uwaga: osiągnięto limit narzędzi — odpowiedź może być niepełna.]"
 
   time_is:           "Jest {time}."

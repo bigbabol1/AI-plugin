@@ -4,6 +4,19 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.41 — "all lights off" actually turns off all the lights
+
+Reported: asking the bedroom satellite to switch all lights on/off did nothing.
+Two independent causes, both confirmed against the live install (pipeline debug
+runs + core logs from the failed attempts).
+
+**Fixed:**
+- **An omitted `area` no longer shrinks a whole-home command to one room.** Small models drop the `area` argument constantly, and `set_area_state` then defaulted straight to the calling satellite's room — so "switch all lights off" spoken in the bedroom turned off the bedroom and left the rest of the flat lit (reproduced live: *"area unspecified, defaulted to caller's area 'bedroom'"*). Scope now follows a precedence ladder: a room named in the utterance wins, then an explicit "all"/"alle"/"whole house", and only then the caller's room. The tool description says so too, since the model was being told to omit `area` for exactly these commands.
+- **The plugin no longer confirms actions it didn't take.** With no actuator call in the turn, the model's *"I'll turn off all the lights in your home now!"* was spoken verbatim — the user heard a confirmation while every lamp stayed on (observed three times in a row on qwen3.5:9b before they gave up and used the app). Promise phrasings are now detected in all six languages and replaced with a truthful failure notice (new `err_action_failed` template) once the grounding retry has also failed to act. Genuine post-action confirmations are untouched: the check only runs when nothing actuated.
+
+**New:**
+- **Deterministic plural-domain sweep shortcut.** "all lights off", "alle Lichter aus", "éteins toutes les lumières", "turn the fans off" now dispatch straight from the registry, ahead of the LLM — the same treatment media and single-device commands already get, and for the same reason: this is the command class small local models fumble worst. Scope resolution mirrors `set_area_state` (named room → explicit "all" → caller's room); singular nouns ("turn off the light"), named devices, and genuinely ambiguous scopes still fall through to the model. Verified against the live registry: 19 exposed lights flat-wide, 3 in the kitchen, 6 in the bedroom, with unexposed satellite LED rings correctly excluded.
+
 ## v0.9.40 — MCP logs that point at the actual problem
 
 **Fixed:**

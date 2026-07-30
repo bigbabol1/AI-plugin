@@ -563,3 +563,81 @@ async def test_close_phrase_still_ends_on_voice() -> None:
     entity = _entity_for_continue({})
     result = await entity.async_process(_voice_input(text="thanks jarvis"))
     assert result.continue_conversation is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Orchestrator: action commands must never be confirmed without a tool call
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _provider_saying(text: str) -> MagicMock:
+    """Provider that always answers with prose and never calls a tool."""
+    from custom_components.ai_plugin.providers import ChatResponse
+
+    provider = MagicMock()
+    provider.async_chat = AsyncMock(
+        return_value=ChatResponse(content=text, tool_calls=[])
+    )
+    provider.async_complete = AsyncMock(return_value=text)
+    return provider
+
+
+def _orch_with_actuator_tools() -> tuple[Orchestrator, MagicMock]:
+    """Baseline orchestrator whose ha_local exposes one actuator schema."""
+    orch = _baseline_orch()
+    ha_local = MagicMock()
+    ha_local.get_schemas.return_value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_area_state",
+                "description": "sweep",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    ha_local.tool_names = ("set_area_state",)
+    ha_local.call_tool = AsyncMock(return_value="OK")
+    orch._ha_local = ha_local
+    return orch, ha_local
+
+
+async def test_promise_without_tool_call_is_replaced_with_failure_notice() -> None:
+    """The exact observed failure: a spoken promise while nothing happened.
+
+    qwen3.5:9b answered " Switch all lights off." with "I'll turn off all
+    the lights in your home now!" and called no tool, so the user heard a
+    confirmation while every lamp stayed on.
+    """
+    from custom_components.ai_plugin.i18n import L
+
+    orch, _ = _orch_with_actuator_tools()
+    orch._provider = _provider_saying(
+        "I'll turn off all the lights in your home now!"
+    )
+
+    reply = await orch.async_process(
+        message="Switch all lights off.",
+        conversation_id="conv-promise",
+        language="en",
+    )
+
+    assert reply == L.template("err_action_failed", "en")
+    # The grounding retry must have been attempted before giving up.
+    assert orch._provider.async_chat.await_count >= 2
+
+
+async def test_informative_reply_without_tool_call_is_kept() -> None:
+    """A truthful 'can't find it' answer is not a promise — keep it."""
+    orch, _ = _orch_with_actuator_tools()
+    orch._provider = _provider_saying(
+        "There is no device called kettle in the bedroom."
+    )
+
+    reply = await orch.async_process(
+        message="turn the kettle off",
+        conversation_id="conv-informative",
+        language="en",
+    )
+
+    assert reply == "There is no device called kettle in the bedroom."

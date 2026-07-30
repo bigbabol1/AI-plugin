@@ -814,3 +814,113 @@ async def test_search_entities_truncation_marker(patched_registries) -> None:
     out_all = await reg.call_tool("search_entities", {"query": "lamp", "limit": 10})
     assert "6 match(es)" in out_all
     assert "more exist" not in out_all
+
+
+# ── omitted-area scope ladder ─────────────────────────────────────────────────
+# Regression: "switch all lights off" spoken to a bedroom satellite used to
+# turn off the BEDROOM only, because the model omits `area` and the
+# device_id fallback outranked the user's own "all".
+
+
+@pytest.mark.asyncio
+async def test_omitted_area_with_all_phrase_beats_caller_area(
+    patched_registries,
+) -> None:
+    """User said 'all' → sweep every area even though a satellite is calling."""
+    areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
+    entities = [
+        _entity("light.ceiling", area_id="a_kit"),
+        _entity("light.bedroom_lamp", area_id="a_bed"),
+    ]
+    devices = [_device("dev_sat", "a_bed")]
+    hass, ar_r, er_r, dr_r = _make_hass(
+        areas=areas, entities=entities, devices=devices
+    )
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"domain": "light", "action": "turn_off"},
+        user_message="Switch all lights off.",
+        device_id="dev_sat",
+    )
+    assert "turn_off 2 light(s) in all areas" in out
+    _, kwargs = hass.services.async_call.call_args
+    assert kwargs["target"] == {
+        "entity_id": ["light.bedroom_lamp", "light.ceiling"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_omitted_area_uses_room_named_in_message(patched_registries) -> None:
+    """A room in the utterance outranks the calling satellite's own room."""
+    areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
+    entities = [
+        _entity("light.ceiling", area_id="a_kit"),
+        _entity("light.bedroom_lamp", area_id="a_bed"),
+    ]
+    devices = [_device("dev_sat", "a_bed")]
+    hass, ar_r, er_r, dr_r = _make_hass(
+        areas=areas, entities=entities, devices=devices
+    )
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"domain": "light", "action": "turn_off"},
+        user_message="turn the kitchen lights off",
+        device_id="dev_sat",
+    )
+    assert "turn_off 1 light(s) in Kitchen" in out
+    _, kwargs = hass.services.async_call.call_args
+    assert kwargs["target"] == {"entity_id": ["light.ceiling"]}
+
+
+@pytest.mark.asyncio
+async def test_omitted_area_without_all_still_defaults_to_caller(
+    patched_registries,
+) -> None:
+    """No room, no 'all' → unchanged behaviour: the caller's own room."""
+    areas = [_area("a_kit", "Kitchen"), _area("a_bed", "Bedroom")]
+    entities = [
+        _entity("light.ceiling", area_id="a_kit"),
+        _entity("light.bedroom_lamp", area_id="a_bed"),
+    ]
+    devices = [_device("dev_sat", "a_bed")]
+    hass, ar_r, er_r, dr_r = _make_hass(
+        areas=areas, entities=entities, devices=devices
+    )
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    out = await reg.call_tool(
+        "set_area_state",
+        {"domain": "light", "action": "turn_off"},
+        user_message="lights off",
+        device_id="dev_sat",
+    )
+    assert "turn_off 1 light(s) in Bedroom" in out
+    _, kwargs = hass.services.async_call.call_args
+    assert kwargs["target"] == {"entity_id": ["light.bedroom_lamp"]}
+
+
+@pytest.mark.asyncio
+async def test_area_named_in_message_matches_alias_and_ignores_sweep_words(
+    patched_registries,
+) -> None:
+    """Aliases resolve; a whole-home word is never treated as an area name."""
+    areas = [
+        _area("a_liv", "Living room", aliases=("Wohnzimmer",)),
+        _area("a_all", "House"),  # name collides with a sweep keyword
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=areas, entities=[])
+    patched_registries(hass, ar_r, er_r, dr_r)
+    reg = HALocalToolRegistry(hass)
+
+    assert reg._area_named_in_message("mach das Licht im Wohnzimmer aus") == (
+        "wohnzimmer"
+    )
+    assert reg._area_named_in_message("turn off the house lights") is None
+    assert reg._area_named_in_message("lights off") is None

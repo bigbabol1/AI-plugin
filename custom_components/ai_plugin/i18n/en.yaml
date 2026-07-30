@@ -25,6 +25,7 @@ templates:
   fallback_no_sensor: "I don't have a {label} sensor in {area}."
   err_no_answer:     "I couldn't produce an answer for that. Try rephrasing."
   err_process:       "Sorry, I couldn't process that."
+  err_action_failed: "I couldn't carry that out. Try naming the device or the room."
   note_tool_limit:   "[Note: reached tool call limit — response may be incomplete.]"
 
   time_is:           "It is {time}."

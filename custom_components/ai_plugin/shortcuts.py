@@ -918,6 +918,204 @@ def _resolve_named_entity(
     return None
 
 
+def _match_action_intent(
+    msg: str, lang: str, *, on_off_only: bool = False
+) -> tuple[str, str, tuple[str, ...], str] | None:
+    """Match an action command against the per-language i18n patterns.
+
+    Returns (service_domain, service, allowed entity domains, spoken object
+    name) or None. off/close before on/open is a safe tiebreak; cover verbs
+    are checked first so "open the blinds" never reaches the on/off
+    patterns. ``on_off_only`` skips the cover verbs for callers that only
+    handle turn_on/turn_off.
+    """
+    kinds = (
+        ("action_close", "cover", "close_cover", ("cover",)),
+        ("action_open", "cover", "open_cover", ("cover",)),
+        ("action_off", "homeassistant", "turn_off", _ACTION_DOMAINS),
+        ("action_on", "homeassistant", "turn_on", _ACTION_DOMAINS),
+    )
+    for key, service_domain, service, domains in kinds:
+        if on_off_only and key in ("action_open", "action_close"):
+            continue
+        for rx in L.pattern_list(key, lang):
+            m = rx.match(msg)
+            if m and (m.group("name") or "").strip():
+                return (service_domain, service, domains, m.group("name").strip())
+    return None
+
+
+# Plural domain nouns for the whole-area sweep shortcut, per domain.
+# PLURAL ONLY, deliberately: a singular "das Licht aus" stays on the
+# single-named-device path (unchanged behaviour), while "alle Lichter aus"
+# is unambiguously a domain sweep.
+_SWEEP_DOMAIN_NOUNS: tuple[tuple[str, str], ...] = (
+    (
+        "light",
+        r"lights|lamps|lichter|lampen|lumi[eè]res|luces|l[aá]mparas|"
+        r"l[aâ]mpadas|luzes|[sś]wiat[lł]a",
+    ),
+    (
+        "fan",
+        r"fans|ventilatoren|ventilateurs|ventiladores|ventoinhas|wentylatory",
+    ),
+    (
+        "switch",
+        r"switches|sockets|plugs|steckdosen|prisen|prises|enchufes|tomadas|"
+        r"gniazdka",
+    ),
+)
+_SWEEP_DOMAIN_RES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (domain, re.compile(rf"^(?:{alt})$", re.IGNORECASE))
+    for domain, alt in _SWEEP_DOMAIN_NOUNS
+)
+# "all"/"every" as a determiner in front of the noun. Narrower on purpose
+# than ha_local._USER_SAID_ALL_RE, which scans the whole message: here the
+# word must actually qualify the noun ("all lights", "alle Lichter").
+_SWEEP_ALL_PREFIX_RE = re.compile(
+    r"^(?:all|every|alle[srnm]?|s[äa]mtliche[srn]?|tous|toutes|todos|todas|"
+    r"wszystkie|wszystkich)\s+",
+    re.IGNORECASE,
+)
+_SWEEP_ARTICLE_RE = re.compile(
+    r"^(?:the|der|die|das|den|dem|les|le|la|l['’]|los|las|el|os|as|o|a)\s+",
+    re.IGNORECASE,
+)
+
+
+def _parse_sweep_noun(name: str) -> tuple[str, bool] | None:
+    """('light', said_all) when ``name`` is a plural domain noun, else None.
+
+    Strips leading articles and an "all"/"alle" determiner (in either
+    order, e.g. "all the lights" / "die alle Lichter").
+    """
+    rest = name.strip().strip(".?!,")
+    said_all = False
+    for _ in range(2):
+        stripped = _SWEEP_ALL_PREFIX_RE.sub("", rest, count=1)
+        if stripped != rest:
+            said_all = True
+            rest = stripped
+        rest = _SWEEP_ARTICLE_RE.sub("", rest, count=1)
+    rest = rest.strip()
+    if not rest:
+        return None
+    for domain, rx in _SWEEP_DOMAIN_RES:
+        if rx.match(rest):
+            return (domain, said_all)
+    return None
+
+
+def _sweep_entities(
+    hass: HomeAssistant, domain: str, area_id: str | None
+) -> list[str]:
+    """Exposed entity_ids of ``domain`` in ``area_id`` (all areas if None)."""
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    out: list[str] = []
+    for eid, entry in ent_reg.entities.items():
+        if not eid.startswith(f"{domain}."):
+            continue
+        if area_id is not None and _entry_area_id(hass, entry, dev_reg) != area_id:
+            continue
+        if async_should_expose is not None:
+            try:
+                if not async_should_expose(hass, _CONVERSATION_ASSISTANT, eid):
+                    continue
+            except Exception:  # noqa: BLE001 — fail open on one entity
+                pass
+        out.append(eid)
+    out.sort()
+    return out
+
+
+async def async_try_domain_sweep_shortcut(
+    hass: HomeAssistant,
+    message: str,
+    *,
+    lang: str = "en",
+    device_id: str | None = None,
+) -> tuple[bool, str] | None:
+    """Pre-LLM shortcut: switch every light/fan/socket in a scope on or off.
+
+    "Switch all lights off" is the single most common voice command and the
+    one small local models fumble worst: they answer with a promise ("I'll
+    turn off all the lights in your home now!") and never call a tool, or
+    they call set_area_state with no area — which means "this room only".
+    Either way the user's flat stays lit. The plural-noun + on/off shape is
+    unambiguous, so resolve it here and never involve the model.
+
+    Scope precedence mirrors ha_local.set_area_state:
+      1. a room named in the utterance ("all lights in the kitchen")
+      2. an explicit "all"/"alle" determiner → every area
+      3. neither → the calling satellite's room
+    With no room, no "all" and no satellite (text chat / REST) the scope is
+    genuinely ambiguous, so fall through to the LLM instead of guessing.
+
+    Returns (handled, reply) with reply="" for TTS suppression, or None.
+    """
+    if not message:
+        return None
+    msg = message.strip().rstrip(".?!").lower()
+    if not msg or len(msg.split()) > 8:
+        return None
+
+    matched = _match_action_intent(msg, lang, on_off_only=True)
+    if matched is None:
+        return None
+    _, service, _, name = matched
+
+    # A trailing "in <room>" belongs to the scope, not to the noun. The
+    # helper is media-named but purely generic ("in <area>" suffix → area).
+    area = _extract_area_from_media_message(hass, name)
+    if area is not None:
+        name = _AREA_SUFFIX_RE.sub("", name).strip()
+
+    parsed = _parse_sweep_noun(name)
+    if parsed is None:
+        return None
+    domain, said_all = parsed
+
+    if area is not None:
+        area_id: str | None = area.id
+        scope = area.name
+    elif said_all:
+        area_id = None
+        scope = "all areas"
+    else:
+        area_id = _caller_area_id(hass, device_id)
+        if not area_id:
+            return None
+        scope = area_id
+
+    ids = _sweep_entities(hass, domain, area_id)
+    if not ids:
+        # Nothing exposed to act on — let the LLM explain rather than
+        # silently swallowing the command.
+        return None
+
+    try:
+        await hass.services.async_call(
+            "homeassistant",
+            service,
+            {"entity_id": ids},
+            blocking=True,
+            context=Context(),
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception(
+            "AI Plugin sweep shortcut: %s on %d %s(s) failed",
+            service, len(ids), domain,
+        )
+        return None
+
+    _LOGGER.info(
+        "AI Plugin sweep shortcut: %s %d %s(s) in %s (lang=%s)",
+        service, len(ids), domain, scope, lang,
+    )
+    return (True, "")
+
+
 async def async_try_action_shortcut(
     hass: HomeAssistant,
     message: str,
@@ -943,24 +1141,7 @@ async def async_try_action_shortcut(
     if not msg or len(msg.split()) > 7:
         return None
 
-    # (pattern key, service domain, service, allowed entity domains).
-    # off/close before on/open is a safe tiebreak; cover verbs are checked
-    # first so "open the blinds" never reaches the on/off patterns.
-    kinds = (
-        ("action_close", "cover", "close_cover", ("cover",)),
-        ("action_open", "cover", "open_cover", ("cover",)),
-        ("action_off", "homeassistant", "turn_off", _ACTION_DOMAINS),
-        ("action_on", "homeassistant", "turn_on", _ACTION_DOMAINS),
-    )
-    matched = None
-    for key, service_domain, service, domains in kinds:
-        for rx in L.pattern_list(key, lang):
-            m = rx.match(msg)
-            if m and (m.group("name") or "").strip():
-                matched = (service_domain, service, domains, m.group("name").strip())
-                break
-        if matched:
-            break
+    matched = _match_action_intent(msg, lang)
     if matched is None:
         return None
     service_domain, service, domains, name = matched

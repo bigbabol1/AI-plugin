@@ -25,6 +25,7 @@ templates:
   fallback_no_sensor: "Ich habe keinen {label}-Sensor in {area}."
   err_no_answer:     "Darauf habe ich gerade keine Antwort. Bitte formuliere es anders."
   err_process:       "Entschuldigung, das konnte ich nicht verarbeiten."
+  err_action_failed: "Das konnte ich nicht ausführen. Nenne bitte das Gerät oder den Raum."
   note_tool_limit:   "[Hinweis: Werkzeuglimit erreicht — die Antwort ist möglicherweise unvollständig.]"
 
   time_is:           "Es ist {time} Uhr."

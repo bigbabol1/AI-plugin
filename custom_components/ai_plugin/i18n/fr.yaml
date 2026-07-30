@@ -25,6 +25,7 @@ templates:
   fallback_no_sensor: "Je n'ai pas de capteur de {label} dans {area}."
   err_no_answer:     "Je n'ai pas pu produire de réponse. Essayez de reformuler."
   err_process:       "Désolé, je n'ai pas pu traiter cela."
+  err_action_failed: "Je n'ai pas pu exécuter cela. Précisez l'appareil ou la pièce."
   note_tool_limit:   "[Note : limite d'appels d'outils atteinte — la réponse peut être incomplète.]"
 
   time_is:           "Il est {time}."

@@ -56,7 +56,12 @@ from .const import (
 from .context_manager import ContextManager
 from .i18n import L
 from .providers.openai_compat import OpenAICompatProvider
-from .shortcuts import async_try_action_shortcut, async_try_media_shortcut, try_shortcut
+from .shortcuts import (
+    async_try_action_shortcut,
+    async_try_domain_sweep_shortcut,
+    async_try_media_shortcut,
+    try_shortcut,
+)
 from .tools.ha_local import HALocalToolRegistry
 from .tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
 from .tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
@@ -222,6 +227,37 @@ _ACTUATOR_TOOL_NAMES = (
     "HassMediaNext", "HassMediaPrevious",
     "play_music", "media_command",
 )
+
+
+# Replies that CLAIM an action is being taken. When no actuator ran this
+# turn, such a reply is a lie the user can act on ("I'll turn off all the
+# lights in your home now!" while every lamp stays lit — observed on
+# qwen3.5:9b). Only consulted on the no-actuator path, so genuine
+# post-action confirmations are never touched.
+_ACTION_PROMISE_RE = re.compile(
+    r"(?:"
+    # English: "I'll turn …", "I will switch …", "let me dim …",
+    # "I'm turning …", "going to turn …"
+    r"(?:i\s*(?:'|’)?ll|i\s+will|i\s+am\s+going\s+to|i'?m\s+going\s+to|"
+    r"let\s+me|i'?m|i\s+am)\s+(?:now\s+|just\s+)?"
+    r"(?:turn(?:ing)?|switch(?:ing)?|put(?:ting)?|set(?:ting)?|"
+    r"dim(?:ming)?|start(?:ing)?|stopp?(?:ing)?|shut(?:ting)?)"
+    # German: "ich schalte … aus", "ich mache das Licht an", "ich werde …"
+    r"|ich\s+(?:werde\s+)?(?:schalte|schalt|mache|mach|stelle|drehe)"
+    r"|ich\s+werde\s+"
+    # French / Spanish / Portuguese / Polish
+    r"|je\s+vais\s+(?:allumer|éteindre|eteindre|activer|désactiver)"
+    r"|voy\s+a\s+(?:encender|apagar|activar|desactivar)"
+    r"|vou\s+(?:ligar|desligar|acender|apagar|ativar)"
+    r"|(?:zaraz\s+)?(?:włącz|wlacz|wyłącz|wylacz)\w*"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_action_promise(text: str) -> bool:
+    """True when the reply claims an action that no tool actually performed."""
+    return bool(text) and bool(_ACTION_PROMISE_RE.search(text))
 
 
 def _is_action_command(text: str) -> bool:
@@ -1425,6 +1461,31 @@ class Orchestrator:
                     )
                     return media_reply
 
+            # 1c2. Pre-LLM shortcut for plural-domain sweeps ("all lights
+            # off", "alle Lichter aus"). Runs BEFORE the single-device
+            # shortcut so a plural noun is never fuzzy-matched to one lamp.
+            # Small models either promise the action without calling a tool
+            # or omit the area (= "this room only"), leaving the rest of the
+            # home untouched; this dispatches the sweep deterministically.
+            try:
+                sweep_result = await async_try_domain_sweep_shortcut(
+                    self._hass, message, lang=lang, device_id=device_id
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("AI Plugin: sweep shortcut raised", exc_info=True)
+                sweep_result = None
+            if sweep_result is not None:
+                handled, sweep_reply = sweep_result
+                if handled:
+                    _LOGGER.info(
+                        "AI Plugin: sweep shortcut hit for conv=%s",
+                        conversation_id,
+                    )
+                    await self._context_mgr.add_turn(
+                        conversation_id, "assistant", sweep_reply
+                    )
+                    return sweep_reply
+
             # 1d. Pre-LLM shortcut for single named-device on/off commands
             # (all i18n languages). Small models mis-route "switch X on" /
             # "schalte X ein" (verb vs domain, or only "turn on X" word
@@ -1703,9 +1764,12 @@ class Orchestrator:
                         "CRITICAL: The user issued an ACTION command "
                         f"({message!r}). You must CALL a tool to execute it — "
                         "do NOT just say 'I'll turn it on'. For whole-home "
-                        "actions ('lights on', 'lights off', 'all off'): "
-                        "CALL set_area_state(domain='light', action='turn_on') "
-                        "(or 'turn_off'). For a specific device: CALL "
+                        "actions ('all lights on', 'all lights off', 'all "
+                        "off'): CALL set_area_state(area='all', "
+                        "domain='light', action='turn_on') (or 'turn_off') — "
+                        "area='all' is required, omitting it means this room "
+                        "only. For one room: pass that room as area. "
+                        "For a specific device: CALL "
                         "search_entities then HassTurnOn/HassTurnOff with the "
                         "returned entity_id. Pick the most likely interpretation "
                         "from context — do not ask for clarification. Execute now."
@@ -1719,6 +1783,18 @@ class Orchestrator:
                     if _any_actuator_call(tool_msgs5):
                         reply = reply5
                         tool_msgs = tool_msgs + tool_msgs5
+                    elif _is_action_promise(reply5) or _is_action_promise(reply):
+                        # Both attempts narrated instead of acting. Speaking
+                        # "I'll turn off all the lights" now would tell the
+                        # user the action succeeded while nothing moved —
+                        # replace it with the truth.
+                        _LOGGER.warning(
+                            "AI Plugin: action command %r produced no actuator "
+                            "call — replacing promise reply %r with failure "
+                            "notice",
+                            message[:80], (reply5 or reply)[:120],
+                        )
+                        reply = L.template("err_action_failed", lang)
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception(
                         "AI Plugin: action-command grounding retry failed — keeping original reply"

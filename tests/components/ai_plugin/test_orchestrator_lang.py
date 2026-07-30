@@ -73,3 +73,51 @@ def test_strip_narration_german_sentence_granular() -> None:
 
     out = _strip_narration("Ich schaue nach. Im Schlafzimmer sind es 19 Grad.", "de")
     assert out == "Im Schlafzimmer sind es 19 Grad."
+
+
+# ── action-promise detection ──────────────────────────────────────────────────
+# Only consulted when no actuator ran this turn, so it must catch every way a
+# small model claims to be acting — but never a truthful report.
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # Observed verbatim on qwen3.5:9b via the bedroom satellite.
+        "I'll turn off all the lights in your home now!",
+        "I'll turn on all night lights in your home now!",
+        "I will switch the kitchen lights off.",
+        "I'm turning off the lights now.",
+        "Let me turn on the fan for you.",
+        "I am going to set the temperature to 21.",
+        "Ich schalte jetzt alle Lichter aus.",
+        "Ich mache das Licht im Flur an.",
+        "Ich werde die Lampen ausschalten.",
+        "Je vais éteindre toutes les lumières.",
+        "Voy a apagar todas las luces.",
+        "Vou desligar todas as luzes.",
+        "Wyłączę wszystkie światła.",
+    ],
+)
+def test_action_promise_detected(reply: str) -> None:
+    from custom_components.ai_plugin.orchestrator import _is_action_promise
+
+    assert _is_action_promise(reply), reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "",
+        "The lights are off.",
+        "I turned off all the lights.",
+        "Ich habe alle Lichter ausgeschaltet.",
+        "There is no device called kettle in the bedroom.",
+        "Es sind noch zwei Lichter an: Flurlicht und Stehlampe.",
+        "It is 21 degrees in the living room.",
+    ],
+)
+def test_non_promise_replies_kept(reply: str) -> None:
+    from custom_components.ai_plugin.orchestrator import _is_action_promise
+
+    assert not _is_action_promise(reply), reply

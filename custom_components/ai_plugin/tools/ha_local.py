@@ -257,10 +257,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Turn devices in an area on/off/toggle. Use for commands like "
                 "'lights in kitchen off', 'fans in bedroom on'. For a single "
                 "named device use HassTurnOn/HassTurnOff instead. "
-                "When the user does NOT name a room (e.g. 'lights on'), OMIT "
-                "the area parameter — the plugin defaults to the calling "
-                "satellite's room. Use 'all'/'everywhere' ONLY when the user "
-                "explicitly says 'all', 'every', 'whole house', etc."
+                "Pass area='all' whenever the user says 'all', 'every', "
+                "'everywhere' or 'whole house' ('all lights off' → "
+                "area='all'). Pass the room name when the user names one. "
+                "OMIT area ONLY when the user named neither — the plugin "
+                "then defaults to the calling satellite's room."
             ),
             "parameters": {
                 "type": "object",
@@ -269,11 +270,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Area name when the user names a specific room "
-                            "(e.g. 'kitchen', 'bedroom'). OMIT when the user "
-                            "did not name a room — plugin uses caller's "
-                            "satellite area. Pass 'all'/'everywhere'/'*' "
-                            "ONLY when the user explicitly says 'all', "
-                            "'every', 'everywhere', 'whole house', etc."
+                            "(e.g. 'kitchen', 'bedroom'). Pass 'all' when the "
+                            "user says 'all', 'every', 'everywhere' or 'whole "
+                            "house' — REQUIRED for whole-home commands, since "
+                            "an omitted area means 'this room only'. OMIT only "
+                            "when the user named neither a room nor 'all'."
                         ),
                     },
                     "domain": {
@@ -783,6 +784,30 @@ class HALocalToolRegistry:
             if name == "set_area_state":
                 raw_area = arguments.get("area")
                 area_val = _s(raw_area).strip() if raw_area is not None else ""
+                said_all = bool(_USER_SAID_ALL_RE.search(user_message or ""))
+                # Scope ladder for an OMITTED area. Small models drop the
+                # argument constantly, and defaulting straight to the
+                # calling satellite's room silently shrank whole-home
+                # commands to one room: "switch all lights off" spoken in
+                # the bedroom left the rest of the flat lit. Precedence:
+                #   1. a room the user actually named  → that room
+                #   2. an explicit 'all'/'whole house' → sweep everything
+                #   3. neither                        → caller's room
+                #      (resolved in _set_area_state from device_id)
+                if not area_val:
+                    named_area = self._area_named_in_message(user_message or "")
+                    if named_area:
+                        area_val = named_area
+                        _LOGGER.debug(
+                            "set_area_state: area omitted, using room named in "
+                            "message %r", named_area,
+                        )
+                    elif said_all:
+                        area_val = "all"
+                        _LOGGER.debug(
+                            "set_area_state: area omitted but user said 'all' "
+                            "— sweeping every area instead of caller's room",
+                        )
                 # Safety guard: when the user message names a specific
                 # physical device ('air purifier', 'kettle', 'TV',
                 # 'luftreiniger', etc.) the user does NOT mean a
@@ -830,7 +855,7 @@ class HALocalToolRegistry:
                 if area_val.lower() in _SWEEP_ALL_KEYWORDS or (
                     not area_val and not device_id
                 ):
-                    if not _USER_SAID_ALL_RE.search(user_message or ""):
+                    if not said_all:
                         _LOGGER.warning(
                             "AI Plugin: rejected set_area_state(area=%r) — "
                             "user message %r does not contain explicit sweep "
@@ -1550,6 +1575,36 @@ class HALocalToolRegistry:
             if any(_s(al).lower() == needle for al in aliases):
                 return a
         return None
+
+    def _area_named_in_message(self, message: str) -> str | None:
+        """Return the area name/alias the user actually said, if any.
+
+        Small models routinely omit the ``area`` argument even when the
+        user named a room ("switch the kitchen lights off"), which used to
+        silently fall back to the calling satellite's room — the WRONG
+        room. Longest match wins so "living room" beats a hypothetical
+        "room" alias. Whole-home keywords are skipped: they are handled by
+        the explicit-sweep branch, not as an area name.
+        """
+        text = (message or "").lower()
+        if not text:
+            return None
+        best: str | None = None
+        try:
+            area_reg = ar.async_get(self._hass)
+            for a in area_reg.async_list_areas():
+                aliases = getattr(a, "aliases", None) or ()
+                for cand in (_s(a.name), *(_s(al) for al in aliases)):
+                    cand = cand.strip().lower()
+                    if not cand or cand in _SWEEP_ALL_KEYWORDS:
+                        continue
+                    if best is not None and len(cand) <= len(best):
+                        continue
+                    if re.search(rf"\b{re.escape(cand)}\b", text):
+                        best = cand
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("area-in-message scan failed", exc_info=True)
+        return best
 
     def _media_players_in_area(
         self, target_area, exposed_only: bool = True
