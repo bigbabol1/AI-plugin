@@ -46,11 +46,41 @@ Latency below is the **median over the ~20 LLM-driven turns** per run — the ot
 >
 > **Minimum recommended context: 16384** (the integration default). Multi-step tool loops routinely emit 6–10 K of intermediate tokens; 8192 starves them. Avoid values above ~24 000 on an 8 GB card. Setting a context window larger than the model supports is now rejected in Advanced settings (Ollama).
 
+### Update — August 2026: the 8 GB tier after Qwen 3.5
+
+`qwen3.5:9b` was released 2026-03-02. Five months on, the honest headline is that **the 8 GB tier has largely plateaued**: Qwen 3.6 (April 2026) shipped only a 27B dense and a 35B-A3B MoE, so there is no direct Qwen upgrade at this size. Three post-3.5 models do fit — `granite4.1:8b` (IBM, April), `lfm2.5:8b` (Liquid, May — an 8.3B-total / 1.5B-active MoE), and `gemma4:12b` (Google, June).
+
+> **Different method — not comparable to the 29-prompt table above.** These runs hit Ollama's OpenAI-compatible endpoint directly with HA-Assist-shaped German tool schemas: 10 adversarial cases × 3 repetitions at temperature 0, scoring computed arguments ("auf die Hälfte"), unit conversion, read-before-write on conditionals, refusal/clarification, negation traps, multi-turn coreference. It stresses **tool-calling under pressure**, not the plugin end-to-end, and the 29-prompt voice suite has **not** been re-run against these models. Treat the two tables as different axes.
+
+| Model | On disk | Fits 8 GB @ 16 K? | Adversarial tool set | Exact area name | Median |
+|-------|---------|-------------------|----------------------|-----------------|--------|
+| **gemma-4-12B UD-Q3_K_XL** | 6.2 GB | **yes** — 6.5 GB, 100 % GPU | **30/30 (100 %)** | **100 %** | 5.2 s |
+| gemma-4-12B IQ4_XS | 6.6 GB | **no** — 6.9 GB, 3 % on CPU | 27/30 (90 %) | — | 6.1 s |
+| gemma4:12b (Q4_K_M) | 7.6 GB | **no** — 7.9 GB, 16 % on CPU | 30/30 (100 %) | — | 10.4 s |
+| `qwen3.5:9b` | 6.6 GB | yes — 5.8 GB, 100 % GPU | 21/30 (70 %) | **100 %** | 2.6 s |
+| `granite4.1:8b` | 5.3 GB | yes — 6.7 GB, 100 % GPU | 24/30 (80 %) | **83 %** ✗ | **0.6 s** |
+| `lfm2.5:8b` | 5.2 GB | yes — 5.4 GB, 100 % GPU | 18/30 (60 %) | **67 %** ✗ | 1.9 s |
+
+**Fit is decided at your context window, not by the file size.** All three Gemma 4 12B quants look like they fit on paper; only one actually does once a 16 K KV cache is allocated. `IQ4_XS` is 6.6 GB on disk and *still* spills 3 % to CPU. Check `ollama ps` and read the `PROCESSOR` column at your real `num_ctx` — a few percent on CPU costs multiples in latency, not a few percent (`gemma4:12b` at Q4_K_M: 16 % on CPU → 10.4 s median).
+
+**Non-English area names are a hard filter, and raw scores hide it.** Home Assistant matches areas by string, so a model that "helpfully" rewrites a room name fails the intent silently. `granite4.1:8b` is by far the fastest model here and scored *above* `qwen3.5:9b` on tools — but it corrupts umlauts systematically, emitting **"Böro"** 6/6 at production temperature (and "Büoro", "Bureau" elsewhere) for **"Büro"**. `lfm2.5:8b` translates room names outright ("Küche" → `kitchen`). Both are disqualifying for a German, French or Swedish install regardless of tool scores. If you benchmark models yourself, **grade area names with exact string equality** — a substring check hides exactly this class of defect.
+
+Two further cautions from the same runs:
+
+- **`lfm2.5:8b` is prompt-brittle.** It scored 80 % on the default system prompt and *dropped to 60 %* when the prompt was extended — it stopped emitting tool calls at all on the computed-argument cases. A model whose tool-calling degrades when you edit unrelated prompt text is a maintenance trap.
+- **Action polarity is a prompt problem, not a model problem.** An apparent "inverted blinds" bug (`Jalousien zu` → `HassTurnOn`) turned out to be a missing convention in the system prompt. Once it states that closing a cover is `TurnOff`, **all four models hit 100 %**.
+
+**Verdict.** `gemma-4-12B UD-Q3_K_XL` ([unsloth/gemma-4-12B-it-GGUF](https://huggingface.co/unsloth/gemma-4-12B-it-GGUF)) is the new accuracy pick for 8 GB — the only 12B that stays fully in VRAM at 16 K, perfect on both the adversarial set and area fidelity. It costs latency: ~3.6 s median on everyday commands versus ~2.9 s for `qwen3.5:9b`, a worse tail, and ~16 s on the first turn after a keep-alive eviction (6.5 GB to load). `qwen3.5:9b` remains the better choice if responsiveness matters more than edge-case correctness, and it is still the only model validated against the 29-prompt voice suite.
+
+```bash
+ollama pull hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL
+```
+
 ### Recommended configuration
 
 | Setting | Value |
 |---------|-------|
-| Model | `qwen3.5:9b` (top pick — best accuracy, and its failures are honest; `qwen3:8b` for ~2× lower latency if you mostly do device control) |
+| Model | `qwen3.5:9b` (best latency/accuracy balance, failures are honest, validated against the full voice suite) — or `hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL` for the highest accuracy and non-English area names, at ~1.5× the latency. `qwen3:8b` for ~2× lower latency if you mostly do device control. Avoid `granite4.1:8b` and `lfm2.5:8b` on non-English installs — see the August 2026 notes. |
 | Temperature | 0.2 |
 | top_p | 0.4 |
 | Context Window | **16384** |
@@ -85,6 +115,8 @@ The plugin sends `think: false` on every Ollama call so final answers land in `c
 ### Keep-alive
 
 Ollama unloads models after 5 minutes of inactivity by default, so the first command after a quiet stretch pays the full model-load cost. Set **Ollama keep-alive** in Advanced settings (`30m`, `24h`, or `-1` for always loaded) — sent per request, no server configuration. Leave empty to keep the server default.
+
+This matters more the larger the model: on an 8 GB card a 6.5 GB model takes **~16 s** to load, so the default `5m` turns the first question after a quiet evening into a timeout-feeling pause. If the GPU is dedicated to Home Assistant, use `-1`.
 
 ## Voice timers
 
