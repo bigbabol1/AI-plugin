@@ -76,6 +76,52 @@ Two further cautions from the same runs:
 ollama pull hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL
 ```
 
+### Update — August 2026 (2): multi-turn behaviour, and the settings that don't move the needle
+
+The two tables above are single-shot: one utterance, one judgement. This run is the other axis — a **threaded conversation**, driven through `assist_pipeline/run` (intent stage) so it is the real Assist path, with `conversation_id` carried forward so follow-ups and pronouns actually refer to something. 11 German turns × 2 passes on `gemma-4-12B UD-Q3_K_XL`, RTX 3060 Ti, at Temperature 0.3 / `top_p` 0.4 / Context Window 16384 / Max Tokens 512 unless a row below says otherwise. **Actions were verified in Home Assistant's state history, not read off the agent's replies** — voice mode returns an empty string on a successful action, which looks identical to a turn that did nothing.
+
+Live tool surface during the run: **63 tools ≈ 8.6 K schema tokens**, plus a 2.1 K system prompt — **10.7 K of a 16 K window spent before the user says a word** (HA intents plus five MCP servers: time, fetch, wikipedia, calculator, and HA's own MCP endpoint).
+
+| Case | Utterance | Result |
+|------|-----------|--------|
+| Ambiguous friendly name | two entities both named "Nachtlicht" (a `light.` and a `switch.`) | picks the light, consistently |
+| Ellipsis | "Und den LED-Strip auch." | correct device on, verb inferred |
+| Anaphora, two referents | "Mach beide wieder aus." | both off in one turn |
+| Two devices, one turn | "Schalte X und Y gleichzeitig ein." | both on |
+| Self-correction | "Nein, ich meinte nur X — mach Y wieder aus." | only Y off, X left alone |
+| Area reference | "Mach das Licht in der Küche aus." | resolves the room, correct device off |
+
+All six pass in every configuration tested, both passes, with the state changes confirmed in history. **Median turn 4.5 s, p90 6.6 s** on this hardware.
+
+#### The knobs, ranked by how much they changed anything
+
+| Lever | Change | Result |
+|-------|--------|--------|
+| `top_p` | 0.4 → 0.9 | no measurable difference |
+| Temperature | 0.3 → 1.0 | no difference in task behaviour; only output variety — at 0.3 the same joke came back byte-identical every pass |
+| Context Window | 16384 → 32768 | no difference on this set (see the KV note below) |
+| `prune_tool_schemas` | off → on | **no-op** — zero prune events in 22 turns |
+| Max Tokens | 512 → 1024 | **actively worse** — see below |
+
+**Max Tokens 512 in the table below is load-bearing, not a default.** On a turn where the model reasons at length without converging, generation runs to the cap and comes back with *empty content*, and the plugin substitutes its fallback line. Raising the cap does not rescue that turn — it only lets it run longer: the same turn went from 18.7 s to **32.8 s**, past the plugin's own 30 s `response_timeout`. A bigger budget buys a slower failure.
+
+**`prune_tool_schemas` never fired.** Across 22 turns of real voice traffic the budget line read `tools=8634` every single time. It does fire occasionally on entity-listing utterances — one observed case dropped `list_entities` and `list_areas`, about 4 % of the schema budget. Combined with the prefix-cache cost noted earlier, off remains the right default.
+
+**A 32 K window does fit on 8 GB — if the KV cache is quantised.** The ≤24 000 guidance above assumes an f16 KV cache (~0.2 GB per 1 K tokens). With `OLLAMA_KV_CACHE_TYPE=q8_0` that halves, and `gemma-4-12B UD-Q3_K_XL` loads at `num_ctx=32768` still reporting **6.5 GB / 100 % GPU** in `ollama ps`. Bigger is not automatically better, though: the Context Window also sets the plugin's history budget (`soft_limit = (context − system − tools) × 0.65`), so a wider window means longer prompts deep in a conversation. It bought nothing measurable here.
+
+#### Liquid's QAD checkpoints (LFM2.5, Q4_0) — evaluated, not recommended
+
+Liquid released [Quantization-Aware Distillation](https://huggingface.co/blog/LiquidAI/qad) checkpoints in August 2026: the BF16 teacher is distilled into the 4-bit student, recovering ~97 % of BF16 quality at Q4_0 file sizes. Tested here because the speed is genuinely striking — `LFM2.5-2.6B-QAD-Q4_0` is 1.8 GB resident and runs **165 tok/s decode against gemma-4-12B's 35, with 6.4 K vs 1.9 K tok/s prefill**, which on read-only questions and chit-chat means 1.4–3.0 s turns where the 12B takes 4–10 s. Asked *once*, in isolation, it picks the right tool 81–89 % of the time.
+
+It still does not work in this integration. In the plugin's actual loop — 63 tools, up to 10 iterations, tool results fed back — it does not converge: it invents entity ids and re-issues calls that have already succeeded, exhausting `max_tool_iterations` without changing any device state. QAD is a real improvement over plain Q4_0 at identical file size (it also spends ~27 % fewer thinking tokens), but the gap that matters here is loop discipline, not quantisation quality.
+
+Two specifics worth carrying:
+
+- **`LFM2.5-1.2B` fails dangerously, not just poorly.** It replies *"Ich habe die Kaffeemaschine eingeschaltet"* in fluent German **without emitting a tool call** — over voice, indistinguishable from success. Score it on emitted tool calls, never on the reply text.
+- **Thinking cannot be disabled on these GGUFs.** Their chat template opens `<|im_start|>assistant\n<think>` unconditionally, so the `think: false` the plugin sends on every Ollama call is silently ignored — as are `/no_think` and prompt-level instructions. Budget ~150–220 thinking tokens per turn against Max Tokens.
+
+Consistent with the `lfm2.5:8b` row above: this family is fast and small, and not yet a fit for multi-step home control.
+
 ### Recommended configuration
 
 | Setting | Value |
