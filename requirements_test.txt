@@ -8,4 +8,9 @@ aiohttp
 httpx
 voluptuous
 PyYAML
-mcp>=1.0.0
+# Pinned below 2.x: mcp 2.0 removed mcp.client.streamable_http.
+# streamablehttp_client, which tools/mcp_client.py imports at module
+# scope — so an unpinned install fails COLLECTION of the whole
+# tests/components/ai_plugin package, not just the MCP tests. Every CI
+# run since mcp 2.x shipped was red for this reason alone.
+mcp>=1.0.0,<2
