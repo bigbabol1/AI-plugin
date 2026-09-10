@@ -5,6 +5,7 @@ pytest-homeassistant-custom-component cannot be installed).
 
 from __future__ import annotations
 
+import datetime as _dt
 import sys
 import types
 from unittest.mock import MagicMock
@@ -252,6 +253,18 @@ import uuid as _uuid
 
 _make_module("homeassistant.util.ulid", ulid_now=lambda: str(_uuid.uuid4()))
 
+# ── homeassistant.util.dt ─────────────────────────────────────────────────────
+# conversation.py does `from homeassistant.util import dt as dt_util` at module
+# scope, so without this the whole module — and every test that imports it —
+# fails COLLECTION, not just the assertions that need a clock. utcnow() is the
+# only member the integration uses; keep it real rather than a MagicMock so a
+# test comparing timestamps gets a datetime back.
+_make_module(
+    "homeassistant.util.dt",
+    utcnow=lambda: _dt.datetime.now(_dt.timezone.utc),
+    UTC=_dt.timezone.utc,
+)
+
 # homeassistant.util.logging — needed by pytest-homeassistant-custom-component
 # autouse fixture `fail_on_log_exception`.
 def _log_exception_noop(format_err, *args):  # noqa: ANN001
@@ -261,6 +274,7 @@ _make_module("homeassistant.util.logging", log_exception=_log_exception_noop)
 _util_mod = _make_module(
     "homeassistant.util",
     ulid=sys.modules["homeassistant.util.ulid"],
+    dt=sys.modules["homeassistant.util.dt"],
     logging=sys.modules["homeassistant.util.logging"],
 )
 
