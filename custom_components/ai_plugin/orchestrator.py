@@ -186,7 +186,7 @@ def _any_actuator_success(tool_msgs: list[dict]) -> bool:
         return True
     if any(
         r.lstrip().startswith("OK")
-        for r in _tool_results(tool_msgs, ("set_area_state",))
+        for r in _tool_results(tool_msgs, ("set_area_state", "set_brightness"))
     ):
         return True
     return any(
@@ -221,7 +221,7 @@ _QUESTION_INTENT_RE = re.compile(
 )
 # Tool names whose invocation = action taken.
 _ACTUATOR_TOOL_NAMES = (
-    "set_area_state", "HassTurnOn", "HassTurnOff",
+    "set_area_state", "set_brightness", "HassTurnOn", "HassTurnOff",
     "HassLightSet", "HassClimateSetTemperature",
     "HassClimateSetMode", "HassMediaPause", "HassMediaUnpause",
     "HassMediaNext", "HassMediaPrevious",

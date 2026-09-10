@@ -4,6 +4,33 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.47 — "brighter" was a number the model had to guess
+
+Asked to make the living room brighter, the model set every lamp to 100%. Asked to dim them, it turned them all off — four lights off in the same second, 2026-09-07 18:46:02Z.
+
+Neither was a model failure. **There was no relative-brightness capability to call.** `set_area_state` is `turn_on / turn_off / toggle` only, so a room-scoped brightness request had no tool that fit; brightness was reachable only through HA's `HassLightSet`, which is absolute, and where `brightness: 0` turns the light off. So "dim" → 0 → off is a straight path, not a misfire. The system prompt said nothing about *brighter* or *dimmer* either. The model was asked to convert a relative word into an absolute percentage without knowing the current one, and 100 and 0 are the obvious guesses.
+
+**New — `set_brightness`**, shaped like the `media_command` volume controls that already handle exactly this for audio (`'lauter'` → `volume_up`):
+
+```
+"brighter" / "heller"      -> set_brightness('brighter', area='living room')
+"dimmer" / "dunkler"       -> set_brightness('dimmer')
+"set the lights to 40%"    -> set_brightness('set', level=40)
+```
+
+Each step is **20 percentage points**, applied per light from *its own* current level — staggered lamps at 20/50/90/95% step to 40/70/100/100%, not to one shared value. The read-modify-write happens in Python, not in the model.
+
+**`dimmer` floors at 10% and can never reach 0**, so dimming never switches a light off. Turning off stays `HassTurnOff` / `set_area_state`, where it belongs.
+
+`brighter` on a light that is off turns it on at one step. `dimmer` skips lights that are already off and says so.
+
+**Two defects found while building it, both worth knowing about:**
+
+- **A tool in `TOOL_SCHEMAS` but missing from `TOOL_NAMES` is sent to the model, called by it, then routed past `ha_local` into the MCP branch where it fails — and the model quietly falls back to `HassLightSet`.** The symptom is indistinguishable from the bug being fixed. `TOOL_NAMES` is hand-maintained and is *not* derived from `TOOL_SCHEMAS`; both now carry a comment saying so, and `test_set_brightness_registered_in_both_places` pins it.
+- **An omitted scope must not widen to the whole home.** `set_area_state` guards this in its dispatcher; the first cut of `set_brightness` did not, so a bare "make it brighter" with no satellite `device_id` — any text-chat call — addressed every light in the flat. It now refuses and asks which room. From a satellite there is always a `device_id`, so it still resolves to the caller's room silently.
+
+Small models drop enum arguments constantly — the same defect the area ladder exists for — so an omitted or unrecognised `command` is recovered from the utterance (DE/EN/FR/ES/PT/PL) rather than refused. Measured before that recovery existed: the model called `set_brightness(area='Wohnzimmer')` with no command at all, the handler rejected it, and it fell straight back to `HassLightSet` and 100%.
+
 ## v0.9.45 — the plugin reopens the microphone, not the satellite
 
 Three releases of filters, and the loop kept coming back. The recorded runs show why: every echo is the tail of a reply, and the tails STT mangles beyond recognition ("I don't know what I could roll into that", "so we just want to check") carry nothing left to match. Filtering was always downstream of the real problem — **the microphone opens too early**.
