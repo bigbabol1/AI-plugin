@@ -621,3 +621,147 @@ async def test_reopen_is_not_stalled_by_unrelated_playback(monkeypatch) -> None:
 
     assert max(seen_ages) < conv._PLAYBACK_WAIT_CAP_S, "reply age must stay bounded"
     hass.services.async_call.assert_awaited_once()
+
+
+# ── 2026-09-12: bridged TTS starting late + STT rewriting numbers ────────────
+# Recorded on this install: reply "Today is Saturday, September 12, 2026."
+# generated 21:16:03.1, TTS reached the Cast speaker at 21:16:08.3, the plugin
+# checked the room at ~21:16:06.5 (idle), waited its 2 s gap and reopened the
+# microphone at 21:16:08.8 — half a second into the answer. STT returned
+# "...September 12th, 2026." and the bigram filter scored 3/5 < 0.7.
+
+ECHO_REPLY_0912 = "Today is Saturday, September 12, 2026."
+ECHO_HEARD_0912 = "Today is Saturday, September 12th, 2026."
+
+
+def test_echo_tokens_reduce_ordinals_to_numbers() -> None:
+    from custom_components.ai_plugin.conversation import _echo_tokens
+
+    assert _echo_tokens("the 1st, 2nd, 3rd and 21st") == ["the", "1", "2", "3", "and", "21"]
+    assert _echo_tokens("le 1er et le 12e") == ["le", "1", "et", "le", "12"]
+    assert _echo_tokens("el 12º día") == ["el", "12", "día"]
+    # Words that merely end like a suffix are untouched.
+    assert _echo_tokens("first street third") == ["first", "street", "third"]
+
+
+def test_ordinal_rewritten_by_stt_is_still_echo() -> None:
+    assert _is_self_echo(ECHO_HEARD_0912, [ECHO_REPLY_0912])
+
+
+def test_ordinal_normalisation_keeps_real_number_commands() -> None:
+    # Shares "40 percent" with the reply but not its sequence.
+    assert not _is_self_echo(
+        "set the lights to 40 percent", ["The lights are at 40 percent now."]
+    )
+
+
+def test_reply_playback_started_detects_our_tts(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    # Speaker in the room began playing 1 s ago; reply is 5 s old -> ours.
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="playing", seconds_ago=1.0))
+    assert conv._reply_playback_started(ent.hass, "dev_sat", 5.0)
+
+
+def test_reply_playback_started_ignores_a_tv_already_running(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="playing", seconds_ago=300.0))
+    assert not conv._reply_playback_started(ent.hass, "dev_sat", 5.0)
+
+
+def test_reply_playback_started_ignores_an_idle_room(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=189.0))
+    assert not conv._reply_playback_started(ent.hass, "dev_sat", 3.4)
+
+
+def test_reply_playback_started_counts_a_reply_that_already_finished(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    # Went idle 2 s ago, reply is 5 s old: it played our reply and stopped.
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=2.0))
+    assert conv._reply_playback_started(ent.hass, "dev_sat", 5.0)
+
+
+def test_reply_playback_started_counts_the_satellites_own_player(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    # Unlike the echo rule, the reopen must see a reply spoken by the satellite.
+    ent = _entity_with_hass(
+        monkeypatch, *_hass_with_speaker(state="playing", seconds_ago=0.5, speaker_is_caller=True)
+    )
+    assert conv._reply_playback_started(ent.hass, "dev_sat", 2.0)
+    assert not conv._speaker_was_playing(ent.hass, "dev_sat", 2.0)
+
+
+def _clocked_reopen(monkeypatch, started_at, playing_until):
+    """Run _reopen_after_quiet on a fake clock; return (entity, hass, log)."""
+    from custom_components.ai_plugin import conversation as conv
+
+    ent, hass, _ = _entity_with_satellite(monkeypatch, delay=2.0)
+    clock = {"t": 0.0}
+    log: list[tuple[str, float]] = []
+
+    async def _fake_sleep(seconds):
+        clock["t"] += seconds
+
+    def _started(hass_, device_id, reply_age):
+        log.append(("started?", reply_age))
+        return started_at is not None and reply_age >= started_at
+
+    def _playing(hass_, device_id, reply_age):
+        log.append(("playing?", reply_age))
+        return started_at is not None and started_at <= reply_age < playing_until
+
+    async def _call(*args, **kwargs):
+        log.append(("reopen", clock["t"]))
+
+    hass.services.async_call = _call
+    monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(conv, "_reply_playback_started", _started)
+    monkeypatch.setattr(conv, "_speaker_was_playing", _playing)
+    return ent, hass, log
+
+
+async def test_reopen_waits_for_late_bridged_playback(monkeypatch) -> None:
+    """The 2026-09-12 echo: playback starts 5 s after the reply."""
+    # Playing 5.0-9.0 s, plus the 6 s echo grace -> quiet from 15.0 s.
+    ent, hass, log = _clocked_reopen(monkeypatch, started_at=5.0, playing_until=15.0)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", ECHO_REPLY_0912, 2.0)
+
+    quiet_checks = [age for what, age in log if what == "playing?"]
+    reopen_at = [t for what, t in log if what == "reopen"]
+    assert quiet_checks and min(quiet_checks) >= 5.0, (
+        "the quiet check ran before the reply had started playing"
+    )
+    assert reopen_at and reopen_at[0] >= 15.0 + 2.0, (
+        "microphone reopened before playback + grace + gap"
+    )
+
+
+async def test_reopen_falls_back_when_no_playback_is_seen(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent, hass, log = _clocked_reopen(monkeypatch, started_at=None, playing_until=0.0)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", ECHO_REPLY_0912, 2.0)
+
+    start_checks = [age for what, age in log if what == "started?"]
+    reopen_at = [t for what, t in log if what == "reopen"]
+    assert max(start_checks) < conv._PLAYBACK_START_WAIT_S
+    assert len(reopen_at) == 1
+    assert reopen_at[0] <= conv._PLAYBACK_START_WAIT_S + 2.0, "fallback must stay bounded"
+
+
+async def test_reply_played_immediately_keeps_the_old_timing(monkeypatch) -> None:
+    """A satellite speaking its own reply must not pay the start wait."""
+    ent, hass, log = _clocked_reopen(monkeypatch, started_at=0.0, playing_until=0.0)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", "two words", 2.0)
+
+    reopen_at = [t for what, t in log if what == "reopen"]
+    # Estimate for "two words": 2 / 2.5 + 1 = 1.8 s, then the 2 s gap.
+    assert reopen_at == [1.8 + 2.0]

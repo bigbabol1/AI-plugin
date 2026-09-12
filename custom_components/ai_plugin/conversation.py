@@ -88,6 +88,11 @@ _MAX_FOLLOW_UP_CHAIN = 4
 _SATELLITE_START_CONVERSATION_FEATURE = 2
 _PLAYBACK_POLL_S = 0.5
 _PLAYBACK_WAIT_CAP_S = 90.0
+# How long to wait for our reply to START playing before trusting the
+# spoken-length estimate instead. TTS routed to a Cast speaker began 5.2 s after
+# the reply was generated (2026-09-12); the quiet check ran before that, saw an
+# idle room, and the microphone opened half a second into the answer.
+_PLAYBACK_START_WAIT_S = 8.0
 # A delayed follow-up arrives as a NEW HA conversation, so the history key is
 # remapped back to the conversation it continues for this long.
 _FOLLOW_UP_CONTINUITY_S = 120.0
@@ -127,9 +132,25 @@ def _match_close_phrase(text: str | None) -> str | None:
     return None
 
 
+# STT writes numbers its own way: the reply "September 12, 2026" came back as
+# "September 12th, 2026". "12" vs "12th" breaks BOTH word pairs that touch it,
+# which on a six-word reply drops the bigram overlap from 5/5 to 3/5 — under
+# ECHO_MATCH_THRESHOLD, so the echo ran as a fresh command (measured
+# 2026-09-12). Reduce ordinal spellings to the bare number on both sides.
+# German/Polish "12." already splits on the dot.
+_ORDINAL_RE = re.compile(r"^(\d+)(?:st|nd|rd|th|er|re|e|ème|eme|º|ª)$")
+
+
 def _echo_tokens(text: str) -> list[str]:
-    """Lowercase word tokens for echo comparison (Unicode-aware)."""
-    return _WORD_BREAK_RE.sub(" ", (text or "").lower()).split()
+    """Lowercase word tokens for echo comparison (Unicode-aware).
+
+    Ordinal suffixes on numbers are dropped ("12th" -> "12", "1er" -> "1") so
+    an STT rendering of a number still matches the reply it echoes.
+    """
+    return [
+        _ORDINAL_RE.sub(r"\1", tok)
+        for tok in _WORD_BREAK_RE.sub(" ", (text or "").lower()).split()
+    ]
 
 
 def _is_self_echo(stt_text: str, recent_replies: list[str]) -> bool:
@@ -165,6 +186,73 @@ def _is_self_echo(stt_text: str, recent_replies: list[str]) -> bool:
     return False
 
 
+def _room_media_player_states(
+    hass: HomeAssistant, device_id: str, include_caller: bool
+) -> list:
+    """States of the media players in the calling device's area.
+
+    ``include_caller`` adds the caller's own players. The echo rule leaves
+    them out (the satellite's player also plays the wake-word chime); the
+    follow-up reopen wants them in, because a reply played on the satellite
+    itself is still our reply. Raises on registry trouble — callers catch.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    dev = dev_reg.async_get(device_id)
+    area_id = dev.area_id if dev else None
+    if not area_id:
+        for entry in er.async_entries_for_device(ent_reg, device_id):
+            if entry.area_id:
+                area_id = entry.area_id
+                break
+    if not area_id:
+        return []
+    states = []
+    for eid, entry in ent_reg.entities.items():
+        if not eid.startswith("media_player."):
+            continue
+        if entry.device_id == device_id:
+            if not include_caller:
+                continue
+        else:
+            entry_area = entry.area_id
+            if not entry_area and entry.device_id:
+                other = dev_reg.async_get(entry.device_id)
+                entry_area = other.area_id if other else None
+            if entry_area != area_id:
+                continue
+        state = hass.states.get(eid)
+        if state is not None:
+            states.append(state)
+    return states
+
+
+def _reply_playback_started(
+    hass: HomeAssistant, device_id: str | None, reply_age: float
+) -> bool:
+    """True once our reply has begun playing somewhere in the caller's room.
+
+    ``reply_age`` is seconds since the reply was generated. A player counts
+    when it is playing and STARTED after the reply (so a TV already running
+    does not), or when it changed to idle after the reply (it played our
+    reply and has already finished). The caller's own players count here: a
+    satellite that speaks the reply itself has started it too.
+    """
+    if not device_id or hass is None:
+        return False
+    try:
+        now = dt_util.utcnow()
+        for state in _room_media_player_states(hass, device_id, include_caller=True):
+            since_change = (now - state.last_changed).total_seconds()
+            if state.state == "playing" and since_change <= reply_age + _PLAYBACK_START_SLACK_S:
+                return True
+            if state.state in _PLAYBACK_IDLE_STATES and since_change <= reply_age:
+                return True
+    except Exception:  # noqa: BLE001 — never let this block the follow-up
+        _LOGGER.debug("reply playback start check failed", exc_info=True)
+    return False
+
+
 def _speaker_was_playing(
     hass: HomeAssistant, device_id: str | None, reply_age: float
 ) -> bool:
@@ -182,30 +270,8 @@ def _speaker_was_playing(
     if not device_id or hass is None:
         return False
     try:
-        dev_reg = dr.async_get(hass)
-        ent_reg = er.async_get(hass)
-        dev = dev_reg.async_get(device_id)
-        area_id = dev.area_id if dev else None
-        if not area_id:
-            for entry in er.async_entries_for_device(ent_reg, device_id):
-                if entry.area_id:
-                    area_id = entry.area_id
-                    break
-        if not area_id:
-            return False
         now = dt_util.utcnow()
-        for eid, entry in ent_reg.entities.items():
-            if not eid.startswith("media_player.") or entry.device_id == device_id:
-                continue
-            entry_area = entry.area_id
-            if not entry_area and entry.device_id:
-                other = dev_reg.async_get(entry.device_id)
-                entry_area = other.area_id if other else None
-            if entry_area != area_id:
-                continue
-            state = hass.states.get(eid)
-            if state is None:
-                continue
+        for state in _room_media_player_states(hass, device_id, include_caller=False):
             since_change = (now - state.last_changed).total_seconds()
             if state.state == "playing":
                 # Started after our reply → it is our TTS, not the TV.
@@ -432,8 +498,30 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             # the estimated end AND until every speaker in the room is quiet,
             # so a slow external speaker can't be cut short.
             spoken_for = len(_echo_tokens(reply)) / _TTS_WORDS_PER_S
-            elapsed = min(spoken_for + 1.0, _PLAYBACK_WAIT_CAP_S)
-            await asyncio.sleep(elapsed)
+            elapsed = 0.0
+            # Phase 1: wait for the reply to actually START. TTS mirrored to
+            # another speaker can begin seconds after generation; checking
+            # "is anything playing?" before then sees a quiet room and opens
+            # the microphone into the answer. Bounded, so a reply we never see
+            # play (no media_player for the audio) falls back to the estimate.
+            started = False
+            while elapsed < _PLAYBACK_START_WAIT_S:
+                if _reply_playback_started(hass, device_id, elapsed):
+                    started = True
+                    break
+                await asyncio.sleep(_PLAYBACK_POLL_S)
+                elapsed += _PLAYBACK_POLL_S
+            if not started:
+                _LOGGER.debug(
+                    "AI Plugin: no playback of the reply seen within %.0fs on %s "
+                    "— using the spoken-length estimate",
+                    _PLAYBACK_START_WAIT_S, satellite,
+                )
+            # Phase 2: hold until the estimated end AND until the room is quiet.
+            estimated_end = min(spoken_for + 1.0, _PLAYBACK_WAIT_CAP_S)
+            if elapsed < estimated_end:
+                await asyncio.sleep(estimated_end - elapsed)
+                elapsed = estimated_end
             while elapsed < _PLAYBACK_WAIT_CAP_S:
                 # `elapsed` is the age of our reply, so only playback that
                 # started with it holds the microphone shut — a TV that was

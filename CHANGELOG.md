@@ -4,6 +4,24 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.48 — the follow-up opened the microphone into its own answer
+
+"Ignore the satellite hearing its own reply" was on, and the assistant still answered itself. Recorded on this install:
+
+```
+21:16:03.1  reply generated: "Today is Saturday, September 12, 2026."
+21:16:06.5  quiet check: room speaker idle for 189 s -> room counted as quiet, wait the 2 s gap
+21:16:08.3  TTS starts on the Cast speaker (5.2 s after the reply)
+21:16:08.8  microphone reopened, half a second into the answer
+21:16:13.0  STT: "Today is Saturday, September 12th, 2026." -> run as a command
+```
+
+Two independent misses, both fixed:
+
+**The quiet check ran before the answer had started.** The delayed follow-up estimated the reply's speaking time from generation and then asked "is a speaker in the room playing?". TTS mirrored to another speaker can begin seconds later, so that check saw an idle room and the microphone opened into the reply. The follow-up now **waits for the reply to start playing first** (up to 8 s), then for the room to go quiet, then the configured gap. The caller's own player counts as a start too, so a satellite that speaks its own reply keeps the old timing; if no playback of the reply is ever seen, it falls back to the spoken-length estimate after 8 s.
+
+**STT rewrote a number, and the text filter fell just short.** The echo match compares word pairs, and "12" vs "12th" breaks both pairs that touch it — 3 of 5 on that reply, under the 0.7 threshold. Ordinal spellings are now reduced to the bare number on both sides before comparing ("12th", "1er", "12e", "12º" → "12"/"1"), so that echo scores 5 of 5. Commands that merely share a number ("set the lights to 40 percent") are unaffected.
+
 ## v0.9.47 — "brighter" was a number the model had to guess
 
 Asked to make the living room brighter, the model set every lamp to 100%. Asked to dim them, it turned them all off — four lights off in the same second, 2026-09-07 18:46:02Z.
