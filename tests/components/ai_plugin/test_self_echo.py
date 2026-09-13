@@ -759,15 +759,27 @@ async def test_reopen_falls_back_when_no_playback_is_seen(monkeypatch) -> None:
     assert reopen_at[0] <= conv._PLAYBACK_START_WAIT_S + 2.0, "fallback must stay bounded"
 
 
-async def test_reply_played_immediately_keeps_the_old_timing(monkeypatch) -> None:
+async def test_reply_played_immediately_does_not_pay_the_start_wait(monkeypatch) -> None:
     """A satellite speaking its own reply must not pay the start wait."""
     ent, hass, log = _clocked_reopen(monkeypatch, started_at=0.0, playing_until=0.0)
 
     await ent._reopen_after_quiet("d1", "assist_satellite.sat", "two words", 2.0)
 
     reopen_at = [t for what, t in log if what == "reopen"]
-    # Estimate for "two words": 2 / 2.5 + 1 = 1.8 s, then the 2 s gap.
-    assert reopen_at == [1.8 + 2.0]
+    # Playback seen at once and already quiet: only the 2 s gap remains.
+    assert reopen_at == [2.0]
+
+
+async def test_estimate_is_not_a_floor_once_playback_was_seen(monkeypatch) -> None:
+    """Measured v0.9.49: the estimate outlasted real TTS and added 1-3 s."""
+    long_reply = " ".join(["word"] * 45)  # estimate 45 / 2.5 + 1 = 19 s
+    # Playback seen from 2 s, quiet (incl. settle) from 14 s.
+    ent, hass, log = _clocked_reopen(monkeypatch, started_at=2.0, playing_until=14.0)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", long_reply, 2.0)
+
+    reopen_at = [t for what, t in log if what == "reopen"]
+    assert reopen_at and 14.0 + 2.0 <= reopen_at[0] < 19.0 + 2.0, reopen_at
 
 
 # ── v0.9.49: answer end -> reopen = 1 s settle + the user's quiet gap ─────────

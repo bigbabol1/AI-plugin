@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.50 — the follow-up stops waiting for an estimate once it has heard the answer end
+
+v0.9.49 measured 4.0–4.6 s from answer end to reopen with a 2 s quiet gap, where 1 s settle + 2 s gap should give about 3 s. The remainder was the spoken-length estimate (2.5 words/s + 1 s, counted from generation): it still acted as a minimum wait even when the reply's playback had been seen start and stop, and real TTS finishes sooner than that estimate.
+
+The estimate is now used only when no playback of the reply is ever observed. When playback is seen, the microphone reopens after it ends, the 1-second settle and the configured quiet gap — nothing else.
+
 ## v0.9.49 — the pause before a follow-up is yours to set
 
 With "Quiet gap before listening again" at 2 s, the microphone reopened 8.1–8.2 s after an answer finished. Six of those seconds were not the setting: the delayed follow-up reused the echo filter's 6-second grace — the window in which a turn arriving after playback is still treated as possible echo — as its own wait for quiet.

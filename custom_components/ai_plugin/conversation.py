@@ -551,11 +551,16 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                     "— using the spoken-length estimate",
                     _PLAYBACK_START_WAIT_S, satellite,
                 )
-            # Phase 2: hold until the estimated end AND until the room is quiet.
-            estimated_end = min(spoken_for + 1.0, _PLAYBACK_WAIT_CAP_S)
-            if elapsed < estimated_end:
-                await asyncio.sleep(estimated_end - elapsed)
-                elapsed = estimated_end
+            # Phase 2: hold until the room is quiet. The spoken-length estimate
+            # is only a floor when we never saw the reply play: it counts from
+            # generation at 2.5 words/s + 1 s, and real TTS is faster, so as a
+            # floor on OBSERVED playback it added 1-3 s of silence after the
+            # answer had already ended (measured 4.0-4.6 s with a 2 s gap).
+            if not started:
+                estimated_end = min(spoken_for + 1.0, _PLAYBACK_WAIT_CAP_S)
+                if elapsed < estimated_end:
+                    await asyncio.sleep(estimated_end - elapsed)
+                    elapsed = estimated_end
             while elapsed < _PLAYBACK_WAIT_CAP_S:
                 # `elapsed` is the age of our reply, so only playback that
                 # started with it holds the microphone shut — a TV that was
