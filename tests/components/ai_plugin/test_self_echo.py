@@ -541,7 +541,7 @@ async def test_reopen_waits_for_quiet_then_starts_conversation(monkeypatch) -> N
 
     monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
     # Room already quiet, so the wait loop exits immediately.
-    monkeypatch.setattr(conv, "_speaker_was_playing", lambda *a: False)
+    monkeypatch.setattr(conv, "_reply_audio_active", lambda *a: False)
 
     await ent._reopen_after_quiet("d1", "assist_satellite.sat", "Two words", 3.0)
 
@@ -568,7 +568,7 @@ async def test_reopen_skipped_when_satellite_is_busy(monkeypatch) -> None:
         return None
 
     monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
-    monkeypatch.setattr(conv, "_speaker_was_playing", lambda *a: False)
+    monkeypatch.setattr(conv, "_reply_audio_active", lambda *a: False)
 
     await ent._reopen_after_quiet("d1", "assist_satellite.sat", "hi", 3.0)
 
@@ -615,7 +615,7 @@ async def test_reopen_is_not_stalled_by_unrelated_playback(monkeypatch) -> None:
         # Started 10 minutes ago → never "ours", whatever the reply age.
         return 600.0 <= reply_age
 
-    monkeypatch.setattr(conv, "_speaker_was_playing", _playing)
+    monkeypatch.setattr(conv, "_reply_audio_active", _playing)
 
     await ent._reopen_after_quiet("d1", "assist_satellite.sat", "two words", 3.0)
 
@@ -721,14 +721,14 @@ def _clocked_reopen(monkeypatch, started_at, playing_until):
     hass.services.async_call = _call
     monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
     monkeypatch.setattr(conv, "_reply_playback_started", _started)
-    monkeypatch.setattr(conv, "_speaker_was_playing", _playing)
+    monkeypatch.setattr(conv, "_reply_audio_active", _playing)
     return ent, hass, log
 
 
 async def test_reopen_waits_for_late_bridged_playback(monkeypatch) -> None:
     """The 2026-09-12 echo: playback starts 5 s after the reply."""
-    # Playing 5.0-9.0 s, plus the 6 s echo grace -> quiet from 15.0 s.
-    ent, hass, log = _clocked_reopen(monkeypatch, started_at=5.0, playing_until=15.0)
+    # Playing 5.0-9.0 s, plus the 1 s settle -> quiet from 10.0 s.
+    ent, hass, log = _clocked_reopen(monkeypatch, started_at=5.0, playing_until=10.0)
 
     await ent._reopen_after_quiet("d1", "assist_satellite.sat", ECHO_REPLY_0912, 2.0)
 
@@ -737,8 +737,11 @@ async def test_reopen_waits_for_late_bridged_playback(monkeypatch) -> None:
     assert quiet_checks and min(quiet_checks) >= 5.0, (
         "the quiet check ran before the reply had started playing"
     )
-    assert reopen_at and reopen_at[0] >= 15.0 + 2.0, (
-        "microphone reopened before playback + grace + gap"
+    assert reopen_at and reopen_at[0] >= 10.0 + 2.0, (
+        "microphone reopened before playback + settle + gap"
+    )
+    assert reopen_at[0] < 10.0 + 2.0 + 1.0, (
+        "a hidden wait beyond the 1 s settle and the user's gap is back"
     )
 
 
@@ -765,3 +768,43 @@ async def test_reply_played_immediately_keeps_the_old_timing(monkeypatch) -> Non
     reopen_at = [t for what, t in log if what == "reopen"]
     # Estimate for "two words": 2 / 2.5 + 1 = 1.8 s, then the 2 s gap.
     assert reopen_at == [1.8 + 2.0]
+
+
+# ── v0.9.49: answer end -> reopen = 1 s settle + the user's quiet gap ─────────
+
+
+def test_reply_audio_active_while_our_reply_plays(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="playing", seconds_ago=1.0))
+    assert conv._reply_audio_active(ent.hass, "dev_sat", 5.0)
+
+
+def test_reply_audio_active_settles_for_one_second(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=0.5))
+    assert conv._reply_audio_active(ent.hass, "dev_sat", 5.0)
+
+
+def test_reply_audio_active_is_quiet_after_the_settle(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=2.0))
+    assert not conv._reply_audio_active(ent.hass, "dev_sat", 5.0)
+
+
+def test_reply_audio_active_ignores_a_tv_already_running(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="playing", seconds_ago=300.0))
+    assert not conv._reply_audio_active(ent.hass, "dev_sat", 5.0)
+
+
+def test_echo_rule_keeps_its_six_second_grace(monkeypatch) -> None:
+    """Shortening the reopen must not weaken turn classification."""
+    from custom_components.ai_plugin import conversation as conv
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=2.0))
+    assert conv._speaker_was_playing(ent.hass, "dev_sat", 5.0)
+    assert conv._PLAYBACK_ECHO_GRACE_S == 6.0

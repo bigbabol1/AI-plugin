@@ -93,6 +93,13 @@ _PLAYBACK_WAIT_CAP_S = 90.0
 # the reply was generated (2026-09-12); the quiet check ran before that, saw an
 # idle room, and the microphone opened half a second into the answer.
 _PLAYBACK_START_WAIT_S = 8.0
+# Settle time after our reply stops playing, before the user's quiet gap. The
+# follow-up used to reuse the echo rule's 6 s grace here, which added 6 s of
+# silence nobody could configure: answer end -> reopen measured 8.1-8.2 s with a
+# 2 s gap (2026-09-12). The grace still applies where it belongs — classifying a
+# turn that ARRIVES shortly after playback — but the reopen only needs a short
+# settle; anything longer is the "Quiet gap before listening again" setting.
+_REOPEN_SETTLE_S = 1.0
 # A delayed follow-up arrives as a NEW HA conversation, so the history key is
 # remapped back to the conversation it continues for this long.
 _FOLLOW_UP_CONTINUITY_S = 120.0
@@ -250,6 +257,33 @@ def _reply_playback_started(
                 return True
     except Exception:  # noqa: BLE001 — never let this block the follow-up
         _LOGGER.debug("reply playback start check failed", exc_info=True)
+    return False
+
+
+def _reply_audio_active(
+    hass: HomeAssistant, device_id: str | None, reply_age: float
+) -> bool:
+    """True while our reply still plays in the caller's room, or stopped less
+    than _REOPEN_SETTLE_S ago.
+
+    Used by the delayed follow-up to decide when the room is quiet. Unlike
+    _speaker_was_playing() (the echo rule, 6 s grace, caller excluded), this
+    counts the caller's own player and settles for only _REOPEN_SETTLE_S, so the
+    configured quiet gap is the only other wait. Playback that started before
+    the reply (a TV) never counts.
+    """
+    if not device_id or hass is None:
+        return False
+    try:
+        now = dt_util.utcnow()
+        for state in _room_media_player_states(hass, device_id, include_caller=True):
+            since_change = (now - state.last_changed).total_seconds()
+            if state.state == "playing" and since_change <= reply_age + _PLAYBACK_START_SLACK_S:
+                return True
+            if state.state in _PLAYBACK_IDLE_STATES and since_change <= min(_REOPEN_SETTLE_S, reply_age):
+                return True
+    except Exception:  # noqa: BLE001 — never let this block the follow-up
+        _LOGGER.debug("reply audio check failed", exc_info=True)
     return False
 
 
@@ -525,8 +559,9 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             while elapsed < _PLAYBACK_WAIT_CAP_S:
                 # `elapsed` is the age of our reply, so only playback that
                 # started with it holds the microphone shut — a TV that was
-                # already running must not stall the follow-up forever.
-                if not _speaker_was_playing(hass, device_id, elapsed):
+                # already running must not stall the follow-up forever. Once
+                # it stops, only a 1 s settle; the rest is the user's gap.
+                if not _reply_audio_active(hass, device_id, elapsed):
                     break
                 await asyncio.sleep(_PLAYBACK_POLL_S)
                 elapsed += _PLAYBACK_POLL_S
