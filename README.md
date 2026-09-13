@@ -23,114 +23,37 @@ A provider-agnostic AI orchestration layer for Home Assistant, built for **local
 
 ## Recommended Models
 
-The most critical factor for reliable entity control is **tool calling quality**. Models that hedge or ask clarifying questions instead of executing are a poor fit regardless of benchmark scores. The config flow now checks this for you on Ollama: models that report no `tools` capability are rejected at setup.
+The most critical factor for reliable entity control is **tool-calling quality**: models that hedge or ask clarifying questions instead of executing are a poor fit regardless of benchmark scores. On Ollama the config flow rejects models that report no `tools` capability.
 
-### Benchmark (8 GB VRAM)
+### What was tested (8 GB VRAM — RTX 3060 Ti, Ollama)
 
-Bench-tested July 2026 against plugin v0.9.35 via HA Assist `/api/conversation/process` in **voice mode**, on an RTX 3060 Ti (8 GB) running Ollama. 29 read-only prompts covering clock/sun, room sensors, "which lights are on", inventory, climate, local + named-place weather, web search, bare-noun sanity, and a media question. Pass counts alone hide *how* a model fails, so the notes distinguish honest misses from confident fabrications — the distinction that matters most in a home agent.
+- **Voice suite (July 2026)** — 29 read-only prompts through HA Assist in voice mode. `qwen3.5:9b` scored 93 % and its only misses were honest; `qwen3:8b` and `qwen3-abliterated:8b` reached 86–90 % but fabricated answers; `mistral:7b` 86 %; `gemma4:e2b` 69 %. Cloud `qwen3.5:397b` (100 %) served as the ceiling.
+- **Adversarial tool calling (August 2026)** — 10 German edge cases × 3 runs. `gemma-4-12B UD-Q3_K_XL` scored 100 % with exact area names, `qwen3.5:9b` 70 %. `granite4.1:8b` and `lfm2.5:8b` corrupted or translated non-English room names. Larger Gemma 4 12B quants (IQ4_XS, Q4_K_M) spill onto the CPU at a 16 K context.
+- **Multi-turn conversations (August 2026)** — 11 German turns × 2 passes on `gemma-4-12B UD-Q3_K_XL`, actions verified in HA's state history. Ambiguous names, ellipsis, pronouns, two devices in one turn, self-correction and area references all passed; median turn 4.5 s. `top_p`, temperature (0.3–1.0), a 32 K window and schema pruning changed nothing; raising Max Tokens to 1024 only made failing turns slower.
+- **LFM2.5 QAD checkpoints (August 2026)** — very fast, but they did not converge in the plugin's multi-step tool loop.
 
-Latency below is the **median over the ~20 LLM-driven turns** per run — the other 9 prompts are answered by the deterministic shortcut layer in ~10 ms regardless of model, so they don't discriminate. `qwen3.5:397b-cloud` runs via Ollama Cloud and is included only as an accuracy ceiling, not as a local option.
+### Conclusion
 
-| Model | Size | Pass rate | Median latency | Notes |
-|-------|------|-----------|----------------|-------|
-| **qwen3.5:9b** | 6.6 GB | **93 %** (27/29) | 4.3 s | **Top local pick.** Highest local accuracy, and decisively: its only two misses were *honest* ("I couldn't find the weather in those search results"), never a fabrication. Answered the thermostat (setpoint + heating state), whole-home temperatures, and "what's playing" correctly where the 8Bs did not. ~1.5 s slower than the 8Bs — worth it. Reasoning model; the plugin sends `think: false` automatically. |
-| qwen3:8b | 5.2 GB | 86 % (25/29) | **2.5 s** | Faster, but **fabricated a concert** ("Rolling Stones at the Berlin Olympic Stadium") in answer to *"what's playing?"*, and bailed with "couldn't produce an answer" on climate and temperature. Fine for lower-latency, actuation-heavy use; less trustworthy on open questions. |
-| qwen3-abliterated:8b | 5.0 GB | 90 % (26/29) | **1.8 s** | Fastest of the capable models and scores well — but the score is **inflated by confabulation**: it invented specific Tokyo weather that the honest models declined to state. Also safety-ablated. Not recommended despite the number. |
-| mistral:7b | 4.4 GB | 86 % (25/29) | 2.4 s | Solid on actuation, but couldn't name the weekday for "what day is it?" and missed a German state query. Weaker on dates and non-English. |
-| gemma4:e2b | Gemma 3n E2B (~2B active) | 69 % (20/29) | **1.7 s** | Fastest by far and impressively coherent for its size, but weak on multi-step tool loops (missed weather, climate, inventory). A curiosity for very constrained setups, not for reliable control. |
-| _qwen3.5:397b-cloud_ | cloud (reference) | **100 %** (29/29) | 6.2 s | Accuracy ceiling — and every pass was honest (it declined Tokyo weather rather than inventing it). Cloud round-trip; not a local option. |
+For **8 GB VRAM** the recommended models are:
 
-**What the pass rate hides:** the local models cluster tightly on score (86–93 %), but they fail in opposite ways. `qwen3.5:9b` and the cloud reference decline gracefully when live data isn't there ("I couldn't find that in the search results"); `qwen3:8b` and the abliterated model instead emit confident fictions — a concert that isn't happening, weather they never fetched. For an assistant that speaks its answers aloud, an honest miss is recoverable and a fabrication is not — so the recommendation follows the failure *mode*, not the raw percentage. Read the notes column, not just the number.
-
-> **Context window on 8 GB:** model weights + KV cache must stay under ~7.5 GB. A 7–8B Q4_K_M model uses 4.7–5.2 GB weights; KV cache ≈ 0.2 GB per 1 K tokens.
->
-> **Minimum recommended context: 16384** (the integration default). Multi-step tool loops routinely emit 6–10 K of intermediate tokens; 8192 starves them. Avoid values above ~24 000 on an 8 GB card. Setting a context window larger than the model supports is now rejected in Advanced settings (Ollama).
-
-### Update — August 2026: the 8 GB tier after Qwen 3.5
-
-`qwen3.5:9b` was released 2026-03-02. Five months on, the honest headline is that **the 8 GB tier has largely plateaued**: Qwen 3.6 (April 2026) shipped only a 27B dense and a 35B-A3B MoE, so there is no direct Qwen upgrade at this size. Three post-3.5 models do fit — `granite4.1:8b` (IBM, April), `lfm2.5:8b` (Liquid, May — an 8.3B-total / 1.5B-active MoE), and `gemma4:12b` (Google, June).
-
-> **Different method — not comparable to the 29-prompt table above.** These runs hit Ollama's OpenAI-compatible endpoint directly with HA-Assist-shaped German tool schemas: 10 adversarial cases × 3 repetitions at temperature 0, scoring computed arguments ("auf die Hälfte"), unit conversion, read-before-write on conditionals, refusal/clarification, negation traps, multi-turn coreference. It stresses **tool-calling under pressure**, not the plugin end-to-end, and the 29-prompt voice suite has **not** been re-run against these models. Treat the two tables as different axes.
-
-| Model | On disk | Fits 8 GB @ 16 K? | Adversarial tool set | Exact area name | Median |
-|-------|---------|-------------------|----------------------|-----------------|--------|
-| **gemma-4-12B UD-Q3_K_XL** | 6.2 GB | **yes** — 6.5 GB, 100 % GPU | **30/30 (100 %)** | **100 %** | 5.2 s |
-| gemma-4-12B IQ4_XS | 6.6 GB | **no** — 6.9 GB, 3 % on CPU | 27/30 (90 %) | — | 6.1 s |
-| gemma4:12b (Q4_K_M) | 7.6 GB | **no** — 7.9 GB, 16 % on CPU | 30/30 (100 %) | — | 10.4 s |
-| `qwen3.5:9b` | 6.6 GB | yes — 5.8 GB, 100 % GPU | 21/30 (70 %) | **100 %** | 2.6 s |
-| `granite4.1:8b` | 5.3 GB | yes — 6.7 GB, 100 % GPU | 24/30 (80 %) | **83 %** ✗ | **0.6 s** |
-| `lfm2.5:8b` | 5.2 GB | yes — 5.4 GB, 100 % GPU | 18/30 (60 %) | **67 %** ✗ | 1.9 s |
-
-**Fit is decided at your context window, not by the file size.** All three Gemma 4 12B quants look like they fit on paper; only one actually does once a 16 K KV cache is allocated. `IQ4_XS` is 6.6 GB on disk and *still* spills 3 % to CPU. Check `ollama ps` and read the `PROCESSOR` column at your real `num_ctx` — a few percent on CPU costs multiples in latency, not a few percent (`gemma4:12b` at Q4_K_M: 16 % on CPU → 10.4 s median).
-
-**Non-English area names are a hard filter, and raw scores hide it.** Home Assistant matches areas by string, so a model that "helpfully" rewrites a room name fails the intent silently. `granite4.1:8b` is by far the fastest model here and scored *above* `qwen3.5:9b` on tools — but it corrupts umlauts systematically, emitting **"Böro"** 6/6 at production temperature (and "Büoro", "Bureau" elsewhere) for **"Büro"**. `lfm2.5:8b` translates room names outright ("Küche" → `kitchen`). Both are disqualifying for a German, French or Swedish install regardless of tool scores. If you benchmark models yourself, **grade area names with exact string equality** — a substring check hides exactly this class of defect.
-
-Two further cautions from the same runs:
-
-- **`lfm2.5:8b` is prompt-brittle.** It scored 80 % on the default system prompt and *dropped to 60 %* when the prompt was extended — it stopped emitting tool calls at all on the computed-argument cases. A model whose tool-calling degrades when you edit unrelated prompt text is a maintenance trap.
-- **Action polarity is a prompt problem, not a model problem.** An apparent "inverted blinds" bug (`Jalousien zu` → `HassTurnOn`) turned out to be a missing convention in the system prompt. Once it states that closing a cover is `TurnOff`, **all four models hit 100 %**.
-
-**Verdict.** `gemma-4-12B UD-Q3_K_XL` ([unsloth/gemma-4-12B-it-GGUF](https://huggingface.co/unsloth/gemma-4-12B-it-GGUF)) is the new accuracy pick for 8 GB — the only 12B that stays fully in VRAM at 16 K, perfect on both the adversarial set and area fidelity. It costs latency: ~3.6 s median on everyday commands versus ~2.9 s for `qwen3.5:9b`, a worse tail, and ~16 s on the first turn after a keep-alive eviction (6.5 GB to load). `qwen3.5:9b` remains the better choice if responsiveness matters more than edge-case correctness, and it is still the only model validated against the 29-prompt voice suite.
+- **`hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL`** — highest accuracy and exact non-English area names; the only 12B quant that stays fully in VRAM at 16 K. About 3.6 s median on everyday commands.
+- **`qwen3.5:9b`** — faster (about 2.9 s), honest when it lacks data, and validated against the voice suite.
 
 ```bash
 ollama pull hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL
 ```
 
-### Update — August 2026 (2): multi-turn behaviour, and the settings that don't move the needle
-
-The two tables above are single-shot: one utterance, one judgement. This run is the other axis — a **threaded conversation**, driven through `assist_pipeline/run` (intent stage) so it is the real Assist path, with `conversation_id` carried forward so follow-ups and pronouns actually refer to something. 11 German turns × 2 passes on `gemma-4-12B UD-Q3_K_XL`, RTX 3060 Ti, at Temperature 0.3 / `top_p` 0.4 / Context Window 16384 / Max Tokens 512 unless a row below says otherwise. **Actions were verified in Home Assistant's state history, not read off the agent's replies** — voice mode returns an empty string on a successful action, which looks identical to a turn that did nothing.
-
-Live tool surface during the run: **63 tools ≈ 8.6 K schema tokens**, plus a 2.1 K system prompt — **10.7 K of a 16 K window spent before the user says a word** (HA intents plus five MCP servers: time, fetch, wikipedia, calculator, and HA's own MCP endpoint).
-
-| Case | Utterance | Result |
-|------|-----------|--------|
-| Ambiguous friendly name | two entities both named "Nachtlicht" (a `light.` and a `switch.`) | picks the light, consistently |
-| Ellipsis | "Und den LED-Strip auch." | correct device on, verb inferred |
-| Anaphora, two referents | "Mach beide wieder aus." | both off in one turn |
-| Two devices, one turn | "Schalte X und Y gleichzeitig ein." | both on |
-| Self-correction | "Nein, ich meinte nur X — mach Y wieder aus." | only Y off, X left alone |
-| Area reference | "Mach das Licht in der Küche aus." | resolves the room, correct device off |
-
-All six pass in every configuration tested, both passes, with the state changes confirmed in history. **Median turn 4.5 s, p90 6.6 s** on this hardware.
-
-#### The knobs, ranked by how much they changed anything
-
-| Lever | Change | Result |
-|-------|--------|--------|
-| `top_p` | 0.4 → 0.9 | no measurable difference |
-| Temperature | 0.3 → 1.0 | no difference in task behaviour; only output variety — at 0.3 the same joke came back byte-identical every pass |
-| Context Window | 16384 → 32768 | no difference on this set (see the KV note below) |
-| `prune_tool_schemas` | off → on | **no-op** — zero prune events in 22 turns |
-| Max Tokens | 512 → 1024 | **actively worse** — see below |
-
-**Max Tokens 512 in the table below is load-bearing, not a default.** On a turn where the model reasons at length without converging, generation runs to the cap and comes back with *empty content*, and the plugin substitutes its fallback line. Raising the cap does not rescue that turn — it only lets it run longer: the same turn went from 18.7 s to **32.8 s**, past the plugin's own 30 s `response_timeout`. A bigger budget buys a slower failure.
-
-**`prune_tool_schemas` never fired.** Across 22 turns of real voice traffic the budget line read `tools=8634` every single time. It does fire occasionally on entity-listing utterances — one observed case dropped `list_entities` and `list_areas`, about 4 % of the schema budget. Combined with the prefix-cache cost noted earlier, off remains the right default.
-
-**A 32 K window does fit on 8 GB — if the KV cache is quantised.** The ≤24 000 guidance above assumes an f16 KV cache (~0.2 GB per 1 K tokens). With `OLLAMA_KV_CACHE_TYPE=q8_0` that halves, and `gemma-4-12B UD-Q3_K_XL` loads at `num_ctx=32768` still reporting **6.5 GB / 100 % GPU** in `ollama ps`. Bigger is not automatically better, though: the Context Window also sets the plugin's history budget (`soft_limit = (context − system − tools) × 0.65`), so a wider window means longer prompts deep in a conversation. It bought nothing measurable here.
-
-#### Liquid's QAD checkpoints (LFM2.5, Q4_0) — evaluated, not recommended
-
-Liquid released [Quantization-Aware Distillation](https://huggingface.co/blog/LiquidAI/qad) checkpoints in August 2026: the BF16 teacher is distilled into the 4-bit student, recovering ~97 % of BF16 quality at Q4_0 file sizes. Tested here because the speed is genuinely striking — `LFM2.5-2.6B-QAD-Q4_0` is 1.8 GB resident and runs **165 tok/s decode against gemma-4-12B's 35, with 6.4 K vs 1.9 K tok/s prefill**, which on read-only questions and chit-chat means 1.4–3.0 s turns where the 12B takes 4–10 s. Asked *once*, in isolation, it picks the right tool 81–89 % of the time.
-
-It still does not work in this integration. In the plugin's actual loop — 63 tools, up to 10 iterations, tool results fed back — it does not converge: it invents entity ids and re-issues calls that have already succeeded, exhausting `max_tool_iterations` without changing any device state. QAD is a real improvement over plain Q4_0 at identical file size (it also spends ~27 % fewer thinking tokens), but the gap that matters here is loop discipline, not quantisation quality.
-
-Two specifics worth carrying:
-
-- **`LFM2.5-1.2B` fails dangerously, not just poorly.** It replies *"Ich habe die Kaffeemaschine eingeschaltet"* in fluent German **without emitting a tool call** — over voice, indistinguishable from success. Score it on emitted tool calls, never on the reply text.
-- **Thinking cannot be disabled on these GGUFs.** Their chat template opens `<|im_start|>assistant\n<think>` unconditionally, so the `think: false` the plugin sends on every Ollama call is silently ignored — as are `/no_think` and prompt-level instructions. Budget ~150–220 thinking tokens per turn against Max Tokens.
-
-Consistent with the `lfm2.5:8b` row above: this family is fast and small, and not yet a fit for multi-step home control.
+Avoid `granite4.1:8b` and `lfm2.5:8b` on non-English installs, and check `ollama ps` at your real context window — a few percent on the CPU costs multiples in latency.
 
 ### Recommended configuration
 
 | Setting | Value |
 |---------|-------|
-| Model | `qwen3.5:9b` (best latency/accuracy balance, failures are honest, validated against the full voice suite) — or `hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL` for the highest accuracy and non-English area names, at ~1.5× the latency. `qwen3:8b` for ~2× lower latency if you mostly do device control. Avoid `granite4.1:8b` and `lfm2.5:8b` on non-English installs — see the August 2026 notes. |
-| Temperature | 0.2 |
+| Model | `hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL` or `qwen3.5:9b` |
+| Temperature | `1.0` for gemma-4-12B (0.3–1.0 made no difference to the actions taken); `qwen3.5:9b` was benchmarked at 0.2 |
 | top_p | 0.4 |
-| Context Window | **16384** |
-| Max Tokens (`num_predict`) | 512 |
+| Context Window | **16384** — minimum; stay under ~24 000 on 8 GB with the default KV cache (32 K fits with `OLLAMA_KV_CACHE_TYPE=q8_0`) |
+| Max Tokens (`num_predict`) | 512 — raising it makes failing turns slower, not better |
 | Keep-alive | `30m` (`-1` on a dedicated GPU) |
 | Web Search | DuckDuckGo (default) or Tavily/Brave with a key |
 
@@ -152,7 +75,7 @@ The plugin talks to Ollama's native `/api/chat` and passes `num_ctx` on every re
 
 ### Temperature
 
-**0.1–0.3** for home control. Higher values make models ask clarifying questions instead of acting. The benchmark above ran at 0.2.
+`gemma-4-12B UD-Q3_K_XL` runs at **1.0**: between 0.3 and 1.0 only the wording of replies varied, never the actions taken. If a model asks clarifying questions instead of acting, lower it to 0.1–0.3 (the July voice suite ran at 0.2).
 
 ### Reasoning models (qwen3, deepseek-r1)
 
@@ -241,7 +164,7 @@ All settings are editable post-install via **Settings → Devices & Services →
 | Enable thinking | off | Let reasoning models emit chain-of-thought (slower; disables streaming) |
 | Max tool iterations | 10 | Cap on LLM↔tool round-trips per turn |
 | Timeout | 30 s | Per-LLM-call ceiling (MCP tools have their own 15 s cap) |
-| Temperature / top_p / Max tokens | unset | Sampling; 0.2 / 0.4 / 512 recommended |
+| Temperature / top_p / Max tokens | unset | Sampling; 1.0 / 0.4 / 512 recommended for gemma-4-12B |
 | Ollama keep-alive | unset | Keep the model in VRAM between requests (`30m`, `-1`) |
 | Prune tool schemas | off | Per-message schema pruning; defeats Ollama's prefix cache — leave off |
 | Announce timers | off | Timer completions via media player instead of on-device ring |
