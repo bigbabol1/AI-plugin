@@ -8,7 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 With "Quiet gap before listening again" at 2 s, the microphone reopened 8.1–8.2 s after an answer finished. Six of those seconds were not the setting: the delayed follow-up reused the echo filter's 6-second grace — the window in which a turn arriving after playback is still treated as possible echo — as its own wait for quiet.
 
-The follow-up now waits for its reply to finish playing, then a fixed **1-second settle**, then the configured quiet gap. With a 2 s gap that is about 3 s instead of 8 s; set the gap lower (minimum 0.5 s while the plugin reopens the microphone) for a quicker follow-up, higher if the satellite still hears the end of its own reply. The echo filter keeps its 6-second grace for classifying turns, so a real echo that slips in is still caught.
+The follow-up now waits for its reply to finish playing, then a fixed **1-second settle**, then the configured quiet gap. Measured with a 2 s gap: **4.0–4.6 s** after the answer ended (6.6 s after a long answer), down from 8.1–8.2 s. The rest is the spoken-length estimate (2.5 words/s + 1 s from generation), which still sets a minimum wait and runs slightly longer than real TTS. Set the gap lower (minimum 0.5 s while the plugin reopens the microphone) for a quicker follow-up, higher if the satellite still hears the end of its own reply. The echo filter keeps its 6-second grace for classifying turns, so a real echo that slips in is still caught.
 
 The satellite's own media player now also counts while waiting for quiet, so a satellite that speaks its own reply reopens after that playback ends rather than on the spoken-length estimate.
 
