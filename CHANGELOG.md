@@ -4,6 +4,12 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.52 — the integration shows its icon
+
+Home Assistant showed a blank placeholder for AI Plugin. The icon sat at `custom_components/ai_plugin/icon.png`, a path Home Assistant never reads. Since 2026.3 a custom integration supplies its icon from a `brand/` folder, so the icon now ships as `brand/icon.png` (256 px) and `brand/icon@2x.png` (512 px), redrawn at full resolution. The unused `icon.png` is removed.
+
+HACS 2.0.5 still loads thumbnails from the brands CDN, which no longer accepts custom integrations, so the HACS store card stays blank until HACS itself switches to Home Assistant's local brand images.
+
 ## v0.9.51 — "how much is left on the timer?" finds the timer
 
 Recorded on this install with timer announcements on: "Set a timer for 20 minutes" at 16:13:50, "How much is left of the timer?" at 16:14:46 answered that there were no timers, and the timer announced itself at 16:33:57. The model was reporting what it was told.
