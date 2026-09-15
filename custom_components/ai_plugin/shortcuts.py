@@ -652,6 +652,9 @@ _MEDIA_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# No word boundary on the left: German compounds ("Nudeltimer").
+_TIMER_MENTION_RE = re.compile(r"timer|wecker|countdown|stoppuhr|eieruhr", re.IGNORECASE)
+
 # German homographs of playback verbs: bare "halt" is usually a modal
 # particle ("das ist halt so") and bare "weiter" continues *speech* as
 # often as music ("erzähl weiter", "und so weiter"). Only trust them as
@@ -748,6 +751,12 @@ async def async_try_media_shortcut(
     # Questions fall through to the LLM — a trigger word inside a question
     # ("what does stop mean?") must not change playback with an empty reply.
     if _MEDIA_QUESTION_RE.search(msg):
+        return None
+
+    # "Resume the timer" / "Pause the timer" share the playback verbs and
+    # belong to the timer tools. Matched here, "resume the timer" sent
+    # media_play to every idle exposed speaker and never reached the timer.
+    if _TIMER_MENTION_RE.search(msg):
         return None
 
     detected = _detect_media_command(msg)

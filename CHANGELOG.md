@@ -4,6 +4,21 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.51 — "how much is left on the timer?" finds the timer
+
+Recorded on this install with timer announcements on: "Set a timer for 20 minutes" at 16:13:50, "How much is left of the timer?" at 16:14:46 answered that there were no timers, and the timer announced itself at 16:33:57. The model was reporting what it was told.
+
+Announce mode starts every timer with a `conversation_command`, so Home Assistant calls the plugin back at expiry. HA's timer intents treat such timers as delayed commands and skip them when looking a timer up (`_find_timer` / `_find_timers` in `intent/timers.py`), so `HassTimerStatus` returned an empty list and cancel, pause, resume, add and remove time could not find the timer either.
+
+`timer_status`, `cancel_timer`, `pause_timer`, `unpause_timer`, `increase_timer` and `decrease_timer` now work on HA's timer manager directly, by timer id. Only `start_timer` still goes through the intent. The status reply states the time left on each timer, its set duration and whether it is paused, and it works from the chat sidebar too, not only from a satellite. When a request could mean several timers, the calling satellite's own timer is preferred; if that still leaves more than one, nothing is changed and the model is asked to check with you. Delayed commands from other integrations stay excluded, as in HA.
+
+Also in this release:
+
+- **"Resume the timer." no longer reaches the media shortcut.** The shortcut runs before the model and matches "resume"; with any exposed speaker idle it would have sent `media_play` to it and returned an empty reply instead of resuming the timer. It now leaves any sentence that mentions a timer (timer, Wecker, Countdown, Stoppuhr, Eieruhr, including compounds such as "Nudeltimer") to the model.
+- **Timer names match without the word "timer".** "Nudel-Timer", "nudel timer" and "Nudel" name the same timer.
+
+Known gap: in voice mode the model does not yet pass a name for German compounds — "Stell einen Nudel-Timer auf 9 Minuten" starts an unnamed timer, so two unnamed timers can only be told apart by asking.
+
 ## v0.9.50 — the follow-up stops waiting for an estimate once it has heard the answer end
 
 v0.9.49 measured 4.0–4.6 s from answer end to reopen with a 2 s quiet gap, where 1 s settle + 2 s gap should give about 3 s. The remainder was the spoken-length estimate (2.5 words/s + 1 s, counted from generation): it still acted as a minimum wait even when the reply's playback had been seen start and stop, and real TTS finishes sooner than that estimate.
