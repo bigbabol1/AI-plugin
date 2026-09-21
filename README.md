@@ -16,7 +16,7 @@ A provider-agnostic AI orchestration layer for Home Assistant, built for **local
 - **Smart context management** — per-request token budgeting, sliding window, background summarization, cache-stable prompt layout for Ollama's prefix cache
 - **Long-term memory** — `remember` / `recall` / `forget` with per-user fact files, auto-injected so small models answer without a tool call
 - **MCP extensibility** — connect external MCP servers (HTTP and stdio), including HA's own MCP server for `HassTurnOn`-style intents
-- **6 languages** — en, de, fr, es, pt, pl; adding a language is a YAML PR (`i18n/CONTRIBUTING.md`)
+- **7 languages** — en, de, fr, es, pt, pl, nl; adding a language is a YAML PR (`i18n/CONTRIBUTING.md`). This covers what the plugin *says and understands* — shortcut keywords, spoken replies, error strings. The config and options dialogs are English only.
 - **Offline eval harness** — `tests/eval/` drives a live install end-to-end and scores replies, so changes get measured instead of vibed
 
 > **Tested only with Ollama.** The OpenAI-compatible endpoint should accept the other backends, but only Ollama (local) has been exercised end-to-end against the prompt suite below. Reports for OpenAI / xAI / LM Studio / llama.cpp setups welcome.
@@ -61,7 +61,7 @@ Avoid `granite4.1:8b` and `lfm2.5:8b` on non-English installs, and check `ollama
 
 Latency on a 7–9B model is won or lost in three places, and the plugin attacks all of them:
 
-1. **Skip the LLM when possible.** The deterministic shortcut layer answers clock time, sun times, "temperature in the bedroom", "turn on the mood light" (all 6 languages), "open the blinds", "pause", "volume up", "mute" in ~0.01–0.05 s by hitting HA registries and services directly. Misses and ambiguity fall through to the LLM — the shortcut never guesses.
+1. **Skip the LLM when possible.** The deterministic shortcut layer answers clock time, sun times, "temperature in the bedroom", "turn on the mood light" (all 7 languages), "open the blinds", "pause", "volume up", "mute" in ~0.01–0.05 s by hitting HA registries and services directly. Misses and ambiguity fall through to the LLM — the shortcut never guesses.
 2. **Reuse Ollama's prompt prefix cache.** The system prompt and tool list are byte-stable across turns; volatile context (`[CURRENT TIME]`, `[USER FACTS]`, `[LAST ACTION]`) rides in a late system message just before the newest user turn. Each request pre-fills only the new tail instead of the whole 3–6 K-token prompt. (Per-message tool-schema pruning defeats this cache and is therefore opt-in.)
 3. **Start speaking before generation finishes.** Replies stream sentence-by-sentence into HA's chat log; with a streaming-capable TTS engine the satellite starts speaking after the first sentence. Streaming is sentence-safe by design: every sentence passes the same sanitation as the final reply, the trailing sentence is held back, and streaming shuts off entirely on any turn where a grounding verifier might rewrite the reply or TTS suppression might blank it.
 

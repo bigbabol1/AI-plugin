@@ -4,6 +4,48 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.53 — Dutch, and the keys nobody read
+
+**Dutch (`nl`) is the seventh language.** Shortcut keywords, spoken replies and
+error strings now cover en, de, fr, es, pt, pl and nl. Two Dutch-specific
+choices are worth stating, because they will look like mistakes otherwise:
+
+- **Sensor readouts carry no article.** Dutch splits these labels over de-words
+  (*de temperatuur*) and het-words (*het vermogen*), so any fixed article in
+  `attr_state` would be wrong for about half of them. `"{label} is {val}{unit}."`
+  is correct for both genders and is how a value is read out loud anyway.
+- **The nine sensor labels are capitalized, the three sweep labels are not.**
+  Every template that uses a sensor label puts it first in the sentence; the
+  sweep labels sit mid-sentence ("alle lampen zijn uit").
+
+Device patterns cover both Dutch word orders — "doe de keukenlamp aan", "zet het
+licht aan", "sfeerlamp aan" — with separable verbs (aan/uit/af/open/dicht) and
+the bare `activeer` / `deactiveer` forms, each asserted by a test.
+
+**Three i18n keys are gone, in every language.** `templates.fallback_no_sensor`,
+`keywords.area_prefixes` and `patterns.sun_full` were specified in the 2026-05-05
+multilang design, shipped, and then read by no code path at all — six
+translations maintained for values that could never be spoken. A new test
+asserts each language's key set *equals* English's, in both directions; the
+loader only ever warned about keys a language was missing, which is how these
+survived.
+
+Also in this release:
+
+- **Lint runs in CI.** A `ruff check` job on pyflakes plus the E9 syntax rules,
+  narrow on purpose: undefined names, dead imports and unused locals, not style.
+  It found two real ones — `re` was used in `i18n/__init__.py` annotations
+  without being imported, and `BaseExceptionGroup` needed the target version
+  pinned — plus thirteen dead imports, all fixed here.
+- **The root `icon.png` is removed.** v0.9.52 moved the integration icon to
+  `brand/`; this 438 KB copy at the repository root was referenced by nothing.
+- **`docs/superpowers/` has a README** stating what those documents are: a
+  design archive, accurate when written, not maintained.
+
+Known gap, unchanged: `translations/` still holds English only, so the config
+and options dialogs are English in every install. The README no longer implies
+otherwise.
+
 ## v0.9.52 — the integration shows its icon
 
 Home Assistant showed a blank placeholder for AI Plugin. The icon sat at `custom_components/ai_plugin/icon.png`, a path Home Assistant never reads. Since 2026.3 a custom integration supplies its icon from a `brand/` folder, so the icon now ships as `brand/icon.png` (256 px) and `brand/icon@2x.png` (512 px), redrawn at full resolution. The unused `icon.png` is removed.
