@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-from custom_components.ai_plugin.orchestrator import _DeltaGate
+from custom_components.ai_plugin.orchestrator.delta_gate import _DeltaGate
 from custom_components.ai_plugin.providers import ChatResponse
 
 from .test_conversation import _baseline_orch, _make_mock_entry

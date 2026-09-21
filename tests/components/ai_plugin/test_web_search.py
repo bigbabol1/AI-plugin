@@ -624,7 +624,7 @@ async def test_location_provider_entity_priority_over_config(monkeypatch) -> Non
         )
 
     monkeypatch.setattr(
-        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        "custom_components.ai_plugin.orchestrator.location.reverse_geocode",
         fake_geo,
     )
 
@@ -659,7 +659,7 @@ async def test_location_provider_falls_back_to_config(monkeypatch) -> None:
         return GeocodeResult("Berlin", "Berlin", "Germany", "DE")
 
     monkeypatch.setattr(
-        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        "custom_components.ai_plugin.orchestrator.location.reverse_geocode",
         fake_geo,
     )
 
@@ -689,7 +689,7 @@ async def test_location_provider_geocode_failure_keeps_country(monkeypatch) -> N
         return None
 
     monkeypatch.setattr(
-        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        "custom_components.ai_plugin.orchestrator.location.reverse_geocode",
         fake_geo,
     )
 
@@ -745,7 +745,7 @@ async def test_location_provider_caches_result(monkeypatch) -> None:
         return GeocodeResult("Berlin", None, "Germany", "DE")
 
     monkeypatch.setattr(
-        "custom_components.ai_plugin.orchestrator.reverse_geocode",
+        "custom_components.ai_plugin.orchestrator.location.reverse_geocode",
         fake_geo,
     )
 

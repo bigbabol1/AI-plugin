@@ -79,10 +79,10 @@ async def test_sentinel_triggers_mic_to_mediaplayer_announce() -> None:
 
     sat = SimpleNamespace(entity_id="assist_satellite.wohnzimmer_sat")
     with patch(
-        "custom_components.ai_plugin.orchestrator.er.async_get",
+        "custom_components.ai_plugin.orchestrator.timers.er.async_get",
         return_value=MagicMock(),
     ), patch(
-        "custom_components.ai_plugin.orchestrator.er.async_entries_for_device",
+        "custom_components.ai_plugin.orchestrator.timers.er.async_entries_for_device",
         return_value=[sat],
     ):
         reply = await orch.async_process(
@@ -107,10 +107,10 @@ async def test_sentinel_falls_back_to_assist_satellite_announce() -> None:
 
     sat = SimpleNamespace(entity_id="assist_satellite.sat1")
     with patch(
-        "custom_components.ai_plugin.orchestrator.er.async_get",
+        "custom_components.ai_plugin.orchestrator.timers.er.async_get",
         return_value=MagicMock(),
     ), patch(
-        "custom_components.ai_plugin.orchestrator.er.async_entries_for_device",
+        "custom_components.ai_plugin.orchestrator.timers.er.async_entries_for_device",
         return_value=[sat],
     ):
         reply = await orch.async_process(

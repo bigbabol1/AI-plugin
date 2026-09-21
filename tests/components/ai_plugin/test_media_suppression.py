@@ -8,7 +8,7 @@ otherwise media QUESTIONS like "what's playing?" end in dead silence.
 
 from __future__ import annotations
 
-from custom_components.ai_plugin.orchestrator import _any_media_success
+from custom_components.ai_plugin.orchestrator.grounding import _any_media_success
 
 
 def _call_msg(name: str, call_id: str) -> dict:
@@ -101,7 +101,7 @@ def test_no_tool_msgs() -> None:
 
 
 def test_status_call_detected() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_media_status_call
+    from custom_components.ai_plugin.orchestrator.grounding import _any_media_status_call
 
     msgs = [
         {
@@ -124,7 +124,7 @@ def test_status_call_detected() -> None:
 
 
 def test_status_call_dict_args_detected() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_media_status_call
+    from custom_components.ai_plugin.orchestrator.grounding import _any_media_status_call
 
     msgs = [
         {
@@ -146,7 +146,7 @@ def test_status_call_dict_args_detected() -> None:
 
 
 def test_non_status_media_call_not_detected() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_media_status_call
+    from custom_components.ai_plugin.orchestrator.grounding import _any_media_status_call
 
     msgs = [
         {
@@ -168,7 +168,7 @@ def test_non_status_media_call_not_detected() -> None:
 
 
 def test_malformed_args_not_detected() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_media_status_call
+    from custom_components.ai_plugin.orchestrator.grounding import _any_media_status_call
 
     msgs = [
         {
@@ -190,7 +190,7 @@ def test_malformed_args_not_detected() -> None:
 
 
 def test_failed_intent_actuator_does_not_suppress() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+    from custom_components.ai_plugin.orchestrator.grounding import _any_actuator_success
 
     msgs = [
         _call_msg("HassTurnOn", "c1"),
@@ -200,7 +200,7 @@ def test_failed_intent_actuator_does_not_suppress() -> None:
 
 
 def test_successful_intent_actuator_suppresses() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+    from custom_components.ai_plugin.orchestrator.grounding import _any_actuator_success
 
     msgs = [
         _call_msg("HassTurnOn", "c1"),
@@ -210,7 +210,7 @@ def test_successful_intent_actuator_suppresses() -> None:
 
 
 def test_failed_set_area_state_does_not_suppress() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+    from custom_components.ai_plugin.orchestrator.grounding import _any_actuator_success
 
     msgs = [
         _call_msg("set_area_state", "c1"),
@@ -220,7 +220,7 @@ def test_failed_set_area_state_does_not_suppress() -> None:
 
 
 def test_successful_set_area_state_suppresses() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+    from custom_components.ai_plugin.orchestrator.grounding import _any_actuator_success
 
     msgs = [
         _call_msg("set_area_state", "c1"),
@@ -230,7 +230,7 @@ def test_successful_set_area_state_suppresses() -> None:
 
 
 def test_media_success_counts_as_actuator_success() -> None:
-    from custom_components.ai_plugin.orchestrator import _any_actuator_success
+    from custom_components.ai_plugin.orchestrator.grounding import _any_actuator_success
 
     msgs = [
         _call_msg("media_command", "c1"),
@@ -243,7 +243,7 @@ def test_media_success_counts_as_actuator_success() -> None:
 
 
 def test_readonly_schemas_drop_all_actuators() -> None:
-    from custom_components.ai_plugin.orchestrator import _readonly_schemas
+    from custom_components.ai_plugin.orchestrator.toolcalls import _readonly_schemas
 
     def schema(name):
         return {"type": "function", "function": {"name": name}}

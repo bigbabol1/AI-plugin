@@ -503,7 +503,7 @@ async def test_no_volatile_block_means_no_extra_message() -> None:
 
 
 def test_strip_emoji_removes_kaomoji() -> None:
-    from custom_components.ai_plugin.orchestrator import _strip_emoji
+    from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
 
     assert _strip_emoji("Sorry! (╯°□°）╯︵ ┻━┻") == "Sorry!"
     assert _strip_emoji("Nothing to cancel (・_・)") == "Nothing to cancel"
@@ -511,7 +511,7 @@ def test_strip_emoji_removes_kaomoji() -> None:
 
 
 def test_strip_emoji_preserves_degrees_and_parens() -> None:
-    from custom_components.ai_plugin.orchestrator import _strip_emoji
+    from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
 
     assert _strip_emoji("It is 21°C outside.") == "It is 21°C outside."
     assert _strip_emoji("Timer (eval) is running.") == "Timer (eval) is running."
