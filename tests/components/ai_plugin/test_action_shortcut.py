@@ -42,11 +42,11 @@ def _make_hass(entities, devices=None):
 
 @pytest.fixture
 def patched(monkeypatch):
-    """Patch shortcuts.er/dr registries + exposure gate (expose everything)."""
+    """Patch shortcuts.registry.er/dr registries + exposure gate (expose everything)."""
     def _start(hass, ent_reg, dev_reg):
-        monkeypatch.setattr(shortcuts.er, "async_get", lambda h: ent_reg)
-        monkeypatch.setattr(shortcuts.dr, "async_get", lambda h: dev_reg)
-        monkeypatch.setattr(shortcuts, "async_should_expose", lambda h, a, e: True)
+        monkeypatch.setattr(shortcuts.registry.er, "async_get", lambda h: ent_reg)
+        monkeypatch.setattr(shortcuts.registry.dr, "async_get", lambda h: dev_reg)
+        monkeypatch.setattr(shortcuts.registry, "async_should_expose", lambda h, a, e: True)
     return _start
 
 
@@ -161,9 +161,9 @@ async def test_caller_area_breaks_ambiguity(patched):
 async def test_unexposed_entity_not_actuated(monkeypatch):
     """An entity hidden from the conversation assistant must not be matched."""
     hass, ent_reg, dev_reg = _make_hass([TV()])
-    monkeypatch.setattr(shortcuts.er, "async_get", lambda h: ent_reg)
-    monkeypatch.setattr(shortcuts.dr, "async_get", lambda h: dev_reg)
-    monkeypatch.setattr(shortcuts, "async_should_expose", lambda h, a, e: False)
+    monkeypatch.setattr(shortcuts.registry.er, "async_get", lambda h: ent_reg)
+    monkeypatch.setattr(shortcuts.registry.dr, "async_get", lambda h: dev_reg)
+    monkeypatch.setattr(shortcuts.registry, "async_should_expose", lambda h, a, e: False)
     result = await async_try_action_shortcut(hass, "switch TV on", lang="en")
     assert result is None
     hass.services.async_call.assert_not_awaited()

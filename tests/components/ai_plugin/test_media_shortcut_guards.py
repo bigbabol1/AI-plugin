@@ -9,10 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.ai_plugin import shortcuts
-from custom_components.ai_plugin.shortcuts import (
-    _AREA_SUFFIX_RE,
-    async_try_media_shortcut,
-)
+from custom_components.ai_plugin.shortcuts import async_try_media_shortcut
+from custom_components.ai_plugin.shortcuts.registry import _AREA_SUFFIX_RE
 
 
 def _make_hass(states: dict[str, str], areas: dict[str, str] | None = None):
@@ -40,9 +38,9 @@ def patched(monkeypatch):
     def _start(hass, ent_reg, dev_reg, area_list=()):
         area_reg = MagicMock()
         area_reg.async_list_areas.return_value = list(area_list)
-        monkeypatch.setattr(shortcuts.er, "async_get", lambda h: ent_reg)
-        monkeypatch.setattr(shortcuts.dr, "async_get", lambda h: dev_reg)
-        monkeypatch.setattr(shortcuts.ar, "async_get", lambda h: area_reg)
+        monkeypatch.setattr(shortcuts.registry.er, "async_get", lambda h: ent_reg)
+        monkeypatch.setattr(shortcuts.registry.dr, "async_get", lambda h: dev_reg)
+        monkeypatch.setattr(shortcuts.registry.ar, "async_get", lambda h: area_reg)
     return _start
 
 
@@ -121,7 +119,7 @@ async def test_unexposed_player_not_targeted(patched, monkeypatch) -> None:
     with no exposed candidates the shortcut falls through to the LLM."""
     hass, e, d = _make_hass({"media_player.bedroom_tv": "playing"})
     patched(hass, e, d)
-    monkeypatch.setattr(shortcuts, "async_should_expose", lambda h, a, eid: False)
+    monkeypatch.setattr(shortcuts.registry, "async_should_expose", lambda h, a, eid: False)
     result = await async_try_media_shortcut(hass, "pause", lang="en")
     assert result is None
     hass.services.async_call.assert_not_awaited()

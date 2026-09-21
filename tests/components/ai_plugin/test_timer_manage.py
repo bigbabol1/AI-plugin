@@ -204,9 +204,9 @@ async def test_media_shortcut_leaves_timer_commands_alone(monkeypatch, text) -> 
     ent_reg.entities = {
         "media_player.kitchen": SimpleNamespace(area_id=None, device_id=None)
     }
-    monkeypatch.setattr(shortcuts.er, "async_get", lambda h: ent_reg)
-    monkeypatch.setattr(shortcuts.dr, "async_get", lambda h: MagicMock())
-    monkeypatch.setattr(shortcuts.ar, "async_get", lambda h: MagicMock())
+    monkeypatch.setattr(shortcuts.registry.er, "async_get", lambda h: ent_reg)
+    monkeypatch.setattr(shortcuts.registry.dr, "async_get", lambda h: MagicMock())
+    monkeypatch.setattr(shortcuts.registry.ar, "async_get", lambda h: MagicMock())
 
     assert await shortcuts.async_try_media_shortcut(hass, text, lang="en") is None
     hass.services.async_call.assert_not_awaited()

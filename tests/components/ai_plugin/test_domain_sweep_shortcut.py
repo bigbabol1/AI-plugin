@@ -67,12 +67,12 @@ def _make_hass(entities=None, areas=None, devices=None):
 @pytest.fixture
 def patched(monkeypatch):
     def _start(hass, ent_reg, dev_reg, area_reg):
-        monkeypatch.setattr(shortcuts.er, "async_get", lambda h: ent_reg)
-        monkeypatch.setattr(shortcuts.dr, "async_get", lambda h: dev_reg)
-        monkeypatch.setattr(shortcuts.ar, "async_get", lambda h: area_reg)
-        monkeypatch.setattr(shortcuts.er, "async_entries_for_device",
+        monkeypatch.setattr(shortcuts.registry.er, "async_get", lambda h: ent_reg)
+        monkeypatch.setattr(shortcuts.registry.dr, "async_get", lambda h: dev_reg)
+        monkeypatch.setattr(shortcuts.registry.ar, "async_get", lambda h: area_reg)
+        monkeypatch.setattr(shortcuts.registry.er, "async_entries_for_device",
                             lambda reg, did: [])
-        monkeypatch.setattr(shortcuts, "async_should_expose", lambda h, a, e: True)
+        monkeypatch.setattr(shortcuts.registry, "async_should_expose", lambda h, a, e: True)
     return _start
 
 
@@ -234,10 +234,10 @@ async def test_fall_through_cases(patched, msg, lang):
 @pytest.mark.asyncio
 async def test_unexposed_lights_are_never_swept(monkeypatch):
     hass, ent_reg, dev_reg, area_reg = _make_hass()
-    monkeypatch.setattr(shortcuts.er, "async_get", lambda h: ent_reg)
-    monkeypatch.setattr(shortcuts.dr, "async_get", lambda h: dev_reg)
-    monkeypatch.setattr(shortcuts.ar, "async_get", lambda h: area_reg)
-    monkeypatch.setattr(shortcuts, "async_should_expose", lambda h, a, e: False)
+    monkeypatch.setattr(shortcuts.registry.er, "async_get", lambda h: ent_reg)
+    monkeypatch.setattr(shortcuts.registry.dr, "async_get", lambda h: dev_reg)
+    monkeypatch.setattr(shortcuts.registry.ar, "async_get", lambda h: area_reg)
+    monkeypatch.setattr(shortcuts.registry, "async_should_expose", lambda h, a, e: False)
 
     result = await async_try_domain_sweep_shortcut(
         hass, "switch all lights off", lang="en"
