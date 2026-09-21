@@ -35,6 +35,16 @@ Largest remaining file is `orchestrator/core.py` at 954 lines, of which
 rather than moving it, so it waits for a change that can be argued on
 its own evidence.
 
+**`docs/superpowers/` is removed** — 5534 lines of April and May planning
+documents. The four plans carried 169 unchecked boxes and no checked
+ones: they were task lists for an agent workflow this repo uses nowhere
+else, and the work shipped without them being ticked. One plan and spec
+pair specified `PROMPT_HINTS_I18N` / `CONF_TRIGGER_LANGUAGES`, replaced
+two days later by the YAML i18n layer and since deleted — the only file
+naming them now is the test that covers migrating off them. The eval
+plan described a throwaway harness in `/tmp`, superseded by
+`tests/eval/`. Git history keeps all of it.
+
 ## v0.9.53 — Dutch, and the keys nobody read
 
 **Dutch (`nl`) is the seventh language.** Shortcut keywords, spoken replies and
