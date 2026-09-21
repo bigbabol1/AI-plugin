@@ -7,7 +7,7 @@ the exact→substring→caller-area tiebreak, and fall-through on miss/ambiguity
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

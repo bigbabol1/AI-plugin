@@ -10,7 +10,6 @@ from custom_components.ai_plugin.const import (
     CONF_BASE_URL,
     CONF_MODEL,
     CONF_PROVIDER,
-    DOMAIN,
     PROVIDER_OPENAI_COMPAT,
 )
 from custom_components.ai_plugin.exceptions import CannotConnect

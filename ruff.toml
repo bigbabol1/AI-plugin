@@ -1,0 +1,7 @@
+# Deliberately narrow: pyflakes (F) plus the syntax/runtime errors in E9.
+# Style rules are not enforced — this gate exists to catch undefined names,
+# dead imports and unused locals, not to reformat 11k lines.
+target-version = "py312"
+
+[lint]
+select = ["E9", "F"]

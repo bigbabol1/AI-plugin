@@ -16,7 +16,6 @@ from homeassistant.components.conversation import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import (
-    area_registry as ar,
     device_registry as dr,
     entity_registry as er,
     intent,

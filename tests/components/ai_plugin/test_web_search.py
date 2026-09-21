@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
-import pytest
 
 from custom_components.ai_plugin.const import (
     BACKEND_BRAVE,

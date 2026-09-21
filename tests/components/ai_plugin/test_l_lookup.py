@@ -1,9 +1,8 @@
 """Tests for the L façade — fallback policy and format substitution."""
 from __future__ import annotations
 
-import pytest
 
-from custom_components.ai_plugin.i18n import L, LOCALIZATIONS
+from custom_components.ai_plugin.i18n import L
 
 
 def test_label_returns_lang_value():

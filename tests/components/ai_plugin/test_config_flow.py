@@ -39,13 +39,11 @@ from custom_components.ai_plugin.const import (
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
-    DEFAULT_BASE_URL,
     DOMAIN,
     PROVIDER_OPENAI_COMPAT,
 )
 from custom_components.ai_plugin.exceptions import CannotConnect
 
-from .conftest import MOCK_MODELS
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -322,7 +320,6 @@ async def test_options_flow_advanced(hass: HomeAssistant, mock_setup_entry) -> N
 
 def _create_mock_entry(hass: HomeAssistant) -> config_entries.ConfigEntry:
     """Create and add a mock config entry to hass for options flow tests."""
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.util.ulid import ulid_now
 
     entry = config_entries.ConfigEntry(

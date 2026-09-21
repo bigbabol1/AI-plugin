@@ -7,6 +7,8 @@ the universal fallback for missing keys or unknown lang codes.
 """
 from __future__ import annotations
 
+import re
+
 from ._loader import LangData, load_all
 from ._schema import LocalizationError
 

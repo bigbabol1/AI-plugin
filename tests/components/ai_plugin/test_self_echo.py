@@ -416,7 +416,7 @@ async def test_wake_word_chime_does_not_trigger_the_rule(monkeypatch) -> None:
         monkeypatch, *_hass_with_speaker(speaker_is_caller=True)
     )
 
-    result = await _first_then(ent, " tremble down.", REPLY)
+    await _first_then(ent, " tremble down.", REPLY)
 
     assert ent._orchestrator.async_process.await_count == 1
 
