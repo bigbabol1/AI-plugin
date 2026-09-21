@@ -4,6 +4,37 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.54 — four files stop being four files
+
+No behaviour change in this release: same tools, same patterns, same
+replies, same 512 tests passing before and after. What changed is that
+the four largest files, 7106 lines between them, stopped holding
+unrelated things together.
+
+- **`shortcuts.py`** (1231) → a package with one module per family:
+  sensor readings, clock and sun, media transport, single-device on/off,
+  whole-area sweeps, and the echo-filter classifier. They shared a
+  registry walk and nothing else; that walk is now `registry.py`, and
+  the `async_should_expose` dance it wrapped — which existed in four
+  copies, two logging the failure and two silently passing — is one
+  function failing open, as all four did.
+- **`orchestrator.py`** (2192) → the turn logic in `core.py`, and the
+  judgements it calls on beside it: `grounding` (did the model act, or
+  only promise to?), `online` (does this need the web?), `toolcalls`,
+  `textproc`, `delta_gate`, `location`. The system-prompt blocks, timer
+  completions and last-action resolution move to mixins.
+- **`config_flow.py`** (1286) → `config_steps`, `options`, `mcp_steps`
+  (396 lines of add/edit/remove screens) and the shared `schemas`.
+- **`tools/ha_local.py`** (2397) → one module per tool family. Timers do
+  not touch lights and media does not touch discovery; they shared a
+  registry object and a response cap, which is now what `core.py` and
+  `formatting.py` hold.
+
+Largest remaining file is `orchestrator/core.py` at 954 lines, of which
+`async_process` is 555. Cutting that method apart changes control flow
+rather than moving it, so it waits for a change that can be argued on
+its own evidence.
+
 ## v0.9.53 — Dutch, and the keys nobody read
 
 **Dutch (`nl`) is the seventh language.** Shortcut keywords, spoken replies and
