@@ -25,7 +25,7 @@ async def test_start_timer_plants_conversation_command() -> None:
         return resp
 
     with patch(
-        "custom_components.ai_plugin.tools.ha_local.intent.async_handle",
+        "custom_components.ai_plugin.tools.ha_local.timers.intent.async_handle",
         side_effect=fake_handle,
     ):
         out = await reg.call_tool(
@@ -57,7 +57,7 @@ async def test_start_timer_without_announce_keeps_device_ring() -> None:
         return resp
 
     with patch(
-        "custom_components.ai_plugin.tools.ha_local.intent.async_handle",
+        "custom_components.ai_plugin.tools.ha_local.timers.intent.async_handle",
         side_effect=fake_handle,
     ):
         await reg.call_tool(

@@ -71,7 +71,7 @@ def patched_registries():
             ("dr.async_get", dev_reg),
         ):
             p = patch(
-                f"custom_components.ai_plugin.tools.ha_local.{target}",
+                f"custom_components.ai_plugin.tools.ha_local.lights.{target}",
                 return_value=val,
             )
             p.start()

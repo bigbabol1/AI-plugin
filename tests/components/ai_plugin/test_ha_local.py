@@ -93,15 +93,15 @@ def patched_registries():
 
     def _apply(hass, area_reg, ent_reg, dev_reg):
         p1 = patch(
-            "custom_components.ai_plugin.tools.ha_local.ar.async_get",
+            "custom_components.ai_plugin.tools.ha_local.entities.ar.async_get",
             return_value=area_reg,
         )
         p2 = patch(
-            "custom_components.ai_plugin.tools.ha_local.er.async_get",
+            "custom_components.ai_plugin.tools.ha_local.entities.er.async_get",
             return_value=ent_reg,
         )
         p3 = patch(
-            "custom_components.ai_plugin.tools.ha_local.dr.async_get",
+            "custom_components.ai_plugin.tools.ha_local.entities.dr.async_get",
             return_value=dev_reg,
         )
         p1.start()
@@ -600,7 +600,7 @@ async def test_media_command_unknown_lists_status(patched_registries) -> None:
 
 
 def test_duration_single_phrase_parsed() -> None:
-    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+    from custom_components.ai_plugin.tools.ha_local.timers import _parse_utterance_duration
 
     assert _parse_utterance_duration("set a timer for 10 minutes") == {"minutes": 10}
     assert _parse_utterance_duration("10 seconds") == {"seconds": 10}
@@ -608,7 +608,7 @@ def test_duration_single_phrase_parsed() -> None:
 
 
 def test_duration_compound_phrase_summed() -> None:
-    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+    from custom_components.ai_plugin.tools.ha_local.timers import _parse_utterance_duration
 
     assert _parse_utterance_duration("set a timer for 1 minute 30 seconds") == {
         "minutes": 1,
@@ -623,7 +623,7 @@ def test_duration_compound_phrase_summed() -> None:
 def test_duration_two_separate_phrases_ambiguous() -> None:
     """Numbers belonging to different things (delta vs. the timer's NAME)
     must never be combined — ambiguity keeps the model's slots."""
-    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+    from custom_components.ai_plugin.tools.ha_local.timers import _parse_utterance_duration
 
     assert _parse_utterance_duration("add 5 minutes to the 10 minute timer") is None
     assert (
@@ -633,7 +633,7 @@ def test_duration_two_separate_phrases_ambiguous() -> None:
 
 
 def test_duration_no_numbers() -> None:
-    from custom_components.ai_plugin.tools.ha_local import _parse_utterance_duration
+    from custom_components.ai_plugin.tools.ha_local.timers import _parse_utterance_duration
 
     assert _parse_utterance_duration("set an egg timer") is None
 
@@ -642,7 +642,7 @@ def test_duration_no_numbers() -> None:
 
 
 def test_user_said_all_accepts_everything_and_alles() -> None:
-    from custom_components.ai_plugin.tools.ha_local import _USER_SAID_ALL_RE
+    from custom_components.ai_plugin.tools.ha_local.lights import _USER_SAID_ALL_RE
 
     for phrase in (
         "turn everything off",
@@ -655,7 +655,7 @@ def test_user_said_all_accepts_everything_and_alles() -> None:
 
 
 def test_user_said_all_still_rejects_specific() -> None:
-    from custom_components.ai_plugin.tools.ha_local import _USER_SAID_ALL_RE
+    from custom_components.ai_plugin.tools.ha_local.lights import _USER_SAID_ALL_RE
 
     for phrase in ("turn off the kitchen light", "mach das licht im bad aus"):
         assert not _USER_SAID_ALL_RE.search(phrase), phrase
@@ -751,7 +751,7 @@ async def test_get_entity_exposed_match_beats_unexposed_shadow(
 ) -> None:
     """An unexposed diagnostic entity matching first must not shadow the
     exposed entity with the same name fragment."""
-    import custom_components.ai_plugin.tools.ha_local as hl
+    import custom_components.ai_plugin.tools.ha_local.exposure as hl
 
     entities = [
         _entity("sensor.chip_temperature", name="chip temperature"),
@@ -778,7 +778,7 @@ async def test_get_entity_exposed_match_beats_unexposed_shadow(
 async def test_get_entity_only_unexposed_match_reports_it(
     patched_registries, monkeypatch
 ) -> None:
-    import custom_components.ai_plugin.tools.ha_local as hl
+    import custom_components.ai_plugin.tools.ha_local.exposure as hl
 
     entities = [_entity("sensor.chip_temperature", name="chip temperature")]
     hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)

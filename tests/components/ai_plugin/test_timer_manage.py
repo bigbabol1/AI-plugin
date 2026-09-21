@@ -74,7 +74,7 @@ def _reg(manager: FakeManager) -> HALocalToolRegistry:
 
 async def _call(reg, tool, args=None, device_id="dev1", msg=""):
     with patch(
-        "custom_components.ai_plugin.tools.ha_local.intent.async_handle",
+        "custom_components.ai_plugin.tools.ha_local.timers.intent.async_handle",
     ) as handle:
         out = await reg.call_tool(
             tool, args or {}, device_id=device_id, language="en", user_message=msg
