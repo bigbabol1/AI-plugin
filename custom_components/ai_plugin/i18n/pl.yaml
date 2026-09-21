@@ -25,7 +25,6 @@ templates:
   sun_rise_at:       "Słońce wschodzi o {time}."
   sun_is_up:         "Słońce jest w górze. Zachód o {time}."
   sun_is_down:       "Słońce jest pod horyzontem. Wschód o {time}."
-  fallback_no_sensor: "Nie mam czujnika {label} w {area}."
   err_no_answer:     "Nie udało mi się znaleźć odpowiedzi. Spróbuj przeformułować."
   err_process:       "Przepraszam, nie mogłem tego przetworzyć."
   err_action_failed: "Nie udało mi się tego wykonać. Podaj urządzenie lub pomieszczenie."
@@ -43,11 +42,9 @@ keywords:
   sun_dark:      ["jest ciemno", "jest jasno"]
   sun_is_up:     ["czy słońce jest"]
   narration:     ["sprawdzam", "szukam", "patrzę", "zaraz sprawdzę", "zaraz poszukam"]
-  area_prefixes: ["w", "na"]
 
 patterns:
   narration_full: []
-  sun_full:       []
   action_on:
     - '^(?:włącz|wlacz|włączyć|wlaczyc|uruchom)\s+(?P<name>.+?)$'
   action_off:

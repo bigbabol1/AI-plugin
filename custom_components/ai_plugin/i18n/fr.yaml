@@ -25,7 +25,6 @@ templates:
   sun_rise_at:       "Le soleil se lève à {time}."
   sun_is_up:         "Le soleil est levé. Coucher du soleil à {time}."
   sun_is_down:       "Le soleil est couché. Lever du soleil à {time}."
-  fallback_no_sensor: "Je n'ai pas de capteur de {label} dans {area}."
   err_no_answer:     "Je n'ai pas pu produire de réponse. Essayez de reformuler."
   err_process:       "Désolé, je n'ai pas pu traiter cela."
   err_action_failed: "Je n'ai pas pu exécuter cela. Précisez l'appareil ou la pièce."
@@ -43,11 +42,9 @@ keywords:
   sun_dark:      ["fait-il nuit", "fait-il jour"]
   sun_is_up:     ["le soleil est-il levé"]
   narration:     ["je vérifie", "je cherche", "je regarde", "je consulte", "je recherche", "je vais vérifier", "je vais chercher", "je vais regarder"]
-  area_prefixes: ["dans la", "dans le", "dans l'", "en"]
 
 patterns:
   narration_full: []
-  sun_full:       []
   action_on:
     - '^(?:allume|allumer|allumez|active|activer)\s+(?:le|la|les|l''|l’|un|une)?\s*(?P<name>.+?)$'
   action_off:

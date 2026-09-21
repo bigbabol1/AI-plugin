@@ -25,7 +25,6 @@ templates:
   sun_rise_at:       "Sonnenaufgang ist um {time}."
   sun_is_up:         "Die Sonne ist oben. Sonnenuntergang ist um {time}."
   sun_is_down:       "Die Sonne ist unten. Sonnenaufgang ist um {time}."
-  fallback_no_sensor: "Ich habe keinen {label}-Sensor in {area}."
   err_no_answer:     "Darauf habe ich gerade keine Antwort. Bitte formuliere es anders."
   err_process:       "Entschuldigung, das konnte ich nicht verarbeiten."
   err_action_failed: "Das konnte ich nicht ausführen. Nenne bitte das Gerät oder den Raum."
@@ -43,11 +42,9 @@ keywords:
   sun_dark:      ["ist es dunkel", "ist es hell"]
   sun_is_up:     ["ist die sonne oben", "ist die sonne auf"]
   narration:     ["ich prüfe", "ich überprüfe", "ich checke", "ich suche nach", "ich schaue", "ich sehe nach", "ich frage"]
-  area_prefixes: ["im", "in der", "in dem", "in"]
 
 patterns:
   narration_full: []
-  sun_full:       []
   action_on:
     - '^(?:schalte|mach|stell|stelle|dreh|drehe)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+(?:ein|an)$'
     - '^(?P<name>.+?)\s+(?:ein|an)$'
