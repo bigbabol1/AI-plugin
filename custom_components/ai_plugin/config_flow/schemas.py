@@ -45,7 +45,6 @@ from ..const import (
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_CONTEXT_WINDOW,
-    DEFAULT_CONTINUE_CONVERSATION,
     DEFAULT_FOLLOW_UP_DELAY,
     DEFAULT_ENABLE_THINKING,
     DEFAULT_LOCATION_BIAS,
@@ -60,6 +59,10 @@ from ..const import (
     DEFAULT_VOICE_MODE,
     DEFAULT_WEB_SEARCH_BACKEND,
     CUSTOM_PROMPT_TEMPLATE,
+    FOLLOW_UP_ALWAYS,
+    FOLLOW_UP_AUTO,
+    FOLLOW_UP_NEVER,
+    follow_up_mode,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -183,8 +186,17 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_CONTINUE_CONVERSATION,
-                default=current.get(CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION),
-            ): selector.BooleanSelector(),
+                default=follow_up_mode(current),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": FOLLOW_UP_ALWAYS, "label": "Always"},
+                        {"value": FOLLOW_UP_AUTO, "label": "Let the AI decide (when it asks a question)"},
+                        {"value": FOLLOW_UP_NEVER, "label": "Never"},
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Optional(
                 CONF_FOLLOW_UP_DELAY,
                 default=current.get(CONF_FOLLOW_UP_DELAY, DEFAULT_FOLLOW_UP_DELAY),

@@ -63,6 +63,40 @@ ECHO_MATCH_THRESHOLD = 0.7
 CONF_SUMMARIZATION_ENABLED = "summarization_enabled"
 CONF_VOICE_MODE = "voice_mode"
 CONF_CONTINUE_CONVERSATION = "continue_conversation"
+# 'Listen for follow-up' modes. Stored under CONF_CONTINUE_CONVERSATION,
+# which held a bool until v0.9.55 — follow_up_mode() maps old installs
+# (True -> always, False -> never) so nobody's setting changes on upgrade.
+#   always: reopen the microphone after every spoken reply.
+#   never:  every voice turn ends after the reply.
+#   auto:   the model decides. A reply ending in a question keeps the
+#           microphone open, a statement ends the turn — the same signal
+#           HA's own LLM agents use (ChatLog.continue_conversation).
+FOLLOW_UP_ALWAYS = "always"
+FOLLOW_UP_NEVER = "never"
+FOLLOW_UP_AUTO = "auto"
+FOLLOW_UP_MODES = (FOLLOW_UP_ALWAYS, FOLLOW_UP_AUTO, FOLLOW_UP_NEVER)
+# Sentence-final question marks. Matches HA core's list: '?', the Greek
+# question mark (';') and the full-width CJK one.
+QUESTION_ENDINGS = ("?", ";", "？")
+# Closing quotes/brackets a model may put after the question mark.
+_TRAILING_CLOSERS = " \t\n\"'”’»)]"
+
+
+def follow_up_mode(options) -> str:
+    """Return the follow-up mode for an entry's options, legacy bools included."""
+    value = options.get(CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION)
+    if value is True:
+        return FOLLOW_UP_ALWAYS
+    if value is False:
+        return FOLLOW_UP_NEVER
+    return value if value in FOLLOW_UP_MODES else DEFAULT_CONTINUE_CONVERSATION
+
+
+def ends_with_question(text: str | None) -> bool:
+    """True when the reply's last sentence is a question."""
+    return bool(text) and text.rstrip(_TRAILING_CLOSERS).endswith(QUESTION_ENDINGS)
+
+
 # Seconds of quiet to insert between a spoken reply and the microphone
 # reopening for a follow-up. 0 = let the satellite reopen it itself
 # (unchanged behaviour). Above 0, the plugin ends the turn instead and
@@ -124,7 +158,7 @@ DEFAULT_RESPONSE_TIMEOUT = 30
 DEFAULT_WEB_SEARCH_BACKEND = BACKEND_DUCKDUCKGO
 DEFAULT_SUMMARIZATION_ENABLED = True
 DEFAULT_VOICE_MODE = False
-DEFAULT_CONTINUE_CONVERSATION = True
+DEFAULT_CONTINUE_CONVERSATION = "always"
 DEFAULT_FOLLOW_UP_DELAY = 0.0
 DEFAULT_LOCATION_BIAS = True
 DEFAULT_ENABLE_THINKING = False
@@ -304,6 +338,20 @@ SYSTEM_PROMPT_DEFAULT = (
     "- After play_music or a playback-CHANGING media_command: the playback change IS the confirmation. Reply with an empty string so the satellite does not speak over the speaker.\n"
     "- DO still speak when the user asks a media QUESTION (what is playing → media_command(command='status'), who sings this, list playlists) or when the tool result starts with '[' (an error message).\n"
     "- Volume and mute still confirm in one short sentence."
+)
+
+# Appended to the voice prompt when 'Listen for follow-up' is "auto": the
+# trailing question mark IS the model's decision to keep the microphone
+# open, so it must only ask when it needs an answer. Without this rule small
+# models tack "Anything else?" onto every reply and auto becomes always.
+FOLLOW_UP_AUTO_RULE = (
+    "Follow-up listening:\n"
+    "- The microphone reopens ONLY when your reply ends with a question mark.\n"
+    "- End with a question only when you need an answer to continue: a "
+    "missing detail, a choice between options, or a confirmation before "
+    "acting.\n"
+    "- Otherwise end with a statement. Never close with filler questions "
+    "like \"Anything else?\" or \"Can I help with something else?\"."
 )
 
 # Pre-filled template for the user's CUSTOM system prompt (appended to base).

@@ -25,17 +25,19 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util, ulid as ulid_util
 
 from .const import (
-    CONF_CONTINUE_CONVERSATION,
     CONF_FEEDBACK_LOOP_DEVICES,
     CONF_FOLLOW_UP_DELAY,
     CONF_SELF_ECHO_FILTER,
     CONVERSATION_CLOSE_PHRASES,
-    DEFAULT_CONTINUE_CONVERSATION,
     DEFAULT_FOLLOW_UP_DELAY,
     DEFAULT_SELF_ECHO_FILTER,
     DOMAIN,
     ECHO_MATCH_THRESHOLD,
     ECHO_MIN_TOKENS,
+    FOLLOW_UP_ALWAYS,
+    FOLLOW_UP_AUTO,
+    ends_with_question,
+    follow_up_mode,
 )
 from .exceptions import OrchestratorError
 from .i18n import L
@@ -808,9 +810,18 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(reply)
-        continue_conversation = self._entry.options.get(
-            CONF_CONTINUE_CONVERSATION, DEFAULT_CONTINUE_CONVERSATION
-        )
+        mode = follow_up_mode(self._entry.options)
+        if mode == FOLLOW_UP_AUTO:
+            # The model decides: a question keeps the microphone open, a
+            # statement ends the turn. Every guard below still overrides.
+            continue_conversation = ends_with_question(reply)
+            _LOGGER.debug(
+                "AI Plugin: follow-up auto — reply %s a question, %s",
+                "ends with" if continue_conversation else "does not end with",
+                "listening again" if continue_conversation else "ending the turn",
+            )
+        else:
+            continue_conversation = mode == FOLLOW_UP_ALWAYS
         # Satellites whose TTS is routed to a separate speaker (e.g. via
         # Mic to MediaPlayer) create an acoustic feedback loop: the mic
         # re-hears the spoken reply and re-recognises it as a new turn.

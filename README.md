@@ -1,103 +1,202 @@
-# AI Plugin for Home Assistant
+<p align="center">
+  <img src="https://raw.githubusercontent.com/bigbabol1/AI-plugin/main/custom_components/ai_plugin/brand/icon@2x.png" alt="AI Plugin" width="128" height="128">
+</p>
 
-A provider-agnostic AI orchestration layer for Home Assistant, built for **local LLMs on modest hardware**. Use any OpenAI-compatible backend — Ollama, llama.cpp, LM Studio, OpenAI, xAI — as your Assist conversation agent, with streaming voice replies, deterministic shortcuts, web search, voice timers, MCP tool extensibility, and an AI Task entity for automations.
+<h1 align="center">AI Plugin for Home Assistant</h1>
 
-## Features
+<p align="center">
+  <b>A voice-first conversation agent for Home Assistant, built to run well on local LLMs and modest hardware.</b>
+</p>
 
-- **Any LLM backend** — Ollama (first-class, native `/api/chat`), llama.cpp, LM Studio, OpenAI, xAI Grok, any OpenAI-compatible endpoint
-- **Streaming replies** — sentence-safe deltas into HA's chat log; voice pipelines with streaming TTS start speaking after the first sentence instead of after full generation (Ollama backend)
-- **Deterministic shortcut layer** — common voice commands bypass the LLM entirely (~0.01–0.05 s instead of seconds): clock time, sunrise/sunset, room sensor readings, single-device on/off, cover open/close, media transport, volume/mute — all data-driven per language
-- **On-demand entity discovery** — `list_areas` / `list_entities` / `get_entity` / `search_entities` hit HA registries in-process; no YAML entity dump bloating the prompt
-- **Grounding verifiers** — state questions, action commands, and time-sensitive questions are checked against actual tool usage; a model that answered from imagination gets one corrective re-run
-- **Voice timers** — first-class start/cancel/pause/extend with deterministic duration parsing, plus an optional **announce mode** that plays timer completions through a media player instead of the satellite's own ring (works on satellites without timer firmware)
-- **AI Tasks** — the same backend serves `ai_task.generate_data` for automations and scripts: plain text or structured JSON
-- **Web search** — DuckDuckGo (zero config, default), Brave, Tavily, SearXNG; plus `browse_url` for reading a specific page
-- **Model introspection** — the config flow warns when a model can't call tools or when the context window exceeds what the model supports (Ollama)
-- **Smart context management** — per-request token budgeting, sliding window, background summarization, cache-stable prompt layout for Ollama's prefix cache
-- **Long-term memory** — `remember` / `recall` / `forget` with per-user fact files, auto-injected so small models answer without a tool call
-- **MCP extensibility** — connect external MCP servers (HTTP and stdio), including HA's own MCP server for `HassTurnOn`-style intents
-- **7 languages** — en, de, fr, es, pt, pl, nl; adding a language is a YAML PR (`i18n/CONTRIBUTING.md`). This covers what the plugin *says and understands* — shortcut keywords, spoken replies, error strings. The config and options dialogs are English only.
-- **Offline eval harness** — `tests/eval/` drives a live install end-to-end and scores replies, so changes get measured instead of vibed
+<p align="center">
+  <a href="https://github.com/bigbabol1/AI-plugin/releases/latest"><img src="https://img.shields.io/github/v/release/bigbabol1/AI-plugin?style=flat-square&label=release" alt="Latest release"></a>
+  <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-custom-41BDF5?style=flat-square" alt="HACS custom repository"></a>
+  <img src="https://img.shields.io/badge/Home%20Assistant-2025.7%2B-18BCF2?style=flat-square&logo=home-assistant&logoColor=white" alt="Home Assistant 2025.7 or newer">
+  <a href="https://github.com/bigbabol1/AI-plugin/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/bigbabol1/AI-plugin/test.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/bigbabol1/AI-plugin?style=flat-square" alt="License"></a>
+</p>
 
-> **Tested only with Ollama.** The OpenAI-compatible endpoint should accept the other backends, but only Ollama (local) has been exercised end-to-end against the prompt suite below. Reports for OpenAI / xAI / LM Studio / llama.cpp setups welcome.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#choosing-a-model">Choosing a model</a> ·
+  <a href="#features-in-depth">Features</a> ·
+  <a href="#configuration-reference">Configuration</a> ·
+  <a href="#troubleshooting">Troubleshooting</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-## Recommended Models
+---
 
-The most critical factor for reliable entity control is **tool-calling quality**: models that hedge or ask clarifying questions instead of executing are a poor fit regardless of benchmark scores. On Ollama the config flow rejects models that report no `tools` capability.
+AI Plugin makes any OpenAI-compatible model the **Assist conversation agent** for your home. That includes Ollama, llama.cpp, LM Studio, OpenAI and xAI. It handles device control, sensor questions, timers, web search and memory, by voice or in text.
 
-### What was tested (8 GB VRAM — RTX 3060 Ti, Ollama)
+It is designed around a constraint most agents ignore: **a 7–12B model on an 8 GB GPU**. Common commands skip the LLM entirely. The prompt is kept stable so Ollama can reuse its cache. Replies start speaking after the first sentence. When a model claims it did something it never did, the plugin catches it.
 
-- **Voice suite (July 2026)** — 29 read-only prompts through HA Assist in voice mode. `qwen3.5:9b` scored 93 % and its only misses were honest; `qwen3:8b` and `qwen3-abliterated:8b` reached 86–90 % but fabricated answers; `mistral:7b` 86 %; `gemma4:e2b` 69 %. Cloud `qwen3.5:397b` (100 %) served as the ceiling.
-- **Adversarial tool calling (August 2026)** — 10 German edge cases × 3 runs. `gemma-4-12B UD-Q3_K_XL` scored 100 % with exact area names, `qwen3.5:9b` 70 %. `granite4.1:8b` and `lfm2.5:8b` corrupted or translated non-English room names. Larger Gemma 4 12B quants (IQ4_XS, Q4_K_M) spill onto the CPU at a 16 K context.
-- **Multi-turn conversations (August 2026)** — 11 German turns × 2 passes on `gemma-4-12B UD-Q3_K_XL`, actions verified in HA's state history. Ambiguous names, ellipsis, pronouns, two devices in one turn, self-correction and area references all passed; median turn 4.5 s. `top_p`, temperature (0.3–1.0), a 32 K window and schema pruning changed nothing; raising Max Tokens to 1024 only made failing turns slower.
-- **LFM2.5 QAD checkpoints (August 2026)** — very fast, but they did not converge in the plugin's multi-step tool loop.
+## Highlights
 
-### Conclusion
+**🎙️ Built for voice**
+- Streaming replies: voice pipelines with streaming TTS start talking after the first sentence.
+- Follow-up listening: always, never, or **let the model decide** by asking a question.
+- Self-echo filtering for satellites whose replies play on a separate speaker.
+- First-class voice timers, with an optional announce mode for any speaker.
 
-For **8 GB VRAM** the recommended models are:
+**⚡ Fast on local hardware**
+- A deterministic shortcut layer answers common commands in **~0.01–0.05 s** without calling the LLM.
+- A cache-stable prompt layout reuses Ollama's prefix cache on every turn.
+- On-demand entity discovery tools instead of a YAML entity dump in the prompt.
+- Summarization runs in the background, never on the turn that hits the limit.
 
-- **`hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL`** — highest accuracy and exact non-English area names; the only 12B quant that stays fully in VRAM at 16 K. About 3.6 s median on everyday commands.
-- **`qwen3.5:9b`** — faster (about 2.9 s), honest when it lacks data, and validated against the voice suite.
+**🛡️ Grounded, not imagined**
+- State questions, actions and time-sensitive questions are checked against the tools the model actually called. A reply made up from nothing gets one corrective re-run.
+- Promised actions without a tool call are replaced with an honest failure notice.
+- The config flow rejects models that cannot call tools, and warns when the context window is larger than the model supports.
+
+**🧩 Extensible**
+- Web search via DuckDuckGo (zero config), Brave, Tavily or SearXNG, plus `browse_url` for reading one page.
+- MCP servers over HTTP and stdio, including Home Assistant's own MCP server.
+- An `ai_task` entity so automations can use the same model.
+- Per-user long-term memory (`remember` / `recall` / `forget`).
+- **7 languages**: English, German, French, Spanish, Portuguese, Polish and Dutch. A new language is a single YAML file.
+
+> [!NOTE]
+> **Tested end-to-end with Ollama.** The OpenAI-compatible endpoint should work with the other backends, but only Ollama has been run against the prompt suites below. Reports from OpenAI, xAI, LM Studio or llama.cpp setups are welcome.
+
+## Quick start
+
+### Requirements
+
+- Home Assistant **2025.7.0** or newer
+- [HACS](https://hacs.xyz/docs/use/)
+- A reachable LLM endpoint:
+
+| Backend | Provider URL | API key |
+|---------|--------------|---------|
+| [Ollama](https://ollama.com) *(recommended)* | `http://<host>:11434/v1` | — |
+| LM Studio | `http://<host>:1234/v1` | — |
+| llama.cpp server | `http://<host>:8080/v1` | — |
+| OpenAI | `https://api.openai.com/v1` | required |
+| xAI Grok | `https://api.x.ai/v1` | required |
+
+### Install
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=bigbabol1&repository=AI-plugin&category=integration)
+
+1. In **HACS → ⋮ → Custom repositories**, add `https://github.com/bigbabol1/AI-plugin` with category **Integration**. You can also use the button above.
+2. Install **AI Plugin**, then **restart Home Assistant**.
+3. Add the integration:
+
+   [![Open your Home Assistant instance and start setting up AI Plugin.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=ai_plugin)
+
+4. Go to **Settings → Voice assistants**, open your assistant and set **Conversation agent** to *AI Plugin*.
+
+Every setting can be changed later under **Settings → Devices & services → AI Plugin → Configure**.
+
+## Choosing a model
+
+**Tool-calling quality matters more than any benchmark score.** A model that hedges or asks clarifying questions instead of acting is a poor fit for a home agent, however well it scores elsewhere.
+
+### Recommended for 8 GB of VRAM
+
+| Model | Why | Median turn |
+|-------|-----|-------------|
+| **`hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL`** | Highest accuracy. Keeps non-English area names exact. The only 12B quant that stays fully in VRAM at a 16K context. | ~3.6 s |
+| **`qwen3.5:9b`** | Faster, says so when it lacks data, validated against the voice suite | ~2.9 s |
 
 ```bash
 ollama pull hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL
 ```
 
-Avoid `granite4.1:8b` and `lfm2.5:8b` on non-English installs, and check `ollama ps` at your real context window — a few percent on the CPU costs multiples in latency.
+Avoid `granite4.1:8b` and `lfm2.5:8b` on non-English installs. Check `ollama ps` at your real context window: even a few percent of the model on the CPU multiplies latency.
 
-### Recommended configuration
+<details>
+<summary><b>Benchmark details</b> (RTX 3060 Ti 8 GB, Ollama)</summary>
+
+<br>
+
+Pass counts alone hide *how* a model fails, so these notes separate honest misses from confident fabrications. In a home agent, that difference matters most.
+
+- **Voice suite (July 2026, plugin v0.9.35).** 29 read-only prompts through HA Assist in voice mode, covering clock and sun, room sensors, "which lights are on", inventory, climate, local and named-place weather, web search, bare-noun sanity checks and media.
+  - `qwen3.5:9b` scored 93 %, and every miss was an honest one.
+  - `qwen3:8b` and `qwen3-abliterated:8b` reached 86–90 % but fabricated answers.
+  - `mistral:7b` scored 86 % and `gemma4:e2b` 69 %.
+  - Cloud `qwen3.5:397b` (100 %) served as the ceiling.
+- **Adversarial tool calling (August 2026).** 10 German edge cases × 3 runs.
+  - `gemma-4-12B UD-Q3_K_XL` scored 100 % with exact area names; `qwen3.5:9b` scored 70 %.
+  - `granite4.1:8b` and `lfm2.5:8b` corrupted or translated non-English room names.
+  - Larger Gemma 4 12B quants (IQ4_XS, Q4_K_M) spill onto the CPU at a 16K context.
+- **Multi-turn conversations (August 2026).** 11 German turns × 2 passes on `gemma-4-12B UD-Q3_K_XL`, with every action verified in HA's state history.
+  - Ambiguous names, ellipsis, pronouns, two devices in one turn, self-correction and area references all passed. Median turn: 4.5 s.
+  - Changing `top_p` or temperature (0.3–1.0), using a 32K window, or enabling schema pruning changed nothing. Raising Max Tokens to 1024 only made failing turns slower.
+- **LFM2.5 QAD checkpoints (August 2026).** Very fast, but they did not converge in the plugin's multi-step tool loop.
+
+</details>
+
+### Recommended settings
 
 | Setting | Value |
 |---------|-------|
 | Model | `hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q3_K_XL` or `qwen3.5:9b` |
-| Temperature | `1.0` for gemma-4-12B (0.3–1.0 made no difference to the actions taken); `qwen3.5:9b` was benchmarked at 0.2 |
-| top_p | 0.4 |
-| Context Window | **16384** — minimum; stay under ~24 000 on 8 GB with the default KV cache (32 K fits with `OLLAMA_KV_CACHE_TYPE=q8_0`) |
-| Max Tokens (`num_predict`) | 512 — raising it makes failing turns slower, not better |
-| Keep-alive | `30m` (`-1` on a dedicated GPU) |
-| Web Search | DuckDuckGo (default) or Tavily/Brave with a key |
+| Temperature | `1.0` for gemma-4-12B (0.3–1.0 made no difference to the actions taken). `qwen3.5:9b` was benchmarked at 0.2. |
+| top_p | `0.4` |
+| Context Window | **`16384`** minimum. Stay under ~24 000 on 8 GB with the default KV cache; 32K fits with `OLLAMA_KV_CACHE_TYPE=q8_0`. |
+| Max Tokens (`num_predict`) | `512`. Raising it makes failing turns slower, not better. |
+| Keep-alive | `30m`, or `-1` on a dedicated GPU |
+| Web Search | DuckDuckGo (default), or Tavily/Brave with a key |
 
-## How it stays fast on local models
+## Features in depth
 
-Latency on a 7–9B model is won or lost in three places, and the plugin attacks all of them:
+### Follow-up listening
 
-1. **Skip the LLM when possible.** The deterministic shortcut layer answers clock time, sun times, "temperature in the bedroom", "turn on the mood light" (all 7 languages), "open the blinds", "pause", "volume up", "mute" in ~0.01–0.05 s by hitting HA registries and services directly. Misses and ambiguity fall through to the LLM — the shortcut never guesses.
-2. **Reuse Ollama's prompt prefix cache.** The system prompt and tool list are byte-stable across turns; volatile context (`[CURRENT TIME]`, `[USER FACTS]`, `[LAST ACTION]`) rides in a late system message just before the newest user turn. Each request pre-fills only the new tail instead of the whole 3–6 K-token prompt. (Per-message tool-schema pruning defeats this cache and is therefore opt-in.)
-3. **Start speaking before generation finishes.** Replies stream sentence-by-sentence into HA's chat log; with a streaming-capable TTS engine the satellite starts speaking after the first sentence. Streaming is sentence-safe by design: every sentence passes the same sanitation as the final reply, the trailing sentence is held back, and streaming shuts off entirely on any turn where a grounding verifier might rewrite the reply or TTS suppression might blank it.
+After a spoken reply, the satellite can reopen its microphone so you can answer without the wake word. **Listen for a follow-up after voice replies** has three modes:
 
-Also in this bucket: summarization runs *after* the reply in the background instead of blocking the unlucky turn that crosses the context limit, per-request token budgeting reserves space for the tool schemas actually being sent, and the **Keep-alive** option keeps the model in VRAM between turns without any `OLLAMA_KEEP_ALIVE` server configuration.
+| Mode | Behaviour |
+|------|-----------|
+| **Always** *(default)* | The microphone reopens after every reply. |
+| **Let the AI decide** | The microphone reopens only when the reply **ends with a question**. "Which room do you mean?" keeps listening. "The kitchen light is on." ends the turn. |
+| **Never** | Every turn ends after the reply. |
 
-## Ollama Configuration
+In *Let the AI decide*, the question mark *is* the model's decision. This is the same signal Home Assistant's built-in LLM agents use. The voice prompt gains one rule: ask only when an answer is needed (a missing detail, a choice, a confirmation), and never close with filler like "Anything else?". So the setting adds no extra tool call or round trip, and it works with streaming.
 
-### Context Window — one setting controls everything
+In every mode, the conversation still ends on a close phrase (*"thanks"*, *"bye"*, *"das war's"*, …), on a detected self-echo, and after a run of rapid chained turns.
 
-The plugin talks to Ollama's native `/api/chat` and passes `num_ctx` on every request, so the **Context Window** setting is the single number controlling both the plugin's internal token budget and the context size Ollama loads the model with. No Modelfile changes required.
+<details>
+<summary><b>Satellites that play replies on a separate speaker</b></summary>
 
-### Temperature
+<br>
 
-`gemma-4-12B UD-Q3_K_XL` runs at **1.0**: between 0.3 and 1.0 only the wording of replies varied, never the actions taken. If a model asks clarifying questions instead of acting, lower it to 0.1–0.3 (the July voice suite ran at 0.2).
+A satellite that routes its reply audio to an external media player (Google/Cast, *Mic to MediaPlayer*) can hear its own TTS and treat it as a new turn. That is an acoustic feedback loop: the assistant talks to itself. Three tools address it:
 
-### Reasoning models (qwen3, deepseek-r1)
+- **Self-echo filter** (Advanced → *Ignore the satellite hearing its own reply*, on by default). The plugin remembers what it just said on each device and silently drops any incoming voice turn that replays it: 70 % of the turn's word pairs, in order, within 30 s. A recognizable command or a bare "yes" is never dropped. The session stays open, so real follow-ups still work. This is the recommended fix.
+- **Quiet gap before listening again.** Above 0 s, the plugin reopens the microphone itself once the reply has finished playing in the room, instead of when the satellite's own playback ends.
+- **Force-end conversations on these satellites** (device list). A blunter guard that ends the session after one turn on the listed devices. Use it if STT garbles the echo too much for the filter to catch it.
 
-The plugin sends `think: false` on every Ollama call so final answers land in `content`. Requires Ollama 0.20+. No Modelfile tweaks needed.
+</details>
 
-### Keep-alive
+### Voice timers
 
-Ollama unloads models after 5 minutes of inactivity by default, so the first command after a quiet stretch pays the full model-load cost. Set **Ollama keep-alive** in Advanced settings (`30m`, `24h`, or `-1` for always loaded) — sent per request, no server configuration. Leave empty to keep the server default.
+Timers are first-class tools: `start_timer`, `cancel_timer`, `pause_timer`, `unpause_timer`, `increase_timer`, `decrease_timer` and `timer_status`. A deterministic safety net treats the spoken utterance as the ground truth for the duration, so "10 seconds" never becomes 10 minutes, even if the model fills a slot wrongly.
 
-This matters more the larger the model: on an 8 GB card a 6.5 GB model takes **~16 s** to load, so the default `5m` turns the first question after a quiet evening into a timeout-feeling pause. If the GPU is dedicated to Home Assistant, use `-1`.
+- **Default.** HA sends the timer to the satellite, which shows the countdown and plays its ring locally. This needs timer-capable firmware, which HA Voice PE and current ESPHome satellites have.
+- **Announce mode** (Advanced → *Announce timers instead of on-device ring*). HA's TimerManager calls the plugin back when the timer expires. The plugin then plays a localized announcement ("Timer pasta is up.") through `mic_to_mediaplayer.announce` if that integration is installed, and `assist_satellite.announce` otherwise. It works on **any** device, including satellites whose own speaker is silenced or that have no timer firmware.
+  - Trade-off: no countdown LEDs and no local ring.
+  - Like all HA voice timers, these do not survive an HA restart.
 
-## Voice timers
+### Long-term memory
 
-Timers are first-class tools (`start_timer`, `cancel_timer`, `pause_timer`, `unpause_timer`, `increase_timer`, `decrease_timer`, `timer_status`) with a deterministic safety net: the spoken utterance is ground truth for the duration, so "10 seconds" can never become 10 minutes even if the model mis-fills a slot.
+The assistant remembers facts across conversations and across restarts:
 
-**Default:** HA delivers the timer to the satellite, which shows its countdown and plays its ring sound locally. This requires timer-capable satellite firmware (HA Voice PE and current ESPHome voice satellites have it).
+- *"Remember that I take my coffee black."* → `remember`
+- *"What did I tell you about my coffee?"* → answered from memory
+- *"Forget that I take my coffee black."* → `forget`
 
-**Announce mode** (Advanced → *Announce timers instead of on-device ring*): the timer carries a `conversation_command` instead — HA's own TimerManager calls the plugin back at expiry, and the plugin plays a localized announcement ("Timer pasta is up.") via `mic_to_mediaplayer.announce` when that integration is present, else HA's native `assist_satellite.announce`. Use this when the satellite's own speaker is silenced because audio is routed to better speakers, or when the satellite has no timer firmware at all — announce-mode timers work on **any** device. Trade-offs: the satellite shows no countdown LEDs and plays no local ring; like all HA voice timers, timers don't survive an HA restart.
+**Recall is usually free.** Saved facts are loaded into a `[USER FACTS]` block at the start of every turn. That block is a late, cache-stable system message, so the model answers "what's my…" questions without a tool round trip, and each round trip is a full extra generation pass on a small model.
 
-## AI Tasks (automations & scripts)
+**Per-user and plain text.** Facts are stored at `<config>/.ai_plugin_memory_<user_id>.json`, one file per HA user (`…_anonymous.json` for unauthenticated turns). The files are readable, so don't ask it to remember secrets.
 
-The integration provides an `ai_task` entity, so automations can use the same local model:
+**`forget` won't delete the wrong fact.** It removes by the fact's number first and falls back to a fuzzy match. If the fact isn't stored, it says so instead of guessing.
+
+### AI Tasks for automations
+
+The integration provides an `ai_task` entity, so automations and scripts can use the same model:
 
 ```yaml
 action: ai_task.generate_data
@@ -107,102 +206,90 @@ data:
   entity_id: ai_task.ai_plugin
 ```
 
-With a `structure` schema, the model is instructed to return matching JSON; code fences are tolerated and invalid JSON raises a proper error instead of returning garbage.
+With a `structure` schema, the model returns matching JSON. Code fences are tolerated, and invalid JSON raises a clear error instead of returning garbage.
 
-## Long-term memory
+### Web search
 
-The assistant remembers facts across conversations — and across Home Assistant restarts — through three tools it calls from natural speech:
+| Backend | Cost | API key | Notes |
+|---------|------|---------|-------|
+| **DuckDuckGo** *(default)* | Free | none | Zero config. Can be rate-limited. Ambiguous place names are disambiguated with your city and country. |
+| Brave Search | Free tier / paid | [api.search.brave.com](https://api.search.brave.com/app/) | Reliable |
+| Tavily | Free tier / paid | [tavily.com](https://tavily.com/) | Best quality, AI-optimized |
+| SearXNG | Free (self-hosted) | instance URL | Full control, no third-party traffic |
 
-- *"Remember that I take my coffee black."* → `remember`
-- *"What's my name?"* / *"What did I tell you about my coffee?"* → answered from memory
-- *"Forget that I take my coffee black."* → `forget`
+To read one specific page, the model uses `browse_url`. It fetches through **Jina Reader** (`r.jina.ai`), so that URL is sent to a third party. Apart from your chosen search backend, this is the only outbound connection the integration makes.
 
-**Recall is usually free.** At the start of every turn the plugin loads the user's saved facts into a `[USER FACTS]` block in the prompt (a late, cache-stable system message, so it doesn't break Ollama's prefix cache). The model answers "what's my…" questions straight from that block with no tool round-trip — which matters on small local models, where each tool call is a full extra generation pass. The `recall` tool is only a fallback for when the block is absent.
+### MCP servers
 
-**Per-user and persistent.** Facts live as plain JSON at `<config>/.ai_plugin_memory_<user_id>.json` — one file per Home Assistant user, so users don't see each other's facts (unauthenticated turns use `…_anonymous.json`). The files are readable text in your config directory: don't ask it to remember secrets.
+You can add any MCP tool server over HTTP or stdio. Presets are included for HA's built-in MCP server (recommended: it provides `HassTurnOn` / `HassLightSet`-style intents), time, fetch, SQLite and more. MCP calls are capped at 15 s, so a hung server cannot stall a voice reply.
 
-**`forget` won't delete the wrong fact.** It prefers removing by the fact's number in `[USER FACTS]` (language-independent), falling back to a fuzzy substring match. Ask it to forget something that isn't stored and it says so rather than guessing an index and deleting a neighbour — with a cross-language check so an English request can still clear the matching German-stored fact.
+## How it stays fast
 
-## Conversation continuity (`Listen for follow-up after voice replies`)
+On a 7–12B model, latency is won or lost in three places:
 
-When the option is on (default), every non-close-phrase reply returns `continue_conversation=True` — HA's standard mechanism. Voice satellites with their own speaker (HA Voice PE, standard ESPHome satellites) re-arm the microphone after the reply, so you can keep talking without the wake word. A close-phrase detector (`thanks`, `bye`, `das war's`, …) ends the loop cleanly.
+1. **Skip the LLM when possible.** The shortcut layer handles clock time, sunrise and sunset, "temperature in the bedroom", single-device on/off, covers, media transport, volume and mute. It calls HA registries and services directly, in all seven languages. Misses and anything ambiguous fall through to the LLM; the shortcut never guesses.
+2. **Reuse Ollama's prompt prefix cache.** The system prompt and tool list stay byte-stable across turns. Volatile context (`[CURRENT TIME]`, `[USER FACTS]`, `[LAST ACTION]`) goes in a late message, so each request pre-fills only the new tail, not the whole 3–6K-token prompt.
+3. **Speak before generation finishes.** Replies stream sentence by sentence into HA's chat log. Each sentence passes the same cleanup as the final reply, and the last sentence is held back. Streaming switches off on any turn where a verifier might still rewrite the reply.
 
-**Exception — TTS on a separate speaker:** satellites that route reply audio to an external media player re-hear their own TTS and re-trigger listening — an acoustic feedback loop that makes the assistant talk to itself. Two mitigations, both on by default / available:
+<details>
+<summary><b>Ollama tuning notes</b></summary>
 
-- **Self-echo filter** (Advanced → *Ignore the satellite hearing its own reply*, default on) — the plugin remembers what it just said per device and silently drops any incoming voice turn that matches (≥80% token overlap within 30 s). The loop dies but the session stays open, so real follow-ups still work. Short turns are never filtered. This is the recommended fix and keeps barge-in.
-- **Force-end conversations on these satellites** (Advanced, device list) — a blunter guard that ends the session after one turn on the listed devices. Use it if a satellite's echo is too garbled by STT for the filter to catch.
+<br>
 
-## Requirements
+- **Context window: one number.** The plugin uses Ollama's native `/api/chat` and sends `num_ctx` on every request. The *Context Window* setting therefore sets both the plugin's token budget and the context Ollama loads the model with. No Modelfile changes are needed.
+- **Temperature.** If a model asks clarifying questions instead of acting, lower it to 0.1–0.3.
+- **Reasoning models** (qwen3, deepseek-r1). The plugin sends `think: false` so answers land in `content`. Requires Ollama 0.20+.
+- **Keep-alive.** By default Ollama unloads a model after 5 minutes idle. On 8 GB, reloading a 6.5 GB model takes **~16 s**. Set *Ollama keep-alive* (`30m`, `24h`, or `-1`); it is sent per request and needs no server configuration.
 
-- Home Assistant **2025.7.0** or newer
-- [HACS](https://hacs.xyz/docs/use/) (delivers the integration)
-- A reachable LLM endpoint, e.g.
-  - [Ollama](https://ollama.com) — `http://<host>:11434/v1`
-  - OpenAI — `https://api.openai.com/v1` (API key)
-  - LM Studio — `http://<host>:1234/v1`
-  - llama.cpp server — `http://<host>:8080/v1`
-  - xAI Grok — `https://api.x.ai/v1` (API key)
+</details>
 
-## Installation
-
-1. **HACS → Integrations → ⋮ → Custom repositories** → add `https://github.com/bigbabol1/AI-plugin` (category **Integration**)
-2. Install **AI Plugin**, **restart Home Assistant**
-3. **Settings → Devices & Services → Add Integration** → *AI Plugin*
-4. Wire it into voice/chat: **Settings → Voice assistants** → set **Conversation agent** = *AI Plugin*
-
-## Configuration reference (Advanced)
-
-All settings are editable post-install via **Settings → Devices & Services → AI Plugin → Configure**.
+## Configuration reference
 
 | Option | Default | What it does |
 |--------|---------|--------------|
 | System prompt | persona template | Appended to the built-in prompt (never replaces it) |
-| Context Window | 16384 | Token budget AND Ollama `num_ctx`, one number |
+| Context Window | `16384` | Token budget **and** Ollama `num_ctx` |
 | Summarization | on | Condenses old turns in the background near the limit |
-| Voice mode | off | Forces the compact voice prompt even for text |
-| Listen for follow-up | on | Keep the session open after replies |
-| Enable thinking | off | Let reasoning models emit chain-of-thought (slower; disables streaming) |
-| Max tool iterations | 10 | Cap on LLM↔tool round-trips per turn |
-| Timeout | 30 s | Per-LLM-call ceiling (MCP tools have their own 15 s cap) |
-| Temperature / top_p / Max tokens | unset | Sampling; 1.0 / 0.4 / 512 recommended for gemma-4-12B |
-| Ollama keep-alive | unset | Keep the model in VRAM between requests (`30m`, `-1`) |
-| Prune tool schemas | off | Per-message schema pruning; defeats Ollama's prefix cache — leave off |
-| Announce timers | off | Timer completions via media player instead of on-device ring |
-| Force-end conversations on these satellites | none | Feedback-loop guard for TTS-on-separate-speaker setups |
-| Location bias | on | Scope "near me" web searches to your home (fails open, opt-out) |
+| Voice mode | off | Forces the compact voice prompt, even for text |
+| Listen for a follow-up | Always | Always / Let the AI decide / Never (see [Follow-up listening](#follow-up-listening)) |
+| Quiet gap before listening again | `0` s | Above 0, the plugin reopens the microphone itself once the room is quiet |
+| Enable thinking | off | Lets reasoning models emit chain-of-thought (slower; disables streaming) |
+| Max tool iterations | `10` | Cap on LLM↔tool round trips per turn |
+| Timeout | `30` s | Per LLM call. MCP tools have their own 15 s cap. |
+| Temperature / top_p / Max tokens | unset | Sampling. 1.0 / 0.4 / 512 recommended for gemma-4-12B. |
+| Ollama keep-alive | unset | Keeps the model in VRAM between requests |
+| Prune tool schemas | off | Per-message schema pruning. Defeats the prefix cache, so leave it off. |
+| Announce timers | off | Timer completions play on a media player instead of the on-device ring |
+| Ignore the satellite hearing its own reply | on | Self-echo filter |
+| Force-end conversations on these satellites | none | Feedback-loop guard for setups with TTS on a separate speaker |
+| Location bias | on | Scopes "near me" searches to your home (fails open) |
 | Location entity | unset | Live location source instead of HA's home coordinates |
-
-## Web Search Backends
-
-Default is **DuckDuckGo** — zero config, works out of the box. For better quality, add an API key for Brave or Tavily.
-
-| Backend | Cost | API key | Notes |
-|---------|------|---------|-------|
-| DuckDuckGo | Free | none | Default; may be rate-limited; US-biased on ambiguous place names (mitigated by `city, country` injection) |
-| Brave Search | Free tier / paid | [api.search.brave.com](https://api.search.brave.com/app/) | Reliable |
-| Tavily | Free tier / paid | [tavily.com](https://tavily.com/) | Best quality, AI-optimized |
-| SearXNG | Free (self-hosted) | none — instance URL | Full control, no third-party traffic |
-
-For reading one specific page (rather than searching), the model has a separate `browse_url` tool. Note it fetches through **Jina Reader** (`https://r.jina.ai/`) to convert the page to clean text, so the target URL is sent to that third-party service — the only outbound hop in an otherwise local-first integration besides your chosen search backend.
-
-## MCP Servers
-
-Add any MCP-compatible tool server in the integration settings — HTTP and stdio transports, presets for HA's built-in MCP server (recommended: provides `HassTurnOn`/`HassLightSet`-style intents), time, fetch, SQLite, and more. MCP tool calls are capped at 15 s so a hung server can't stall a voice reply.
-
-## Evaluating changes (`tests/eval/`)
-
-The unit suite mocks every LLM call; the eval harness measures the real thing. It drives a live install via `/api/conversation/process`, scores replies against per-prompt regex rubrics, verifies actuations against live entity state, and reports pass rates and latency percentiles. Read-only prompts by default; `--full` adds actuation/timer/memory prompts that clean up after themselves. See `tests/eval/README.md`.
 
 ## Troubleshooting
 
-- **"Cannot connect" on setup** — the Provider URL must end with `/v1` for OpenAI-compat backends and be reachable from the HA host.
-- **"Model reports no tool-calling capability"** — the config flow checked Ollama's `/api/show`; pick a tool-capable model (`qwen3`, `qwen2.5`, `mistral`).
-- **Model asks questions instead of acting** — lower temperature to 0.1–0.3, or pick a stronger tool-calling model.
-- **Slow first response after idle** — set **Ollama keep-alive** in Advanced settings.
-- **Replies don't start speaking early** — streaming needs the Ollama backend and a streaming-capable TTS engine in your pipeline; other setups get the full reply at once (no harm).
-- **Timer LEDs count down but no sound** — the ring plays on the satellite's *local* speaker; if yours is silenced, enable **Announce timers** (see Voice timers above).
-- **Empty replies from reasoning models** — the plugin sends `think: false`; upgrade Ollama to 0.20+ if it persists.
+| Symptom | Fix |
+|---------|-----|
+| "Cannot connect" during setup | The Provider URL must end in `/v1` and be reachable from the HA host. |
+| "Model reports no tool-calling capability" | The config flow checked Ollama's `/api/show`. Pick a tool-capable model. |
+| Model asks questions instead of acting | Lower the temperature to 0.1–0.3, or use a stronger tool-calling model. |
+| Slow first reply after a quiet period | Set **Ollama keep-alive**. |
+| Replies don't start speaking early | Streaming needs the Ollama backend and a streaming-capable TTS engine. Other setups get the full reply at once. |
+| *Let the AI decide* listens after every reply | The model is closing with filler questions. Add "Do not end with a question unless you need an answer" to the system prompt, or try a stronger model. |
+| The assistant answers itself in a loop | Replies are playing on a separate speaker. See [Follow-up listening](#follow-up-listening). |
+| Timer LEDs count down but there's no sound | The ring plays on the satellite's own speaker. Enable **Announce timers**. |
+| Empty replies from reasoning models | Upgrade Ollama to 0.20+. |
 
-## Changelog
+## Development
 
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+```bash
+python -m venv .venv && .venv/bin/pip install -r requirements_test.txt
+.venv/bin/python -m pytest
+```
+
+The unit suite runs against stubbed Home Assistant modules, so no HA install is needed. The suite mocks every LLM call. **`tests/eval/`** measures the real thing: it drives a live install through `/api/conversation/process`, scores replies against per-prompt rubrics, checks actions against live entity state, and reports pass rates and latency percentiles. See [`tests/eval/README.md`](tests/eval/README.md).
+
+**Adding a language** means one YAML file: copy `i18n/en.yaml`, translate it, and open a PR. See [`i18n/CONTRIBUTING.md`](custom_components/ai_plugin/i18n/CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE). Release history is in [CHANGELOG.md](CHANGELOG.md).

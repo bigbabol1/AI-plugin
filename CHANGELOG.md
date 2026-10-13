@@ -4,6 +4,49 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.9.55 — the model decides when to keep listening
+
+**'Listen for follow-up' has a third mode: *Let the AI decide*.** The option
+was a switch: on, the satellite reopened its microphone after every reply;
+off, never. It is now a choice of *Always* (the default, and what every
+existing install keeps), *Let the AI decide* and *Never*.
+
+In *Let the AI decide* the microphone reopens only when the reply ends with a
+question — "Which room do you mean?" keeps listening, "The kitchen light is
+on." ends the turn. That is the signal Home Assistant's own LLM agents use
+(`ChatLog.continue_conversation`), and it was chosen over the alternatives on
+cost:
+
+- **A `keep_listening` tool** would make the decision explicit, but on a local
+  12B model a meta-tool means one more pass through the tool loop on every
+  voice turn, and one more place to fail to close it.
+- **A hidden marker in the reply** would reach the speaker whenever the model
+  leaked or mangled it, because replies stream to TTS sentence by sentence.
+
+The question mark costs nothing: no extra tokens, no round trip, and it
+works with streaming. What it needs is a model that only asks when it means
+to, so this mode adds one rule to the voice prompt — end with a question
+only to get a missing detail, a choice or a confirmation, never with filler
+like "Anything else?". Without it a small model tacks a question onto every
+reply and the mode collapses into *Always*. The rule is added only in this
+mode, so the prompt and Ollama's prefix cache are byte-identical for
+everyone else.
+
+Every guard that ended a conversation still does, in every mode: close
+phrases, the self-echo filter, the chained-turn cap and the force-end device
+list. An empty reply (media actions confirm by playing) ends the turn.
+
+**Upgrading changes nothing.** The setting is stored under the same key; the
+old `true` reads as *Always* and `false` as *Never*.
+
+**The README was rewritten** for people deciding whether to install: a short
+pitch and grouped highlights first, HACS and setup buttons, the model
+recommendation as a table with the benchmark detail folded away, and the
+feature guides, configuration reference and troubleshooting below. Two
+statements were corrected on the way: the language count (seven since
+v0.9.53, not six) and the self-echo threshold (70 % of word pairs in order,
+not 80 % token overlap).
+
 ## v0.9.54 — four files stop being four files
 
 No behaviour change in this release: same tools, same patterns, same

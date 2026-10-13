@@ -13,8 +13,11 @@ import logging
 
 from ..const import (
     CONF_SYSTEM_PROMPT,
+    FOLLOW_UP_AUTO,
+    FOLLOW_UP_AUTO_RULE,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
+    follow_up_mode,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,6 +46,8 @@ class PromptBlocksMixin:
         location_block = await self._build_location_block()
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
         parts = [base, location_block]
+        if voice_mode and follow_up_mode(self._entry.options) == FOLLOW_UP_AUTO:
+            parts.insert(1, FOLLOW_UP_AUTO_RULE)
         if custom:
             parts.append(custom)
         return "\n\n".join(p for p in parts if p)
