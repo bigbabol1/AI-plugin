@@ -1,0 +1,333 @@
+{
+  "config": {
+    "step": {
+      "provider": {
+        "title": "Choose provider",
+        "description": "Connect any AI model to your home. Start by choosing your provider.",
+        "data": {
+          "provider": "AI provider"
+        },
+        "data_description": {}
+      },
+      "provider_url": {
+        "title": "Provider URL",
+        "data": {
+          "base_url": "Provider URL"
+        },
+        "data_description": {
+          "base_url": "Address of your AI provider. Default: http://localhost:11434/v1 for Ollama"
+        }
+      },
+      "model": {
+        "title": "Model",
+        "description": "Choose the model to use for conversations.",
+        "description_fetch_failed": "Could not connect to {fetch_failed} — enter your model name manually (e.g. llama3.2:3b).",
+        "data": {
+          "model": "Model",
+          "api_key": "API key"
+        },
+        "data_description": {
+          "model": "e.g. llama3.2:3b, qwen2.5:7b, mistral",
+          "api_key": "Optional for local providers like Ollama and llama.cpp"
+        }
+      },
+      "web_search": {
+        "title": "Web search",
+        "data": {
+          "web_search_enabled": "Let AI search the web",
+          "web_search_backend": "Search provider",
+          "brave_api_key": "Brave Search API key",
+          "tavily_api_key": "Tavily API key",
+          "max_results": "Results per search"
+        },
+        "data_description": {
+          "web_search_enabled": "AI Plugin will search the internet to answer questions about current events, weather, and more.",
+          "web_search_backend": "DuckDuckGo is free but unofficial — it may occasionally be unavailable. Brave Search is recommended.",
+          "brave_api_key": "Free tier: 2,000 requests/month. Get a key at brave.com/search/api",
+          "tavily_api_key": "Free tier: 1,000 requests/month.",
+          "max_results": "Maximum number of search results to include in the AI's context."
+        }
+      },
+      "searxng": {
+        "title": "SearXNG",
+        "data": {
+          "searxng_url": "SearXNG URL"
+        },
+        "data_description": {
+          "searxng_url": "URL of your self-hosted SearXNG instance (e.g. https://search.example.com)."
+        }
+      },
+      "advanced": {
+        "title": "Advanced",
+        "data": {
+          "system_prompt": "Custom instructions",
+          "context_window": "Context window (tokens)",
+          "summarization_enabled": "Auto-summarize long conversations",
+          "voice_mode": "Use compact prompts for voice",
+          "continue_conversation": "Listen for a follow-up after voice replies",
+          "follow_up_delay": "Quiet gap before listening again (seconds)",
+          "enable_thinking": "Enable model reasoning (chain-of-thought)",
+          "max_tool_iterations": "Tool call limit",
+          "self_echo_filter": "Ignore the satellite hearing its own reply",
+          "timer_announce": "Announce timers instead of on-device ring",
+          "feedback_loop_devices": "Force-end conversations on these satellites",
+          "keep_alive": "Ollama keep-alive (e.g. 30m, -1)",
+          "prune_tool_schemas": "Prune tool schemas per message",
+          "response_timeout": "Timeout (seconds)",
+          "temperature": "Temperature",
+          "top_p": "Top P",
+          "max_tokens": "Max tokens (output)",
+          "location_bias": "Bias web search to your home area",
+          "location_entity": "Live location entity (optional)",
+          "use_ha_mcp": "Connect to Home Assistant's built-in MCP server",
+          "ha_mcp_token": "Long-lived access token"
+        },
+        "data_description": {
+          "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
+          "context_window": "Maximum context your model supports. Check your model's documentation.",
+          "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
+          "voice_mode": "Shorter responses optimized for text-to-speech. Enabled by default for voice assistant interactions.",
+          "continue_conversation": "Whether the satellite reopens its microphone after a spoken reply, so you can answer without the wake word. Always: after every reply. Let the AI decide: only when the reply ends with a question — the model is told to ask one only when it needs your answer. Never: every turn ends after the reply. Close phrases (\"stop\", \"that's all\") and the feedback-loop guards end the conversation in every mode. Listen duration is set on the satellite (silence/VAD timeout).",
+          "follow_up_delay": "For satellites whose replies play on separate speakers (Google/Cast, Mic to MediaPlayer): the satellite reopens its microphone when its OWN playback ends, about a second before the room actually goes quiet, and records the tail of its own reply. Above 0, AI Plugin takes over — it ends the turn, waits until its reply has finished playing plus a fixed 1-second settle, waits this many seconds, then reopens the microphone itself. 1 second is a good starting point; raise it if the satellite still hears the end of its own reply. 0 keeps the satellite in charge.",
+          "enable_thinking": "Let reasoning models (qwen3, deepseek-r1) generate chain-of-thought before answering. Off by default — Assist needs final answers, not scratchpads. Internal reasoning blocks are always stripped from the displayed reply regardless of this setting.",
+          "max_tool_iterations": "Maximum tool uses per response (default: 10).",
+          "self_echo_filter": "For satellites whose TTS plays through a separate speaker: drop voice turns that match the reply just spoken, so 'Listen for follow-up' does not loop. Short turns are never filtered.",
+          "timer_announce": "Voice timers are announced through Mic to MediaPlayer (or assist_satellite.announce) at expiry instead of ringing on the satellite. For satellites whose own speaker is silenced. Note: the device shows no timer LEDs in this mode.",
+          "feedback_loop_devices": "Satellites whose TTS plays through a separate speaker re-hear their own reply and re-trigger listening. Conversations on listed devices always end after one turn; all others honour the follow-up toggle.",
+          "keep_alive": "How long Ollama keeps the model in VRAM after a request. Empty = server default (5m). Use -1 for always loaded.",
+          "prune_tool_schemas": "Drop unlikely discovery tools per message. Saves a few hundred tokens but defeats Ollama's prompt caching — leave off for lower latency.",
+          "response_timeout": "How long to wait for the AI before giving up.",
+          "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model’s default.",
+          "top_p": "Nucleus sampling threshold. Leave blank to use the model’s default.",
+          "max_tokens": "Maximum number of tokens in the AI’s response. 0 or blank = no limit.",
+          "location_bias": "When the AI asks about local weather, nearby events, or restaurants here, the plugin scopes the web search to your home area instead of letting the model guess. Turn off to keep coordinates off the network.",
+          "location_entity": "Use this entity’s coordinates as your live location (zone, device tracker, or person). Leave blank to use Home Assistant’s home coordinates.",
+          "use_ha_mcp": "Gives AI Plugin access to your sensors, devices, and automations via HA’s built-in MCP server.",
+          "ha_mcp_token": "Create one in your HA profile → Long-lived access tokens (scroll to the bottom of the page)."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the provider. Check that your AI provider is running.",
+      "invalid_api_key": "Invalid API key. Check your credentials.",
+      "model_no_tools": "This model reports no tool-calling capability — the integration needs tools to control devices. Pick a tool-capable model (e.g. qwen3).",
+        "context_exceeds_model": "Larger than this model's maximum context length — lower the context window.",
+        "model_required": "Enter a model name.",
+      "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
+      "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL."
+    },
+    "abort": {
+      "already_configured": "AI Plugin is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure AI Plugin",
+        "menu_options": {
+          "provider_settings": "Provider settings",
+          "web_search": "Web search",
+          "advanced": "Advanced",
+          "mcp_servers": "MCP servers"
+        }
+      },
+      "provider_settings": {
+        "title": "Provider settings",
+        "data": {
+          "base_url": "Provider URL",
+          "api_key": "API key"
+        },
+        "data_description": {
+          "base_url": "Address of your AI provider.",
+          "api_key": "Optional for local providers like Ollama and llama.cpp."
+        }
+      },
+      "provider_model": {
+        "title": "Model",
+        "data": {
+          "model": "Model"
+        },
+        "data_description": {
+          "model": "e.g. llama3.2:3b, qwen2.5:7b, mistral"
+        }
+      },
+      "web_search": {
+        "title": "Web search",
+        "data": {
+          "web_search_enabled": "Let AI search the web",
+          "web_search_backend": "Search provider",
+          "brave_api_key": "Brave Search API key",
+          "tavily_api_key": "Tavily API key",
+          "max_results": "Results per search"
+        },
+        "data_description": {
+          "web_search_enabled": "AI Plugin will search the internet to answer questions about current events, weather, and more.",
+          "web_search_backend": "DuckDuckGo is free but unofficial — it may occasionally be unavailable. Brave Search is recommended.",
+          "brave_api_key": "Free tier: 2,000 requests/month. Get a key at brave.com/search/api",
+          "tavily_api_key": "Free tier: 1,000 requests/month.",
+          "max_results": "Maximum number of search results to include in the AI's context."
+        }
+      },
+      "searxng": {
+        "title": "SearXNG",
+        "data": {
+          "searxng_url": "SearXNG URL"
+        },
+        "data_description": {
+          "searxng_url": "URL of your self-hosted SearXNG instance."
+        }
+      },
+      "advanced": {
+        "title": "Advanced",
+        "data": {
+          "system_prompt": "Custom instructions",
+          "context_window": "Context window (tokens)",
+          "summarization_enabled": "Auto-summarize long conversations",
+          "voice_mode": "Use compact prompts for voice",
+          "continue_conversation": "Listen for a follow-up after voice replies",
+          "follow_up_delay": "Quiet gap before listening again (seconds)",
+          "enable_thinking": "Enable model reasoning (chain-of-thought)",
+          "max_tool_iterations": "Tool call limit",
+          "self_echo_filter": "Ignore the satellite hearing its own reply",
+          "timer_announce": "Announce timers instead of on-device ring",
+          "feedback_loop_devices": "Force-end conversations on these satellites",
+          "keep_alive": "Ollama keep-alive (e.g. 30m, -1)",
+          "prune_tool_schemas": "Prune tool schemas per message",
+          "response_timeout": "Timeout (seconds)",
+          "temperature": "Temperature",
+          "top_p": "Top P",
+          "max_tokens": "Max tokens (output)",
+          "location_bias": "Bias web search to your home area",
+          "location_entity": "Live location entity (optional)"
+        },
+        "data_description": {
+          "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
+          "context_window": "Maximum context your model supports. Check your model's documentation.",
+          "summarization_enabled": "When conversations get long, AI Plugin summarizes older messages to preserve memory.",
+          "voice_mode": "Shorter responses optimized for text-to-speech.",
+          "continue_conversation": "Whether the satellite reopens its microphone after a spoken reply, so you can answer without the wake word. Always: after every reply. Let the AI decide: only when the reply ends with a question — the model is told to ask one only when it needs your answer. Never: every turn ends after the reply. Close phrases (\"stop\", \"that's all\") and the feedback-loop guards end the conversation in every mode. Listen duration is set on the satellite (silence/VAD timeout).",
+          "follow_up_delay": "For satellites whose replies play on separate speakers (Google/Cast, Mic to MediaPlayer): the satellite reopens its microphone when its OWN playback ends, about a second before the room actually goes quiet, and records the tail of its own reply. Above 0, AI Plugin takes over — it ends the turn, waits until its reply has finished playing plus a fixed 1-second settle, waits this many seconds, then reopens the microphone itself. 1 second is a good starting point; raise it if the satellite still hears the end of its own reply. 0 keeps the satellite in charge.",
+          "enable_thinking": "Let reasoning models (qwen3, deepseek-r1) generate chain-of-thought before answering. Off by default — Assist needs final answers, not scratchpads. Internal reasoning blocks are always stripped from the displayed reply regardless of this setting.",
+          "max_tool_iterations": "Maximum tool uses per response (default: 10).",
+          "self_echo_filter": "For satellites whose TTS plays through a separate speaker: drop voice turns that match the reply just spoken, so 'Listen for follow-up' does not loop. Short turns are never filtered.",
+          "timer_announce": "Voice timers are announced through Mic to MediaPlayer (or assist_satellite.announce) at expiry instead of ringing on the satellite. For satellites whose own speaker is silenced. Note: the device shows no timer LEDs in this mode.",
+          "feedback_loop_devices": "Satellites whose TTS plays through a separate speaker re-hear their own reply and re-trigger listening. Conversations on listed devices always end after one turn; all others honour the follow-up toggle.",
+          "keep_alive": "How long Ollama keeps the model in VRAM after a request. Empty = server default (5m). Use -1 for always loaded.",
+          "prune_tool_schemas": "Drop unlikely discovery tools per message. Saves a few hundred tokens but defeats Ollama's prompt caching — leave off for lower latency.",
+          "response_timeout": "How long to wait for the AI before giving up.",
+          "temperature": "Controls randomness. Lower = more focused, higher = more creative. Leave blank to use the model's default.",
+          "top_p": "Nucleus sampling threshold. Leave blank to use the model's default.",
+          "max_tokens": "Maximum number of tokens in the AI's response. 0 or blank = no limit.",
+          "location_bias": "When the AI asks about local weather, nearby events, or restaurants here, the plugin scopes the web search to your home area instead of letting the model guess. Turn off to keep coordinates off the network.",
+          "location_entity": "Use this entity's coordinates as your live location (zone, device tracker, or person). Leave blank to use Home Assistant's home coordinates."
+        }
+      },
+      "mcp_servers": {
+        "title": "MCP Servers",
+        "description": "Connect AI Plugin to external tools via the Model Context Protocol (MCP). Add Home Assistant's built-in MCP server to let Buddy read sensors and control devices.\n\nConfigured servers:\n{servers}",
+        "data": {
+          "mcp_action": "What would you like to do?"
+        },
+        "data_description": {
+          "mcp_action": "Changes are only saved when you choose Save and close."
+        }
+      },
+      "mcp_add_ha": {
+        "title": "Add Home Assistant MCP Server",
+        "description": "Detected HA URL: {ha_mcp_url}\n\nCreate a Long-lived access token in your HA profile (Settings → scroll to the bottom of your profile page).",
+        "data": {
+          "ha_mcp_token": "Long-lived access token"
+        },
+        "data_description": {
+          "ha_mcp_token": "Required. Paste the token from your HA profile here."
+        }
+      },
+      "mcp_add_preset": {
+        "title": "Add a popular MCP server",
+        "description": "Select a server to add. Clock and Web reader work instantly with no setup. SQLite will ask for a database file path.",
+        "data": {
+          "preset_key": "Server"
+        }
+      },
+      "mcp_preset_config": {
+        "title": "{preset_label}",
+        "description": "Enter the {config_label} for this server. Example: {example}",
+        "data": {
+          "preset_value": "{config_label}"
+        },
+        "data_description": {
+          "preset_value": "Must be an absolute path accessible to Home Assistant."
+        }
+      },
+      "mcp_add_http": {
+        "title": "Add HTTP MCP Server",
+        "description": "For Home Assistant's built-in MCP endpoint:\n  URL: http://YOUR-HA-IP:8123/api/mcp\n  Token: create a Long-lived access token in your HA profile (bottom of the page).",
+        "data": {
+          "mcp_url": "Server URL",
+          "mcp_token": "Bearer token (optional)"
+        },
+        "data_description": {
+          "mcp_url": "e.g. http://192.168.0.66:8123/api/mcp",
+          "mcp_token": "Required for HA's MCP endpoint. Leave blank for unauthenticated servers."
+        }
+      },
+      "mcp_add_stdio": {
+        "title": "Add stdio MCP Server",
+        "description": "Runs a local MCP tool as a subprocess.\nExample: command = uvx   args = mcp-server-time",
+        "data": {
+          "mcp_command": "Command",
+          "mcp_args": "Arguments (space-separated)"
+        },
+        "data_description": {
+          "mcp_command": "The executable to run (e.g. uvx, npx, python).",
+          "mcp_args": "Arguments separated by spaces (e.g. mcp-server-time --local)."
+        }
+      },
+      "mcp_edit_pick": {
+        "title": "Edit MCP Server — select one",
+        "data": {
+          "mcp_index": "Server to edit"
+        }
+      },
+      "mcp_edit_http": {
+        "title": "Edit HTTP MCP Server",
+        "data": {
+          "mcp_url": "Server URL",
+          "mcp_token": "Bearer token (optional)"
+        },
+        "data_description": {
+          "mcp_url": "e.g. http://192.168.0.66:8123/api/mcp",
+          "mcp_token": "Leave blank to remove an existing token."
+        }
+      },
+      "mcp_edit_stdio": {
+        "title": "Edit stdio MCP Server",
+        "data": {
+          "mcp_command": "Command",
+          "mcp_args": "Arguments (space-separated)"
+        },
+        "data_description": {
+          "mcp_command": "The executable to run.",
+          "mcp_args": "Arguments separated by spaces."
+        }
+      },
+      "mcp_remove": {
+        "title": "Remove MCP Server — select one",
+        "data": {
+          "mcp_index": "Server to remove"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the provider. Check that your AI provider is running.",
+      "invalid_api_key": "Invalid API key. Check your credentials.",
+      "model_no_tools": "This model reports no tool-calling capability — the integration needs tools to control devices. Pick a tool-capable model (e.g. qwen3).",
+        "context_exceeds_model": "Larger than this model's maximum context length — lower the context window.",
+        "model_required": "Enter a model name.",
+      "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
+      "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL.",
+      "command_required": "Enter a command to run."
+    },
+    "abort": {}
+  }
+}

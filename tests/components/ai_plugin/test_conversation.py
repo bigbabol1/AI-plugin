@@ -1,0 +1,643 @@
+"""Tests for the AI Plugin conversation entity and orchestrator."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from homeassistant.core import HomeAssistant
+
+from custom_components.ai_plugin.const import (
+    CONF_BASE_URL,
+    CONF_MODEL,
+    CONF_VOICE_MODE,
+    SYSTEM_PROMPT_DEFAULT,
+    SYSTEM_PROMPT_VOICE,
+)
+from custom_components.ai_plugin.exceptions import OrchestratorError
+from custom_components.ai_plugin.orchestrator import Orchestrator
+
+
+def _make_mock_entry(options: dict | None = None) -> MagicMock:
+    """Build a minimal mock ConfigEntry."""
+    entry = MagicMock()
+    entry.entry_id = "test-entry-id"
+    entry.title = "AI Plugin (llama3.2:3b)"
+    entry.options = options or {
+        CONF_BASE_URL: "http://localhost:11434/v1",
+        CONF_MODEL: "llama3.2:3b",
+    }
+    return entry
+
+
+def _baseline_orch(entry=None) -> Orchestrator:
+    """Build a bare Orchestrator with all attributes async_process touches."""
+    from custom_components.ai_plugin.context_manager import ContextManager
+
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._entry = entry or _make_mock_entry()
+    orch._context_mgr = ContextManager(max_tokens=8192)
+    orch._summarization_enabled = False
+    orch._prune_schemas = False
+    orch._bg_tasks = set()
+    orch._mcp = None
+    orch._memory = None
+    orch._max_tool_iterations = 5
+    orch._web_search = None
+    orch._browse_url = None
+    orch._ha_local = None
+    orch._last_entities = {}
+    orch._conv_locks = {}
+    loc = MagicMock()
+    loc.async_resolve = AsyncMock(return_value={})
+    orch._location = loc
+    return orch
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Orchestrator: system prompt selection
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def test_system_prompt_default() -> None:
+    """Default system prompt is returned when no custom prompt and voice=False."""
+    orch = _baseline_orch()
+    prompt = await orch._build_system_prompt(voice_mode=False)
+    assert prompt == SYSTEM_PROMPT_DEFAULT
+
+
+async def test_system_prompt_voice() -> None:
+    """Voice system prompt is returned when voice_mode=True and no custom prompt."""
+    orch = _baseline_orch()
+    prompt = await orch._build_system_prompt(voice_mode=True)
+    assert prompt == SYSTEM_PROMPT_VOICE
+
+
+async def test_system_prompt_custom_appended_to_voice() -> None:
+    """Custom instructions are appended after the voice base prompt."""
+    entry = _make_mock_entry(
+        options={
+            CONF_BASE_URL: "http://localhost:11434/v1",
+            CONF_MODEL: "llama3.2:3b",
+            "system_prompt": "You are a pirate.",
+            CONF_VOICE_MODE: True,
+        }
+    )
+    orch = _baseline_orch(entry)
+    prompt = await orch._build_system_prompt(voice_mode=True)
+    assert prompt == f"{SYSTEM_PROMPT_VOICE}\n\nYou are a pirate."
+
+
+async def test_system_prompt_custom_appended_to_default() -> None:
+    """Custom instructions are appended after the default base prompt."""
+    entry = _make_mock_entry(
+        options={
+            CONF_BASE_URL: "http://localhost:11434/v1",
+            CONF_MODEL: "llama3.2:3b",
+            "system_prompt": "You are a pirate.",
+        }
+    )
+    orch = _baseline_orch(entry)
+    prompt = await orch._build_system_prompt(voice_mode=False)
+    assert prompt == f"{SYSTEM_PROMPT_DEFAULT}\n\nYou are a pirate."
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Orchestrator: process
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def test_process_happy_path() -> None:
+    """async_process returns the provider reply and stores history."""
+    orch = _baseline_orch()
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(return_value="Lights are on.")
+    orch._provider = mock_provider
+
+    reply = await orch.async_process(
+        message="Turn on the lights",
+        conversation_id="conv-abc",
+        language="en",
+    )
+
+    assert reply == "Lights are on."
+    hist = orch._context_mgr.get_history("conv-abc")
+    assert len(hist) == 2
+    assert hist[0] == {"role": "user", "content": "Turn on the lights"}
+    assert hist[1] == {"role": "assistant", "content": "Lights are on."}
+
+
+async def test_process_multi_turn_maintains_history() -> None:
+    """Multi-turn conversation accumulates history correctly."""
+    orch = _baseline_orch()
+
+    responses = ["Hello!", "The temperature is 72°F."]
+    call_count = 0
+
+    async def mock_complete(messages):
+        nonlocal call_count
+        result = responses[call_count]
+        call_count += 1
+        return result
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = mock_complete
+    orch._provider = mock_provider
+
+    await orch.async_process("Hi", "conv-1", "en")
+    await orch.async_process("What's the temperature?", "conv-1", "en")
+
+    history = orch._context_mgr.get_history("conv-1")
+    assert len(history) == 4  # 2 user + 2 assistant
+    assert history[0]["role"] == "user"
+    assert history[1]["role"] == "assistant"
+    assert history[2]["role"] == "user"
+    assert history[3]["role"] == "assistant"
+
+
+async def test_process_isolates_conversation_ids() -> None:
+    """Different conversation_ids maintain separate histories."""
+    orch = _baseline_orch()
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(return_value="Reply")
+    orch._provider = mock_provider
+
+    await orch.async_process("Hello from conv A", "conv-a", "en")
+    await orch.async_process("Hello from conv B", "conv-b", "en")
+
+    assert len(orch._context_mgr.get_history("conv-a")) == 2
+    assert len(orch._context_mgr.get_history("conv-b")) == 2
+    assert orch._context_mgr.get_history("conv-a")[0]["content"] == "Hello from conv A"
+    assert orch._context_mgr.get_history("conv-b")[0]["content"] == "Hello from conv B"
+
+
+async def test_process_propagates_orchestrator_error() -> None:
+    """OrchestratorError from provider propagates out of async_process."""
+    orch = _baseline_orch()
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(
+        side_effect=OrchestratorError("Provider down")
+    )
+    orch._provider = mock_provider
+
+    with pytest.raises(OrchestratorError, match="Provider down"):
+        await orch.async_process("Hello", "conv-1", "en")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Orchestrator: tool calling loop
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _make_orch_with_mcp(mock_mcp, mock_provider):
+    """Helper: build a minimal Orchestrator with MCP and provider pre-wired."""
+    orch = _baseline_orch()
+    orch._mcp = mock_mcp
+    orch._provider = mock_provider
+    return orch
+
+
+async def test_tool_loop_single_tool_call() -> None:
+    """Tool loop executes one tool call and returns the final text reply."""
+    from custom_components.ai_plugin.providers import ChatResponse, ToolCall
+
+    tool_call = ToolCall(id="c1", name="get_time", arguments={})
+    responses = [
+        ChatResponse(content=None, tool_calls=[tool_call]),   # first: tool call
+        ChatResponse(content="It is 22:00.", tool_calls=[]),  # second: final answer
+    ]
+    call_count = 0
+
+    async def mock_chat(messages, tools=None):
+        nonlocal call_count
+        r = responses[call_count]
+        call_count += 1
+        return r
+
+    mock_provider = MagicMock()
+    mock_provider.async_chat = mock_chat
+
+    mock_mcp = MagicMock()
+    mock_mcp.get_tool_schemas = MagicMock(return_value=[{"type": "function", "function": {"name": "get_time"}}])
+    mock_mcp.call_tool = AsyncMock(return_value="22:00")
+
+    orch = _make_orch_with_mcp(mock_mcp, mock_provider)
+    reply = await orch.async_process("What time is it?", "c", "en")
+
+    assert reply == "It is 22:00."
+    mock_mcp.call_tool.assert_awaited_once_with("get_time", {})
+
+
+async def test_process_with_summarization_enabled() -> None:
+    """When summarization is enabled, summarize_if_needed is called."""
+    orch = _baseline_orch()
+    orch._summarization_enabled = True
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(return_value="Summarized reply.")
+    orch._provider = mock_provider
+
+    # Patch summarize_if_needed to verify it's called. Since v0.9.27 it
+    # runs post-reply in a background task — drain it before asserting.
+    import asyncio as _aio
+
+    with patch.object(
+        orch._context_mgr, "summarize_if_needed", new_callable=AsyncMock
+    ) as mock_summarize:
+        reply = await orch.async_process("Hello", "conv-sum", "en")
+        if orch._bg_tasks:
+            await _aio.gather(*orch._bg_tasks)
+
+    assert reply == "Summarized reply."
+    mock_summarize.assert_awaited_once()
+
+
+async def test_dispatch_tool_no_handler_returns_unavailable_message() -> None:
+    """_dispatch_tool returns unavailable message when no MCP and no web_search."""
+    orch = _baseline_orch()
+    result = await orch._dispatch_tool("unknown_tool", {"arg": "value"})
+
+    assert "unavailable" in result
+    assert "unknown_tool" in result
+
+
+async def test_async_close_delegates_to_provider() -> None:
+    """async_close calls provider.async_close."""
+    orch = _baseline_orch()
+
+    mock_provider = MagicMock()
+    mock_provider.async_close = AsyncMock()
+    orch._provider = mock_provider
+
+    await orch.async_close()
+
+    mock_provider.async_close.assert_awaited_once()
+
+
+async def test_tool_loop_max_iterations_appends_note() -> None:
+    """When max_tool_iterations is reached, a note is appended to the reply."""
+    from custom_components.ai_plugin.providers import ChatResponse, ToolCall
+
+    async def always_tool_call(messages, tools=None):
+        return ChatResponse(
+            content="partial",
+            tool_calls=[ToolCall(id="x", name="loop_tool", arguments={})],
+        )
+
+    mock_provider = MagicMock()
+    mock_provider.async_chat = always_tool_call
+
+    mock_mcp = MagicMock()
+    mock_mcp.get_tool_schemas = MagicMock(return_value=[{"type": "function", "function": {"name": "loop_tool"}}])
+    mock_mcp.call_tool = AsyncMock(return_value="result")
+
+    orch = _make_orch_with_mcp(mock_mcp, mock_provider)
+    orch._max_tool_iterations = 2
+    reply = await orch.async_process("Loop forever", "c", "en")
+
+    assert "tool call limit" in reply.lower()
+
+
+async def test_no_tools_skips_tool_loop() -> None:
+    """When MCP has no tools, async_complete is used directly."""
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(return_value="Direct reply.")
+    mock_provider.async_chat = AsyncMock()
+
+    mock_mcp = MagicMock()
+    mock_mcp.get_tool_schemas = MagicMock(return_value=[])  # empty = no tools
+
+    orch = _make_orch_with_mcp(mock_mcp, mock_provider)
+    reply = await orch.async_process("Hello", "c", "en")
+
+    assert reply == "Direct reply."
+    mock_provider.async_chat.assert_not_awaited()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Conversation entity: error handling
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def test_conversation_entity_returns_graceful_reply_on_error(
+    hass: HomeAssistant,
+) -> None:
+    """OrchestratorError is caught and a graceful string reply is returned."""
+    from custom_components.ai_plugin.conversation import AIPluginConversationEntity
+
+    entry = _make_mock_entry()
+    entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
+    entity.hass = hass
+    entity._entry = entry
+    entity._attr_unique_id = "test"
+
+    mock_orch = MagicMock()
+    mock_orch.async_process = AsyncMock(
+        side_effect=OrchestratorError("Connection refused")
+    )
+    entity._orchestrator = mock_orch
+
+    from homeassistant.components.conversation import ConversationInput
+    from homeassistant.core import Context
+
+    user_input = ConversationInput(
+        text="turn on lights",
+        context=Context(),
+        conversation_id="conv-1",
+        device_id=None,
+        language="en",
+        agent_id=None,
+    )
+    result = await entity.async_process(user_input)
+
+    # Should return a ConversationResult, not raise
+    assert result is not None
+    assert "Sorry" in result.response.speech["plain"]["speech"]
+
+
+async def test_conversation_entity_passes_context_user_id_through(
+    hass: HomeAssistant,
+) -> None:
+    """Context user_id is forwarded to the orchestrator verbatim."""
+    from custom_components.ai_plugin.conversation import AIPluginConversationEntity
+
+    entry = _make_mock_entry(
+        options={
+            CONF_BASE_URL: "http://localhost:11434/v1",
+            CONF_MODEL: "llama3.2:3b",
+        }
+    )
+    entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
+    entity.hass = hass
+    entity._entry = entry
+    entity._attr_unique_id = "test"
+
+    mock_orch = MagicMock()
+    mock_orch.async_process = AsyncMock(return_value="ok")
+    entity._orchestrator = mock_orch
+
+    from homeassistant.components.conversation import ConversationInput
+    from homeassistant.core import Context
+
+    user_input = ConversationInput(
+        text="hi",
+        context=Context(user_id="real-typed-user"),
+        conversation_id="conv-typed",
+        device_id=None,
+        language="en",
+        agent_id=None,
+    )
+    await entity.async_process(user_input)
+
+    kwargs = mock_orch.async_process.await_args.kwargs
+    assert kwargs["user_id"] == "real-typed-user"
+
+
+async def test_conversation_entity_anonymous_context_keeps_user_id_none(
+    hass: HomeAssistant,
+) -> None:
+    """Voice Assist with no authenticated user stays anonymous (no fallback)."""
+    from custom_components.ai_plugin.conversation import AIPluginConversationEntity
+
+    entry = _make_mock_entry()
+    entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
+    entity.hass = hass
+    entity._entry = entry
+    entity._attr_unique_id = "test"
+
+    mock_orch = MagicMock()
+    mock_orch.async_process = AsyncMock(return_value="ok")
+    entity._orchestrator = mock_orch
+
+    from homeassistant.components.conversation import ConversationInput
+    from homeassistant.core import Context
+
+    user_input = ConversationInput(
+        text="hi",
+        context=Context(),
+        conversation_id="conv-voice",
+        device_id="media_player.satellite",
+        language="en",
+        agent_id=None,
+    )
+    await entity.async_process(user_input)
+
+    kwargs = mock_orch.async_process.await_args.kwargs
+    assert kwargs["user_id"] is None
+
+
+async def test_conversation_entity_will_remove_closes_orchestrator(
+    hass: HomeAssistant,
+) -> None:
+    """async_will_remove_from_hass delegates to orchestrator.async_close."""
+    from custom_components.ai_plugin.conversation import AIPluginConversationEntity
+
+    entry = _make_mock_entry()
+    entity = AIPluginConversationEntity.__new__(AIPluginConversationEntity)
+    entity.hass = hass
+    entity._entry = entry
+    entity._attr_unique_id = "test"
+
+    mock_orch = MagicMock()
+    mock_orch.async_close = AsyncMock()
+    entity._orchestrator = mock_orch
+
+    await entity.async_will_remove_from_hass()
+
+    mock_orch.async_close.assert_awaited_once()
+
+
+# ── v0.9.27: cache-stable prompt layout ───────────────────────────────────────
+
+
+async def test_volatile_context_injected_before_user_turn() -> None:
+    """[LAST ACTION] rides in a late system message, not the prompt head,
+    so the static system prompt stays byte-stable for prefix caching."""
+    orch = _baseline_orch()
+    orch._last_entities["conv-vol"] = "HassTurnOn(lamp → light.lamp @ kitchen)"
+
+    captured: dict = {}
+
+    async def _capture(messages):
+        captured["messages"] = [dict(m) for m in messages]
+        return "ok"
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(side_effect=_capture)
+    orch._provider = mock_provider
+
+    reply = await orch.async_process("turn it off please", "conv-vol", "en")
+
+    assert reply == "ok"
+    msgs = captured["messages"]
+    assert [m["role"] for m in msgs] == ["system", "system", "user"]
+    assert "[LAST ACTION]" in msgs[1]["content"]
+    # The tracked entity must ride in the volatile message, not the static
+    # head (the head may *mention* [LAST ACTION] in its instructions).
+    assert "light.lamp @ kitchen" in msgs[1]["content"]
+    assert "light.lamp" not in msgs[0]["content"]
+
+
+async def test_no_volatile_block_means_no_extra_message() -> None:
+    orch = _baseline_orch()
+
+    captured: dict = {}
+
+    async def _capture(messages):
+        captured["messages"] = [dict(m) for m in messages]
+        return "ok"
+
+    mock_provider = MagicMock()
+    mock_provider.async_complete = AsyncMock(side_effect=_capture)
+    orch._provider = mock_provider
+
+    await orch.async_process("hello", "conv-novol", "en")
+    assert [m["role"] for m in captured["messages"]] == ["system", "user"]
+
+
+# ── v0.9.28: kaomoji stripping ────────────────────────────────────────────────
+
+
+def test_strip_emoji_removes_kaomoji() -> None:
+    from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
+
+    assert _strip_emoji("Sorry! (╯°□°）╯︵ ┻━┻") == "Sorry!"
+    assert _strip_emoji("Nothing to cancel (・_・)") == "Nothing to cancel"
+    assert _strip_emoji("shrug ¯\\_(ツ)_/¯ done") != ""  # must not crash
+
+
+def test_strip_emoji_preserves_degrees_and_parens() -> None:
+    from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
+
+    assert _strip_emoji("It is 21°C outside.") == "It is 21°C outside."
+    assert _strip_emoji("Timer (eval) is running.") == "Timer (eval) is running."
+
+
+# ── v0.9.32: follow-up honoured on voice; per-device feedback guard ──────────
+
+
+def _entity_for_continue(options: dict, reply="ok"):
+    entity = object.__new__(
+        __import__(
+            "custom_components.ai_plugin.conversation", fromlist=["x"]
+        ).AIPluginConversationEntity
+    )
+    entity._entry = _make_mock_entry(
+        options={CONF_BASE_URL: "http://x/v1", CONF_MODEL: "m", **options}
+    )
+    entity._attr_unique_id = "test"
+    mock_orch = MagicMock()
+    mock_orch.async_process = AsyncMock(return_value=reply)
+    mock_orch.is_voice_device = MagicMock(return_value=True)
+    entity._orchestrator = mock_orch
+    return entity
+
+
+def _voice_input(text="hello", device_id="satdev"):
+    from homeassistant.components.conversation import ConversationInput
+    from homeassistant.core import Context
+
+    return ConversationInput(
+        text=text, context=Context(), conversation_id="c",
+        device_id=device_id, language="en", agent_id=None,
+    )
+
+
+async def test_voice_satellite_honours_follow_up_toggle() -> None:
+    entity = _entity_for_continue({})  # continue_conversation defaults True
+    result = await entity.async_process(_voice_input())
+    assert result.continue_conversation is True
+
+
+async def test_feedback_guard_device_force_ends() -> None:
+    entity = _entity_for_continue({"feedback_loop_devices": ["satdev"]})
+    result = await entity.async_process(_voice_input())
+    assert result.continue_conversation is False
+
+
+async def test_close_phrase_still_ends_on_voice() -> None:
+    entity = _entity_for_continue({})
+    result = await entity.async_process(_voice_input(text="thanks jarvis"))
+    assert result.continue_conversation is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Orchestrator: action commands must never be confirmed without a tool call
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _provider_saying(text: str) -> MagicMock:
+    """Provider that always answers with prose and never calls a tool."""
+    from custom_components.ai_plugin.providers import ChatResponse
+
+    provider = MagicMock()
+    provider.async_chat = AsyncMock(
+        return_value=ChatResponse(content=text, tool_calls=[])
+    )
+    provider.async_complete = AsyncMock(return_value=text)
+    return provider
+
+
+def _orch_with_actuator_tools() -> tuple[Orchestrator, MagicMock]:
+    """Baseline orchestrator whose ha_local exposes one actuator schema."""
+    orch = _baseline_orch()
+    ha_local = MagicMock()
+    ha_local.get_schemas.return_value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_area_state",
+                "description": "sweep",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    ha_local.tool_names = ("set_area_state",)
+    ha_local.call_tool = AsyncMock(return_value="OK")
+    orch._ha_local = ha_local
+    return orch, ha_local
+
+
+async def test_promise_without_tool_call_is_replaced_with_failure_notice() -> None:
+    """The exact observed failure: a spoken promise while nothing happened.
+
+    qwen3.5:9b answered " Switch all lights off." with "I'll turn off all
+    the lights in your home now!" and called no tool, so the user heard a
+    confirmation while every lamp stayed on.
+    """
+    from custom_components.ai_plugin.i18n import L
+
+    orch, _ = _orch_with_actuator_tools()
+    orch._provider = _provider_saying(
+        "I'll turn off all the lights in your home now!"
+    )
+
+    reply = await orch.async_process(
+        message="Switch all lights off.",
+        conversation_id="conv-promise",
+        language="en",
+    )
+
+    assert reply == L.template("err_action_failed", "en")
+    # The grounding retry must have been attempted before giving up.
+    assert orch._provider.async_chat.await_count >= 2
+
+
+async def test_informative_reply_without_tool_call_is_kept() -> None:
+    """A truthful 'can't find it' answer is not a promise — keep it."""
+    orch, _ = _orch_with_actuator_tools()
+    orch._provider = _provider_saying(
+        "There is no device called kettle in the bedroom."
+    )
+
+    reply = await orch.async_process(
+        message="turn the kettle off",
+        conversation_id="conv-informative",
+        language="en",
+    )
+
+    assert reply == "There is no device called kettle in the bedroom."

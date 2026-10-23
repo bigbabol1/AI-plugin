@@ -1,0 +1,70 @@
+meta:
+  code: "nl"
+  name: "Nederlands"
+  contributors: []
+
+# The nine sensor labels are capitalized because every template that uses
+# them puts them first in the sentence; the three sweep labels stay
+# lowercase because theirs sit mid-sentence ("alle lampen zijn uit").
+labels:
+  temperature: "Temperatuur"
+  humidity: "Luchtvochtigheid"
+  co2: "CO₂"
+  illuminance: "Lichtsterkte"
+  pressure: "Luchtdruk"
+  power: "Vermogen"
+  energy: "Energieverbruik"
+  battery: "Batterijniveau"
+  brightness: "Helderheid"
+  lights: "lampen"
+  fans: "ventilatoren"
+  switches: "schakelaars"
+
+# Sensor readouts carry no article on purpose: Dutch labels split over
+# de-words (de temperatuur) and het-words (het vermogen), so a fixed "De
+# {label}" would be wrong for half of them. Article-free is correct for both
+# genders and is the normal register for reading a value out loud.
+templates:
+  attr_state:        "{label} is {val}{unit}."
+  attr_pct:          "{label} is {val}%."
+  attr_humidity_fb:  "{label} is {val}%."
+  sun_set_at:        "De zon gaat onder om {time}."
+  sun_rise_at:       "De zon komt op om {time}."
+  sun_is_up:         "De zon is op. De zon gaat onder om {time}."
+  sun_is_down:       "De zon is onder. De zon komt op om {time}."
+  err_no_answer:     "Daar heb ik nu geen antwoord op. Probeer het anders te formuleren."
+  err_process:       "Sorry, dat kon ik niet verwerken."
+  err_action_failed: "Dat kon ik niet uitvoeren. Noem het apparaat of de kamer."
+  sweep_all_on:  "OK, alle {label} zijn aan."
+  sweep_all_off: "OK, alle {label} zijn uit."
+  note_tool_limit:   "[Let op: limiet voor tool-aanroepen bereikt — het antwoord kan onvolledig zijn.]"
+
+  time_is:           "Het is {time}."
+  timer_done:        "De timer is afgelopen."
+  timer_done_named:  "De timer {label} is afgelopen."
+keywords:
+  time_now:      ["hoe laat is het", "wat is de tijd", "zeg me de tijd", "hoe laat"]
+  sun_set:       ["zonsondergang", "wanneer gaat de zon onder", "hoe laat gaat de zon onder", "wanneer is zonsondergang", "wanneer wordt het donker"]
+  sun_rise:      ["zonsopkomst", "zonsopgang", "wanneer komt de zon op", "hoe laat komt de zon op", "wanneer is zonsopkomst"]
+  sun_dark:      ["is het donker buiten", "is het donker", "is het licht buiten"]
+  sun_is_up:     ["is de zon op", "staat de zon op"]
+  narration:     ["ik controleer", "ik kijk even", "ik ga kijken", "ik ga controleren", "even kijken", "ik zoek"]
+
+patterns:
+  narration_full: []
+  action_on:
+    - '^(?:doe|zet|schakel|draai)\s+(?:de\s+|het\s+|een\s+)?(?P<name>.+?)\s+(?:aan|in)$'
+    - '^activeer\s+(?:de\s+|het\s+|een\s+)?(?P<name>.+?)$'
+    - '^(?P<name>.+?)\s+aan$'
+  action_off:
+    - '^(?:doe|zet|schakel|draai)\s+(?:de\s+|het\s+|een\s+)?(?P<name>.+?)\s+(?:uit|af)$'
+    - '^deactiveer\s+(?:de\s+|het\s+|een\s+)?(?P<name>.+?)$'
+    - '^(?P<name>.+?)\s+uit$'
+  action_open:
+    - '^(?:open|openen)\s+(?:de\s+|het\s+)?(?P<name>.+?)$'
+    - '^(?:doe|zet|trek)\s+(?:de\s+|het\s+)?(?P<name>.+?)\s+open$'
+    - '^(?P<name>.+?)\s+(?:openen|omhoog)$'
+  action_close:
+    - '^(?:sluit|sluiten)\s+(?:de\s+|het\s+)?(?P<name>.+?)$'
+    - '^(?:doe|zet|trek)\s+(?:de\s+|het\s+)?(?P<name>.+?)\s+(?:dicht|toe)$'
+    - '^(?P<name>.+?)\s+(?:sluiten|dicht|omlaag)$'

@@ -1,0 +1,61 @@
+meta:
+  code: "de"
+  name: "Deutsch"
+  contributors: []
+
+labels:
+  temperature: "Temperatur"
+  humidity: "Luftfeuchtigkeit"
+  co2: "CO₂"
+  illuminance: "Helligkeit"
+  pressure: "Luftdruck"
+  power: "Leistung"
+  energy: "Energieverbrauch"
+  battery: "Batterieladung"
+  brightness: "Helligkeit"
+  lights: "Lichter"
+  fans: "Ventilatoren"
+  switches: "Schalter"
+
+templates:
+  attr_state:        "Die {label} ist {val}{unit}."
+  attr_pct:          "Die {label} liegt bei {val}%."
+  attr_humidity_fb:  "Die {label} ist {val}%."
+  sun_set_at:        "Sonnenuntergang ist um {time}."
+  sun_rise_at:       "Sonnenaufgang ist um {time}."
+  sun_is_up:         "Die Sonne ist oben. Sonnenuntergang ist um {time}."
+  sun_is_down:       "Die Sonne ist unten. Sonnenaufgang ist um {time}."
+  err_no_answer:     "Darauf habe ich gerade keine Antwort. Bitte formuliere es anders."
+  err_process:       "Entschuldigung, das konnte ich nicht verarbeiten."
+  err_action_failed: "Das konnte ich nicht ausführen. Nenne bitte das Gerät oder den Raum."
+  sweep_all_on:  "OK, alle {label} sind an."
+  sweep_all_off: "OK, alle {label} sind aus."
+  note_tool_limit:   "[Hinweis: Werkzeuglimit erreicht — die Antwort ist möglicherweise unvollständig.]"
+
+  time_is:           "Es ist {time} Uhr."
+  timer_done:        "Der Timer ist abgelaufen."
+  timer_done_named:  "Der Timer {label} ist abgelaufen."
+keywords:
+  time_now:      ["wie spät ist es", "wie viel uhr ist es", "wieviel uhr ist es", "sag mir die uhrzeit", "wie spät"]
+  sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]
+  sun_rise:      ["sonnenaufgang", "wann geht die sonne auf", "wann ist sonnenaufgang"]
+  sun_dark:      ["ist es dunkel", "ist es hell"]
+  sun_is_up:     ["ist die sonne oben", "ist die sonne auf"]
+  narration:     ["ich prüfe", "ich überprüfe", "ich checke", "ich suche nach", "ich schaue", "ich sehe nach", "ich frage"]
+
+patterns:
+  narration_full: []
+  action_on:
+    - '^(?:schalte|mach|stell|stelle|dreh|drehe)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+(?:ein|an)$'
+    - '^(?P<name>.+?)\s+(?:ein|an)$'
+  action_off:
+    - '^(?:schalte|mach|stell|stelle|dreh|drehe)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+aus$'
+    - '^(?P<name>.+?)\s+aus$'
+  action_open:
+    - '^(?:öffne|oeffne)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)$'
+    - '^mach(?:e)?\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+auf$'
+    - '^(?P<name>.+?)\s+(?:öffnen|aufmachen|hoch(?:fahren)?)$'
+  action_close:
+    - '^(?:schließe|schliesse)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)$'
+    - '^mach(?:e)?\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+zu$'
+    - '^(?P<name>.+?)\s+(?:schließen|schliessen|zumachen|runter(?:fahren)?)$'

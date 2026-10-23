@@ -1,0 +1,16 @@
+# Single source of truth for test deps — CI installs exactly this file.
+# The suite runs against stubbed homeassistant modules (tests/conftest.py),
+# so the real homeassistant package / pytest-homeassistant-custom-component
+# is NOT required.
+pytest
+pytest-asyncio
+aiohttp
+httpx
+voluptuous
+PyYAML
+# Pinned below 2.x: mcp 2.0 removed mcp.client.streamable_http.
+# streamablehttp_client, which tools/mcp_client.py imports at module
+# scope — so an unpinned install fails COLLECTION of the whole
+# tests/components/ai_plugin package, not just the MCP tests. Every CI
+# run since mcp 2.x shipped was red for this reason alone.
+mcp>=1.0.0,<2

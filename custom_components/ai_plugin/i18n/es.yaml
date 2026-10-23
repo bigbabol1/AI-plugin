@@ -1,0 +1,55 @@
+meta:
+  code: "es"
+  name: "Español"
+  contributors: []
+
+labels:
+  temperature: "temperatura"
+  humidity: "humedad"
+  co2: "CO₂"
+  illuminance: "iluminación"
+  pressure: "presión"
+  power: "potencia"
+  energy: "consumo"
+  battery: "batería"
+  brightness: "brillo"
+  lights: "luces"
+  fans: "ventiladores"
+  switches: "enchufes"
+
+templates:
+  attr_state:        "La {label} es {val}{unit}."
+  attr_pct:          "La {label} está al {val}%."
+  attr_humidity_fb:  "La {label} es {val}%."
+  sun_set_at:        "El sol se pone a las {time}."
+  sun_rise_at:       "El sol sale a las {time}."
+  sun_is_up:         "El sol está alto. Se pone a las {time}."
+  sun_is_down:       "El sol está bajo. Sale a las {time}."
+  err_no_answer:     "No pude generar una respuesta. Intenta reformularla."
+  err_process:       "Lo siento, no pude procesar eso."
+  err_action_failed: "No pude ejecutar eso. Indica el dispositivo o la habitación."
+  sweep_all_on:  "Listo, todo encendido."
+  sweep_all_off: "Listo, todo apagado."
+  note_tool_limit:   "[Nota: se alcanzó el límite de herramientas — la respuesta puede estar incompleta.]"
+
+  time_is:           "Son las {time}."
+  timer_done:        "El temporizador ha terminado."
+  timer_done_named:  "El temporizador {label} ha terminado."
+keywords:
+  time_now:      ["qué hora es", "que hora es", "dime la hora"]
+  sun_set:       ["puesta de sol", "cuándo se pone el sol", "a qué hora se pone el sol"]
+  sun_rise:      ["amanecer", "cuándo sale el sol", "a qué hora sale el sol"]
+  sun_dark:      ["está oscuro", "está claro"]
+  sun_is_up:     ["el sol está alto"]
+  narration:     ["estoy verificando", "estoy comprobando", "estoy buscando", "voy a verificar", "voy a comprobar"]
+
+patterns:
+  narration_full: []
+  action_on:
+    - '^(?:enciende|encender|prende|prender|activa|activar)\s+(?:el|la|los|las|un|una)?\s*(?P<name>.+?)$'
+  action_off:
+    - '^(?:apaga|apagar|apague|desactiva|desactivar)\s+(?:el|la|los|las)?\s*(?P<name>.+?)$'
+  action_open:
+    - '^(?:abre|abrir)\s+(?:el\s+|la\s+|los\s+|las\s+)?(?P<name>.+?)$'
+  action_close:
+    - '^(?:cierra|cerrar)\s+(?:el\s+|la\s+|los\s+|las\s+)?(?P<name>.+?)$'

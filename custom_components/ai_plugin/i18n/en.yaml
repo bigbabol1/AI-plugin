@@ -1,0 +1,62 @@
+meta:
+  code: "en"
+  name: "English"
+  contributors: []
+
+labels:
+  temperature: "temperature"
+  humidity: "humidity"
+  co2: "CO₂"
+  illuminance: "illuminance"
+  pressure: "pressure"
+  power: "power"
+  energy: "energy"
+  battery: "battery"
+  brightness: "brightness"
+  lights: "lights"
+  fans: "fans"
+  switches: "switches"
+
+templates:
+  attr_state:        "The {label} is {val}{unit}."
+  attr_pct:          "The {label} is {val}%."
+  attr_humidity_fb:  "The {label} is {val}%."
+  sun_set_at:        "Sunset is at {time}."
+  sun_rise_at:       "Sunrise is at {time}."
+  sun_is_up:         "The sun is up. Sunset is at {time}."
+  sun_is_down:       "The sun is down. Sunrise is at {time}."
+  err_no_answer:     "I couldn't produce an answer for that. Try rephrasing."
+  err_process:       "Sorry, I couldn't process that."
+  err_action_failed: "I couldn't carry that out. Try naming the device or the room."
+  sweep_all_on:  "OK, all {label} are on."
+  sweep_all_off: "OK, all {label} are off."
+  note_tool_limit:   "[Note: reached tool call limit — response may be incomplete.]"
+
+  time_is:           "It is {time}."
+  timer_done:        "Timer is up."
+  timer_done_named:  "Timer {label} is up."
+keywords:
+  time_now:      ["what time is it", "what is the time", "what's the time", "tell me the time", "current time"]
+  sun_set:       ["when is sunset", "sunset", "when does the sun set", "when does the sun go down", "when does it get dark"]
+  sun_rise:      ["when is sunrise", "sunrise", "when does the sun rise", "when does the sun come up"]
+  sun_dark:      ["is it dark outside", "is it light outside"]
+  sun_is_up:     ["is the sun up", "is the sun out"]
+  narration:     ["i'm checking", "i am checking", "i'm looking", "i'm finding", "i'm searching"]
+
+patterns:
+  narration_full: []
+  # Single named-device on/off (deterministic, bypasses the LLM). Each
+  # regex must capture the device as (?P<name>...). Compiled IGNORECASE.
+  action_on:
+    - '^(?:turn|switch|flip|put)\s+on\s+(?:the\s+|a\s+)?(?P<name>.+?)$'
+    - '^(?:turn|switch|flip|put)\s+(?:the\s+|a\s+)?(?P<name>.+?)\s+on$'
+    - '^(?P<name>.+?)\s+on$'
+  action_off:
+    - '^(?:turn|switch|flip|put)\s+off\s+(?:the\s+|a\s+)?(?P<name>.+?)$'
+    - '^(?:turn|switch|flip|put)\s+(?:the\s+|a\s+)?(?P<name>.+?)\s+off$'
+    - '^(?P<name>.+?)\s+off$'
+  # Cover open/close for a single named cover (blinds, shutters, garage).
+  action_open:
+    - '^(?:open|raise)\s+(?:the\s+|a\s+)?(?P<name>.+?)$'
+  action_close:
+    - '^(?:close|shut|lower)\s+(?:the\s+|a\s+)?(?P<name>.+?)$'

@@ -1,0 +1,538 @@
+"""Web search tool for AI Plugin.
+
+Exposes a single `web_search` function-calling tool to the LLM across
+four backends, selectable in the Advanced config step.
+
+Backend comparison
+──────────────────
+  DuckDuckGo  — zero config; unofficial HTML endpoint; may hit CAPTCHAs
+  Brave       — official REST API; free tier: 2 000 req/month; API key required
+  SearXNG     — self-hosted; unlimited; most reliable; URL required
+  Tavily      — official REST API; free tier: 1 000 req/month; API key required
+
+Default: DuckDuckGo.  The config UI labels it "Free (may be unreliable)"
+so users understand the trade-off and can switch to Brave / SearXNG.
+
+When a backend fails (network, CAPTCHA, quota) the tool returns a
+human-readable apology string rather than raising — the LLM can relay
+it gracefully and the conversation continues.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from datetime import date as _date
+from typing import Any
+from urllib.parse import quote_plus, unquote
+
+import aiohttp
+
+from ..const import (
+    BACKEND_BRAVE,
+    BACKEND_SEARXNG,
+    BACKEND_TAVILY,
+    CONF_BRAVE_API_KEY,
+    CONF_MAX_RESULTS,
+    CONF_SEARXNG_URL,
+    CONF_TAVILY_API_KEY,
+    CONF_WEB_SEARCH_BACKEND,
+    DEFAULT_MAX_RESULTS,
+    DEFAULT_WEB_SEARCH_BACKEND,
+)
+from ._locality_tokens import matches_locality
+
+_LOGGER = logging.getLogger(__name__)
+
+# OpenAI function-calling schema for the web_search tool.
+TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the web for current information. Use when the user asks about "
+            "recent events, news, live data, or anything not likely in your training data."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to look up.",
+                },
+                "near_user": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true when the question is about the user's "
+                        "immediate vicinity — local weather, nearby events, "
+                        "restaurants around me, things to do here, etc. "
+                        "The plugin will scope the search to the user's home "
+                        "area automatically. Leave false for global topics."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+_FALLBACK_MSG = (
+    "Web search temporarily unavailable — try a different backend in AI Plugin settings."
+)
+_REQUEST_TIMEOUT = 10  # seconds
+
+
+class WebSearchTool:
+    """Provider-agnostic web search. One instance per config entry."""
+
+    def __init__(self, options: dict[str, Any]) -> None:
+        self._backend: str = options.get(CONF_WEB_SEARCH_BACKEND, DEFAULT_WEB_SEARCH_BACKEND)
+        self._brave_key: str | None = options.get(CONF_BRAVE_API_KEY) or None
+        self._searxng_url: str | None = options.get(CONF_SEARXNG_URL) or None
+        self._tavily_key: str | None = options.get(CONF_TAVILY_API_KEY) or None
+        self._max_results: int = int(options.get(CONF_MAX_RESULTS, DEFAULT_MAX_RESULTS))
+        self._session: aiohttp.ClientSession | None = None
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Reuse one session across searches — a fresh session per call paid
+        a new TCP+TLS handshake on every search, straight into voice latency."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def async_close(self) -> None:
+        """Close the shared session. Called by the orchestrator on unload."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    async def async_search(
+        self,
+        query: str,
+        strip_urls: bool = False,
+        near_user: bool = False,
+        location: dict[str, Any] | None = None,
+        language: str | None = None,
+    ) -> str:
+        """Run a web search and return a formatted result string.
+
+        ``strip_urls`` omits URL lines from the formatted output. Set to
+        ``True`` for voice/TTS callers so spoken responses don't include
+        raw web addresses.
+
+        ``near_user`` is the LLM-driven location-bias flag (added in the
+        tool schema). When true — or when the query contains a known
+        locality token (``language``-aware fallback) — and ``location``
+        is provided and the query does not already name a place, the
+        best resolved place label is appended to the query before it is
+        sent to the backend. This eliminates the "events nearby →
+        Texas" hallucination class without forcing every install to
+        configure a location.
+
+        Never raises — returns a graceful error string on backend
+        failure.
+        """
+        scoped_query = _maybe_inject_location(
+            query=query,
+            near_user=near_user,
+            location=location,
+            language=language,
+        )
+        scoped_query = _maybe_inject_date(scoped_query)
+        _LOGGER.debug(
+            "WebSearchTool: backend=%s query=%r scoped=%r near_user=%s strip_urls=%s",
+            self._backend, query, scoped_query, near_user, strip_urls,
+        )
+        try:
+            if self._backend == BACKEND_BRAVE:
+                result = await self._search_brave(scoped_query)
+            elif self._backend == BACKEND_SEARXNG:
+                result = await self._search_searxng(scoped_query)
+            elif self._backend == BACKEND_TAVILY:
+                result = await self._search_tavily(scoped_query)
+            else:
+                result = await self._search_duckduckgo(scoped_query)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("WebSearchTool: search failed (%s): %s", self._backend, exc)
+            return _FALLBACK_MSG
+        if strip_urls:
+            result = _strip_url_lines(result)
+        return result
+
+    # ── DuckDuckGo ─────────────────────────────────────────────────────────────
+
+    async def _search_duckduckgo(self, query: str) -> str:
+        """Search DDG via Jina Reader proxy.
+
+        Jina fetches the DDG HTML page from its own servers, bypassing the
+        IP-based CAPTCHA that DDG applies to Docker/server addresses. No API
+        key, no extra dependencies — same aiohttp used everywhere else.
+        Falls back to direct HTML scrape if Jina is unreachable.
+        """
+        ddg_url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+        jina_url = f"https://r.jina.ai/{ddg_url}"
+        headers = {
+            "Accept": "text/plain",
+            "X-Return-Format": "markdown",
+        }
+        try:
+            session = self._get_session()
+            async with session.get(
+                jina_url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.debug("Jina DDG proxy returned %s, trying direct HTML", resp.status)
+                    return await self._search_duckduckgo_html(query)
+                markdown = await resp.text()
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("Jina DDG proxy failed: %s, trying direct HTML", exc)
+            return await self._search_duckduckgo_html(query)
+
+        results = _parse_jina_ddg_markdown(markdown, self._max_results)
+        if not results:
+            return await self._search_duckduckgo_html(query)
+        return _format_results(query, results)
+
+    async def _search_duckduckgo_html(self, query: str) -> str:
+        """Direct DDG Lite HTML scrape — fallback when Jina is unreachable."""
+        url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; AIPlugin/0.1; +https://github.com/bigbabol1/AI-plugin)",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            session = self._get_session()
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    return _FALLBACK_MSG
+                html = await resp.text()
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("DuckDuckGo HTML fallback failed: %s", exc)
+            return _FALLBACK_MSG
+
+        results = _parse_ddg_lite(html, self._max_results)
+        return _format_results(query, results) if results else _FALLBACK_MSG
+
+    # ── Brave Search ───────────────────────────────────────────────────────────
+
+    async def _search_brave(self, query: str) -> str:
+        if not self._brave_key:
+            return "Brave Search API key not configured — add it in AI Plugin settings."
+        url = "https://api.search.brave.com/res/v1/web/search"
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": self._brave_key,
+        }
+        params = {"q": query, "count": self._max_results, "result_filter": "web"}
+        session = self._get_session()
+        async with session.get(
+            url,
+            headers=headers,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+        ) as resp:
+            if resp.status == 401:
+                return "Brave Search: invalid API key — check AI Plugin settings."
+            if resp.status == 429:
+                return "Brave Search quota exceeded for today. Try again tomorrow."
+            resp.raise_for_status()
+            data = await resp.json()
+
+        items = data.get("web", {}).get("results", [])
+        results = [
+            {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("description", "")}
+            for r in items[: self._max_results]
+        ]
+        return _format_results(query, results) if results else _FALLBACK_MSG
+
+    # ── SearXNG ─────────────────────────────────────────────────────────────────
+
+    async def _search_searxng(self, query: str) -> str:
+        if not self._searxng_url:
+            return "SearXNG URL not configured — add it in AI Plugin settings."
+        base = self._searxng_url.rstrip("/")
+        url = f"{base}/search"
+        params = {
+            "q": query,
+            "format": "json",
+            "categories": "general",
+            "language": "en",
+        }
+        session = self._get_session()
+        async with session.get(
+            url,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+        ) as resp:
+            if resp.status != 200:
+                return _FALLBACK_MSG
+            data = await resp.json(content_type=None)
+
+        items = data.get("results", [])[: self._max_results]
+        results = [
+            {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
+            for r in items
+        ]
+        return _format_results(query, results) if results else _FALLBACK_MSG
+
+    # ── Tavily ─────────────────────────────────────────────────────────────────
+
+    async def _search_tavily(self, query: str) -> str:
+        if not self._tavily_key:
+            return "Tavily API key not configured — add it in AI Plugin settings."
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": self._tavily_key,
+            "query": query,
+            "max_results": self._max_results,
+        }
+        session = self._get_session()
+        async with session.post(
+            url,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+        ) as resp:
+            if resp.status == 401:
+                return "Tavily: invalid API key — check AI Plugin settings."
+            if resp.status == 429:
+                return "Tavily quota exceeded. Try again tomorrow."
+            resp.raise_for_status()
+            data = await resp.json()
+
+        items = data.get("results", [])[: self._max_results]
+        results = [
+            {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
+            for r in items
+        ]
+        return _format_results(query, results) if results else _FALLBACK_MSG
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+_JINA_DDG_HEADING_RE = re.compile(
+    r"^## \[([^\]]+)\]\(https://duckduckgo\.com/l/\?uddg=([^&)\s]+)",
+    re.MULTILINE,
+)
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+
+def _parse_jina_ddg_markdown(text: str, max_results: int) -> list[dict[str, str]]:
+    """Parse Jina-rendered DDG HTML markdown into result dicts.
+
+    DDG result headings have the form:
+      ## [Title](https://duckduckgo.com/l/?uddg=URL_ENCODED_REAL_URL&rut=...)
+    The snippet is the text block that follows until the next heading.
+    """
+    matches = list(_JINA_DDG_HEADING_RE.finditer(text))
+    results: list[dict[str, str]] = []
+    for i, m in enumerate(matches[:max_results]):
+        title = m.group(1).strip()
+        url = unquote(m.group(2))
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = text[start:end]
+        block = _MD_IMAGE_RE.sub("", block)
+        block = _MD_LINK_RE.sub(r"\1", block)
+        block = re.sub(r"https?://\S+", "", block)
+        snippet = " ".join(block.split())[:300]
+        results.append({"title": title, "url": url, "snippet": snippet})
+    return results
+
+
+def _parse_ddg_lite(html: str, max_results: int) -> list[dict[str, str]]:
+    """Extract search results from DuckDuckGo Lite HTML.
+
+    DDG Lite results appear in a table; each result row has a link with
+    class "result-link" and a snippet row.  We extract these with a light
+    regex — no third-party HTML parser needed.
+    """
+    results: list[dict[str, str]] = []
+    # Find all result links: <a class="result-link" href="...">title</a>
+    link_re = re.compile(
+        r'class="result-link"[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
+        re.IGNORECASE,
+    )
+    # Find snippets: <td class="result-snippet">...</td>
+    snippet_re = re.compile(
+        r'class="result-snippet"[^>]*>(.*?)</td>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    links = link_re.findall(html)
+    snippets = snippet_re.findall(html)
+
+    for i, (url, title) in enumerate(links[:max_results]):
+        snippet = re.sub(r"<[^>]+>", "", snippets[i]) if i < len(snippets) else ""
+        results.append({"title": title.strip(), "url": url, "snippet": snippet.strip()})
+
+    return results
+
+
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _strip_url_lines(text: str) -> str:
+    """Remove URL-only lines and inline URLs from a formatted result string.
+
+    Used for voice/TTS callers. Drops any line whose only non-whitespace
+    content is an http(s) URL (the ``   {url}`` lines emitted by
+    ``_format_results``) and scrubs stray URLs inside snippet lines.
+    """
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and _URL_RE.fullmatch(stripped):
+            continue
+        kept.append(_URL_RE.sub("", line).rstrip())
+    return "\n".join(kept)
+
+
+def _format_results(query: str, results: list[dict[str, str]]) -> str:
+    """Format search results as a concise text block for the LLM."""
+    lines = [f'Web search results for "{query}":\n']
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. {r['title']}")
+        if r.get("url"):
+            lines.append(f"   {r['url']}")
+        if r.get("snippet"):
+            lines.append(f"   {r['snippet']}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+# ── Location-bias helpers ─────────────────────────────────────────────────────
+
+
+# A run of two or more capitalised letters that looks like a proper noun.
+# Anchored to a word boundary, lets through hyphenated names ("New York",
+# "Saint-Étienne"). Used as a heuristic to avoid double-locating queries
+# the user already pinned to a place ("events in Munich").
+_PLACE_TOKEN_RE = re.compile(
+    r"\b(?:in|at|near|around|a|à|en|im|nelle|na|w|i|v)\s+"
+    r"(?:[A-ZÄÖÜÅÆØÉÈÍÓÚÁÑ][\w'’\-]+(?:\s+[A-ZÄÖÜÅÆØÉÈÍÓÚÁÑ][\w'’\-]+)*)",
+    re.UNICODE,
+)
+
+
+def _has_place_token(query: str) -> bool:
+    """Return True when the query already pins itself to a named place.
+
+    Recognises preposition + Capitalised-Token sequences in several
+    languages (English in/at/near/around, German im, Spanish en, French
+    à/en, Italian a/in, Polish w, Czech v, Scandinavian i). Conservative
+    by design: false negatives (we add a redundant place to a query that
+    already had one) are merely noisy; false positives would mask the
+    Texas-class bug we are fixing.
+    """
+    if not query:
+        return False
+    return _PLACE_TOKEN_RE.search(query) is not None
+
+
+def _best_place_label(location: dict[str, Any] | None) -> str | None:
+    """Pick the most specific non-empty field from a resolved location.
+
+    Preference: ``"<city|region>, <country>"`` when both available
+    (disambiguates Berlin DE vs Berlin NY for search engines), else the
+    bare city/region/country, else a "lat,lon" coord string. Returns
+    ``None`` when nothing usable is available; callers must treat
+    ``None`` as "do not inject" rather than as a fallback.
+    """
+    if not location:
+        return None
+    country = location.get("country_name")
+    country_str = country.strip() if isinstance(country, str) and country.strip() else None
+    for key in ("city", "region"):
+        value = location.get(key)
+        if isinstance(value, str) and value.strip():
+            label = value.strip()
+            if country_str and country_str.lower() != label.lower():
+                return f"{label}, {country_str}"
+            return label
+    if country_str:
+        return country_str
+    lat = location.get("lat")
+    lon = location.get("lon")
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        return f"{lat:.4f},{lon:.4f}"
+    return None
+
+
+# Words/phrases that anchor a query to "now" or a recent window. When any
+# of these appear, we append today's ISO date so DDG returns dated articles
+# instead of evergreen index pages. Multilingual; conservative.
+_TEMPORAL_QUERY_RE = re.compile(
+    r"\b("
+    r"today|tonight|yesterday|last\s+night|this\s+morning|this\s+evening|"
+    r"this\s+week(?:end)?|last\s+week(?:end)?|this\s+month|last\s+month|"
+    r"right\s+now|at\s+the\s+moment|currently|current(?:ly)?|"
+    r"latest|recent(?:ly)?|breaking|just\s+(?:now|happened|announced)|"
+    r"happen(?:ed|ing)?|"
+    r"heute|gestern|heute\s+(?:nacht|abend|morgen)|"
+    r"diese[sn]?\s+wochenende?|letzte[sn]?\s+wochenende?|"
+    r"diese\s+woche|letzte\s+woche|diesen\s+monat|letzten\s+monat|"
+    r"gerade\s+(?:jetzt|eben)|im\s+moment|aktuell(?:e|er|es)?|"
+    r"neueste(?:n|s)?|nachrichten|passier(?:t|te)?"
+    r")\b",
+    re.IGNORECASE,
+)
+_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+
+
+def _maybe_inject_date(query: str) -> str:
+    """Append today's ISO date when query has a temporal anchor.
+
+    Search engines return evergreen pages for vague event queries
+    ("what happened in Berlin today"). Adding the explicit date forces
+    them to surface articles dated to the actual day.
+    Idempotent: skips when a date is already present.
+    """
+    if not query:
+        return query
+    if _DATE_RE.search(query):
+        return query
+    if not _TEMPORAL_QUERY_RE.search(query):
+        return query
+    return f"{query} {_date.today().isoformat()}"
+
+
+def _maybe_inject_location(
+    query: str,
+    near_user: bool,
+    location: dict[str, Any] | None,
+    language: str | None,
+) -> str:
+    """Append the user's place to the query when locality intent is detected.
+
+    Two-signal gate matches v0.5.44 hallucination-defence pattern:
+
+    * Intent: ``near_user=True`` (LLM flag) OR locality regex match.
+    * Safety: a place is resolved AND the query does not already pin
+      itself to a place.
+
+    Either signal alone is not enough. When neither fires, the query is
+    returned unchanged so global queries ("price of bitcoin") stay
+    global.
+    """
+    if not query:
+        return query
+    intent = bool(near_user) or matches_locality(query, language)
+    if not intent:
+        return query
+    place = _best_place_label(location)
+    if not place:
+        return query
+    if _has_place_token(query):
+        return query
+    # Idempotent: never append twice if the place is already present.
+    if place.lower() in query.lower():
+        return query
+    return f"{query} near {place}"

@@ -1,0 +1,55 @@
+meta:
+  code: "pl"
+  name: "Polski"
+  contributors: []
+
+labels:
+  temperature: "temperatura"
+  humidity: "wilgotność"
+  co2: "CO₂"
+  illuminance: "natężenie światła"
+  pressure: "ciśnienie"
+  power: "moc"
+  energy: "zużycie"
+  battery: "bateria"
+  brightness: "jasność"
+  lights: "światła"
+  fans: "wentylatory"
+  switches: "gniazdka"
+
+templates:
+  attr_state:        "{label} wynosi {val}{unit}."
+  attr_pct:          "{label} jest na poziomie {val}%."
+  attr_humidity_fb:  "{label} wynosi {val}%."
+  sun_set_at:        "Słońce zachodzi o {time}."
+  sun_rise_at:       "Słońce wschodzi o {time}."
+  sun_is_up:         "Słońce jest w górze. Zachód o {time}."
+  sun_is_down:       "Słońce jest pod horyzontem. Wschód o {time}."
+  err_no_answer:     "Nie udało mi się znaleźć odpowiedzi. Spróbuj przeformułować."
+  err_process:       "Przepraszam, nie mogłem tego przetworzyć."
+  err_action_failed: "Nie udało mi się tego wykonać. Podaj urządzenie lub pomieszczenie."
+  sweep_all_on:  "OK, wszystko włączone."
+  sweep_all_off: "OK, wszystko wyłączone."
+  note_tool_limit:   "[Uwaga: osiągnięto limit narzędzi — odpowiedź może być niepełna.]"
+
+  time_is:           "Jest {time}."
+  timer_done:        "Minutnik zakończył odliczanie."
+  timer_done_named:  "Minutnik {label} zakończył odliczanie."
+keywords:
+  time_now:      ["która jest godzina", "ktora jest godzina", "podaj godzinę"]
+  sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]
+  sun_rise:      ["wschód słońca", "kiedy wschodzi słońce", "o której wschodzi słońce"]
+  sun_dark:      ["jest ciemno", "jest jasno"]
+  sun_is_up:     ["czy słońce jest"]
+  narration:     ["sprawdzam", "szukam", "patrzę", "zaraz sprawdzę", "zaraz poszukam"]
+
+patterns:
+  narration_full: []
+  action_on:
+    - '^(?:włącz|wlacz|włączyć|wlaczyc|uruchom)\s+(?P<name>.+?)$'
+  action_off:
+    - '^(?:wyłącz|wylacz|wyłączyć|wylaczyc|zatrzymaj)\s+(?P<name>.+?)$'
+  action_open:
+    - '^(?:otwórz|otworz)\s+(?P<name>.+?)$'
+  action_close:
+    - '^(?:zamknij)\s+(?P<name>.+?)$'

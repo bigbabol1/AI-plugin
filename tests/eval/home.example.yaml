@@ -1,0 +1,14 @@
+# Per-install values for the eval harness. Copy to home.yaml (gitignored)
+# and fill in your own names — prompts.yaml references these placeholders.
+
+# base_url: http://homeassistant.local:8123   # or set HA_URL env var
+
+# Satellite device_id → requests run in voice mode (compact prompt,
+# TTS suppression on actuation). Find it in HA:
+# Developer tools → Template → {{ device_id('assist_satellite.your_satellite') }}
+# satellite_device_id: abc123...
+
+values:
+  # A harmless, always-available light for actuation tests.
+  test_light_name: mood light
+  test_light_entity: light.mood_light_leuchte
