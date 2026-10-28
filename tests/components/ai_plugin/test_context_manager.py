@@ -144,34 +144,104 @@ async def test_summarize_fires_when_over_soft_limit() -> None:
     # History should be shorter now (summary + recent turns)
     hist = cm.get_history("c")
     assert len(hist) < 12
-    # First message should be the summary
-    assert "Prior conversation summary:" in hist[0]["content"]
+    # First message should be the summary block
+    assert hist[0]["role"] == "system"
+    assert hist[0]["content"].startswith("[EARLIER CONVERSATION]")
+    assert "Summary of old messages." in hist[0]["content"]
+
+
+async def test_summary_reaches_the_model() -> None:
+    """Stored as an assistant message at the front, the summary was dropped
+    by get_messages as an orphan before every request."""
+    cm = ContextManager(max_tokens=200, tool_token_budget=0)
+    provider = MagicMock()
+    provider.async_complete = AsyncMock(return_value="The user asked about Ebow's concert.")
+    for _ in range(6):
+        await cm.add_turn("c", "user", "x" * 80)
+        await cm.add_turn("c", "assistant", "y" * 80)
+
+    await cm.summarize_if_needed("c", "s", provider)
+    msgs = await cm.get_messages("c", "s")
+    assert any("Ebow" in m["content"] for m in msgs[1:])
+    assert msgs[2]["role"] == "user"
 
 
 async def test_summarize_keeps_recent_turns() -> None:
-    """The most recent KEEP_RECENT_TURNS (4) full turns are preserved verbatim."""
-    cm = ContextManager(max_tokens=200, tool_token_budget=0)
+    """The newest turns are kept verbatim and whole, up to half the soft
+    limit; everything older goes into the summary."""
+    cm = ContextManager(max_tokens=400, tool_token_budget=0)
     system = "s"
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Old stuff summarized.")
 
-    # 6 turns total; most recent 4 should be kept
-    messages_added = []
     for i in range(6):
-        u = f"user msg {i}"
-        a = f"asst msg {i}"
-        await cm.add_turn("c", "user", u + "x" * 60)   # pad to push over limit
-        await cm.add_turn("c", "assistant", a + "x" * 60)
-        messages_added.append((u, a))
+        await cm.add_turn("c", "user", f"user msg {i} " + "x" * 60)
+        await cm.add_raw_message("c", {"role": "assistant", "content": None, "tool_calls": [{"id": f"t{i}"}]})
+        await cm.add_raw_message("c", {"role": "tool", "tool_call_id": f"t{i}", "content": "r" * 40})
+        await cm.add_turn("c", "assistant", f"asst msg {i} " + "x" * 60)
 
+    soft_limit, _ = cm._budget(system)
     await cm.summarize_if_needed("c", system, mock_provider)
 
     hist = cm.get_history("c")
-    # Last 4 turns = 8 messages should appear in history (after summary)
-    kept_contents = [m["content"] for m in hist[1:]]  # skip summary message
-    # The last 4 user messages should all be present
-    for u, a in messages_added[-4:]:
-        assert any(u in c for c in kept_contents), f"Missing: {u!r}"
+    kept = hist[1:]
+    assert kept[0]["role"] == "user"  # split at a turn start, never mid-turn
+    assert kept[-1]["content"].startswith("asst msg 5")
+    assert cm._estimate_messages_tokens(kept) <= soft_limit // 2
+    sent = mock_provider.async_complete.await_args.args[0]
+    assert any("user msg 0" in str(m.get("content")) for m in sent)
+    assert not any(m.get("role") == "tool" for m in sent)
+
+
+async def test_kept_turn_keeps_its_context_block() -> None:
+    cm = ContextManager(max_tokens=300, tool_token_budget=0)
+    provider = MagicMock()
+    provider.async_complete = AsyncMock(return_value="Earlier turns.")
+    for i in range(6):
+        await cm.add_turn("c", "user", f"question {i} " + "x" * 60)
+        await cm.add_before_last_user("c", {"role": "system", "content": f"[CURRENT TIME] {i}"})
+        await cm.add_turn("c", "assistant", f"answer {i} " + "y" * 60)
+
+    await cm.summarize_if_needed("c", "s", provider)
+    hist = cm.get_history("c")
+    assert hist[1]["content"].startswith("[CURRENT TIME]")
+    assert hist[2]["role"] == "user"
+    sent = provider.async_complete.await_args.args[0]
+    assert not any("[CURRENT TIME]" in str(m.get("content")) for m in sent)
+
+
+async def test_a_later_summary_folds_in_the_earlier_one() -> None:
+    cm = ContextManager(max_tokens=200, tool_token_budget=0)
+    provider = MagicMock()
+    provider.async_complete = AsyncMock(side_effect=["First summary.", "Second summary."])
+    for _ in range(6):
+        await cm.add_turn("c", "user", "x" * 80)
+        await cm.add_turn("c", "assistant", "y" * 80)
+    await cm.summarize_if_needed("c", "s", provider)
+    for _ in range(4):
+        await cm.add_turn("c", "user", "z" * 80)
+        await cm.add_turn("c", "assistant", "w" * 80)
+    await cm.summarize_if_needed("c", "s", provider)
+
+    sent = provider.async_complete.await_args.args[0]
+    assert any("First summary." in str(m.get("content")) for m in sent)
+    hist = cm.get_history("c")
+    assert "Second summary." in hist[0]["content"]
+    assert sum(m["content"].startswith("[EARLIER CONVERSATION]") for m in hist) == 1
+
+
+async def test_rollback_keeps_the_summary() -> None:
+    cm = ContextManager(max_tokens=200, tool_token_budget=0)
+    provider = MagicMock()
+    provider.async_complete = AsyncMock(return_value="Earlier turns.")
+    for _ in range(6):
+        await cm.add_turn("c", "user", "x" * 80)
+        await cm.add_turn("c", "assistant", "y" * 80)
+    await cm.summarize_if_needed("c", "s", provider)
+    cm._history["c"] = cm._history["c"][:1]
+    await cm.add_turn("c", "user", "new question")
+    await cm.remove_last_turn("c")
+    assert cm.get_history("c")[0]["content"].startswith("[EARLIER CONVERSATION]")
 
 
 async def test_summarize_failure_leaves_history_intact() -> None:
@@ -192,16 +262,14 @@ async def test_summarize_failure_leaves_history_intact() -> None:
 
 
 async def test_summarize_skips_when_too_few_messages() -> None:
-    """No summarization when there are too few messages to split."""
+    """A single turn over the limit has nothing older to summarize."""
     cm = ContextManager(max_tokens=200, tool_token_budget=0)
     system = "s"
     mock_provider = MagicMock()
     mock_provider.async_complete = AsyncMock(return_value="Summary.")
 
-    # Add only 4 turns (= 8 messages = KEEP_RECENT_TURNS * 2) — nothing to summarize
-    for _ in range(4):
-        await cm.add_turn("c", "user", "x" * 80)
-        await cm.add_turn("c", "assistant", "y" * 80)
+    await cm.add_turn("c", "user", "x" * 400)
+    await cm.add_turn("c", "assistant", "y" * 400)
 
     await cm.summarize_if_needed("c", system, mock_provider)
     mock_provider.async_complete.assert_not_awaited()
@@ -298,3 +366,58 @@ async def test_evict_idle_noop_when_all_fresh() -> None:
     await cm.add_turn("a", "user", "hi")
     assert cm.evict_idle() == []
     assert cm.get_history("a")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# per-turn context blocks kept in history
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def _two_turns_with_context(cm: ContextManager) -> None:
+    for n in (1, 2):
+        await cm.add_turn("c", "user", f"question {n}")
+        await cm.add_before_last_user("c", {"role": "system", "content": f"[CURRENT TIME] {n}"})
+        await cm.add_turn("c", "assistant", f"answer {n}")
+
+
+async def test_context_block_sits_before_its_user_turn() -> None:
+    cm = ContextManager(max_tokens=8192)
+    await _two_turns_with_context(cm)
+    msgs = await cm.get_messages("c", "sys")
+    assert [m["content"] for m in msgs[1:]] == [
+        "[CURRENT TIME] 1", "question 1", "answer 1",
+        "[CURRENT TIME] 2", "question 2", "answer 2",
+    ]
+
+
+async def test_rollback_takes_the_context_block_with_the_user_turn() -> None:
+    cm = ContextManager(max_tokens=8192)
+    await cm.add_turn("c", "user", "question 1")
+    await cm.add_before_last_user("c", {"role": "system", "content": "[CURRENT TIME] 1"})
+    await cm.remove_last_turn("c")
+    assert cm.get_history("c") == []
+
+
+async def test_trimming_never_starts_mid_turn() -> None:
+    """Whatever the budget, trimmed history opens with a user turn or the
+    context block sent with it, never with an answer or a lone block."""
+    for max_tokens in range(30, 140, 3):
+        cm = ContextManager(max_tokens=max_tokens, tool_token_budget=0)
+        await _two_turns_with_context(cm)
+        for _ in range(3):
+            await cm.add_turn("c", "user", "q" * 40)
+            await cm.add_before_last_user("c", {"role": "system", "content": "t" * 40})
+            await cm.add_turn("c", "assistant", "a" * 40)
+        history = (await cm.get_messages("c", "X"))[1:]
+        if not history:
+            continue
+        roles = [m["role"] for m in history]
+        assert roles[0] == "user" or roles[:2] == ["system", "user"], (max_tokens, roles)
+
+
+async def test_budget_report_counts_context_blocks_as_history() -> None:
+    cm = ContextManager(max_tokens=8192)
+    await _two_turns_with_context(cm)
+    msgs = await cm.get_messages("c", "sys")
+    report = cm.budget_report("sys", msgs, 0)
+    assert report["history"] == cm._estimate_messages_tokens(msgs[1:])

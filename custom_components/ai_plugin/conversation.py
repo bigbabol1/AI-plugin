@@ -381,6 +381,25 @@ def _is_tail_echo(stt_text: str, recent_replies: list[tuple[float, str]]) -> boo
     return False
 
 
+def _echo_candidates(recent_replies: list[tuple[float, str]]) -> list[str]:
+    """The replies a long turn may be an echo of.
+
+    The newest reply counts for the whole echo window: reverb and a reply
+    heard in several fragments arrive late. An older reply was followed by
+    another one, so it has finished playing; it counts only while it could
+    still be heard. Otherwise a user who repeats the agent's own question
+    back ("What would you like me to add to the shopping list?" → "Add to
+    the shopping list: butter") gets dropped as an echo of it (2026-10-27).
+    """
+    if not recent_replies:
+        return []
+    *older, (_age, newest) = recent_replies
+    return [
+        reply for age, reply in older
+        if age <= _tail_echo_deadline(len(_echo_tokens(reply)))
+    ] + [newest]
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -388,6 +407,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the AI Plugin conversation entity from a config entry."""
     entity = AIPluginConversationEntity(hass, config_entry)
+    # Voice enrollment started from the settings screen reuses the entity's
+    # delayed microphone reopen after speaking the first question.
+    hass.data.get(DOMAIN, {}).get(config_entry.entry_id, {})["conversation_entity"] = entity
     async_add_entities([entity])
 
 
@@ -504,6 +526,10 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         if store and device_id:
             store.pop(device_id, None)
 
+    def _enrollment_active(self, device_id: str | None) -> bool:
+        voice_id = getattr(self._orchestrator, "_voice_id", None)
+        return voice_id is not None and voice_id.enrollment_active(device_id) is True
+
     def _satellite_for_device(self, device_id: str | None) -> str | None:
         """assist_satellite entity of the calling device, if it can be reopened."""
         hass = getattr(self, "hass", None)
@@ -562,12 +588,14 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 if elapsed < estimated_end:
                     await asyncio.sleep(estimated_end - elapsed)
                     elapsed = estimated_end
+            quiet = False
             while elapsed < _PLAYBACK_WAIT_CAP_S:
                 # `elapsed` is the age of our reply, so only playback that
                 # started with it holds the microphone shut — a TV that was
                 # already running must not stall the follow-up forever. Once
                 # it stops, only a 1 s settle; the rest is the user's gap.
                 if not _reply_audio_active(hass, device_id, elapsed):
+                    quiet = True
                     break
                 await asyncio.sleep(_PLAYBACK_POLL_S)
                 elapsed += _PLAYBACK_POLL_S
@@ -584,6 +612,8 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 "AI Plugin: reopening %s for a follow-up (%.1fs after the room "
                 "went quiet)", satellite, delay,
             )
+            if quiet:
+                self._reopened_store()[device_id] = time.monotonic()
             await hass.services.async_call(
                 "assist_satellite",
                 "start_conversation",
@@ -619,6 +649,14 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         if store is None:
             store = {}
             self._follow_up_tasks = store
+        return store
+
+    def _reopened_store(self) -> dict[str, float]:
+        """When we last reopened each device's microphone into a quiet room."""
+        store = getattr(self, "_reopened_at", None)
+        if store is None:
+            store = {}
+            self._reopened_at = store
         return store
 
     def _follow_up_conv_store(self) -> dict[str, tuple[float, str]]:
@@ -667,7 +705,8 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         been playing, a speaker in the room was playing (or had just
         stopped), and the words are not something the user could plausibly
         have said. A recognisable command or a bare "yes" is never dropped
-        here, however the timing looks.
+        here, however the timing looks, and neither is a turn recorded on a
+        microphone we reopened once the room was quiet.
         """
         text = user_input.text or ""
         tokens = _echo_tokens(text)
@@ -675,6 +714,14 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             return False
         reply_age = self._last_reply_age(user_input.device_id)
         if reply_age is None:
+            return False
+        reopened = self._reopened_store().get(user_input.device_id)
+        if reopened is not None and time.monotonic() - reopened < reply_age:
+            # We opened this microphone ourselves, after every speaker in the
+            # room had gone quiet following our latest reply, so nothing it
+            # recorded can be that reply. The 6 s grace below still counted
+            # the speaker's stop: "Maybe the festival?", said 3.8 s after the
+            # reopen, was dropped and the conversation lost (2026-10-28).
             return False
         lang = (user_input.language or "en").split("-")[0].lower()
         if looks_like_command(text, lang):
@@ -738,13 +785,23 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         )
         is_echo = echo_filter and (
             _is_self_echo(
-                user_input.text, self._recent_replies_for(user_input.device_id)
+                user_input.text,
+                _echo_candidates(
+                    self._recent_replies_with_age(user_input.device_id)
+                ),
             )
             or _is_tail_echo(
                 user_input.text,
                 self._recent_replies_with_age(user_input.device_id),
             )
-            or self._is_playback_overlap_echo(user_input)
+            # During voice enrollment people answer the moment the question
+            # ends, while the speaker may still report playing: the
+            # playback-overlap guess dropped a real answer there (2026-10-24).
+            # The text-match checks above still catch genuine echoes.
+            or (
+                not self._enrollment_active(user_input.device_id)
+                and self._is_playback_overlap_echo(user_input)
+            )
         )
         if is_echo:
             _LOGGER.info(
@@ -822,6 +879,11 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             )
         else:
             continue_conversation = mode == FOLLOW_UP_ALWAYS
+        voice_id = getattr(self._orchestrator, "_voice_id", None)
+        if voice_id is not None and voice_id.wants_follow_up(user_input.device_id) is True:
+            # Voice enrollment is a question-and-answer session; keep the
+            # microphone open between questions. The guards below still apply.
+            continue_conversation = True
         # Satellites whose TTS is routed to a separate speaker (e.g. via
         # Mic to MediaPlayer) create an acoustic feedback loop: the mic
         # re-hears the spoken reply and re-recognises it as a new turn.
@@ -839,7 +901,14 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                     user_input.device_id,
                 )
             continue_conversation = False
-        close_match = _match_close_phrase(user_input.text)
+        # During voice enrollment the answers are free speech ("…no, that's
+        # all.") and the session has its own stop words, so a close phrase
+        # must not end it.
+        close_match = (
+            None
+            if self._enrollment_active(user_input.device_id)
+            else _match_close_phrase(user_input.text)
+        )
         if close_match is not None:
             _LOGGER.info(
                 "AI Plugin: close phrase '%s' detected in %r — ending conversation",
@@ -888,6 +957,11 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             conversation_id=conversation_id,
             continue_conversation=continue_conversation,
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Start keeping the voice prompt read in by the model."""
+        await super().async_added_to_hass()
+        self._orchestrator.async_start_warmup()
 
     async def async_will_remove_from_hass(self) -> None:
         """Close provider sessions when the entity is removed."""

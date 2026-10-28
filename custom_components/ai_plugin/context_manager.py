@@ -28,9 +28,10 @@ Concurrency
 
 Summarization
 ─────────────
-  When history_tokens > soft_limit we keep the most recent
-  KEEP_RECENT_TURNS (= 4) full turns intact and ask the LLM to
-  condense the rest into a single summary message.  If summarization
+  When history_tokens > soft_limit we keep the most recent whole
+  turns intact (up to half the soft limit, at least the last turn) and
+  ask the LLM to condense the rest into a single summary block, which
+  later summaries fold in.  If summarization
   fails (network error, model timeout) we log a warning and continue
   — the hard-limit truncation below is the safety net.
 """
@@ -47,14 +48,37 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Number of most-recent full turns (user + assistant pairs) to keep
-# verbatim when summarizing older history.
-_KEEP_RECENT_TURNS = 4
+# Share of the soft limit that the most recent whole turns may keep
+# verbatim when older history is summarized (at least the last turn is
+# always kept). A fixed count of 8 messages kept anything from one voice
+# turn with a web search (tool call, result, context block) to four chat
+# turns, and kept turns larger than the soft limit itself would make every
+# following turn summarize again.
+_KEEP_RECENT_SHARE = 0.5
+
+# Start of the summary block that replaces older history.
+_SUMMARY_HEADER = "[EARLIER CONVERSATION]\nSummary of this conversation so far: "
 
 # Conversations idle longer than this are evicted. HA Assist mints a fresh
 # conversation_id per session, so without eviction the per-conversation
 # history/lock dicts grow for the lifetime of the HA process.
 _IDLE_EVICT_SECONDS = 6 * 3600.0
+
+
+def _is_summary(message: dict) -> bool:
+    return message.get("role") == "system" and str(message.get("content", "")).startswith(
+        _SUMMARY_HEADER
+    )
+
+
+def _starts_turn(history: list[dict]) -> bool:
+    """True when history opens with a user turn, or with system blocks (an
+    earlier-conversation summary, the context block sent with the turn)
+    directly before one."""
+    for message in history:
+        if message.get("role") != "system":
+            return message.get("role") == "user"
+    return False
 
 
 class ContextManager:
@@ -143,8 +167,9 @@ class ContextManager:
         pct is history/available (0.0–1.0+); cap is self._max_tokens.
         """
         system_tokens = self.estimate_tokens(system_prompt)
-        # messages list includes the system message; skip it for history count.
-        history_msgs = [m for m in messages if m.get("role") != "system"]
+        # messages list starts with the system prompt; skip it for history
+        # count. Later system messages (per-turn context) are history.
+        history_msgs = messages[1:] if messages and messages[0].get("role") == "system" else messages
         history_tokens = self._estimate_messages_tokens(history_msgs)
         total = system_tokens + tool_schemas_tokens + history_tokens
         available = max(1, self._max_tokens - system_tokens - tool_schemas_tokens)
@@ -172,6 +197,21 @@ class ContextManager:
         async with self._get_lock(conv_id):
             self._last_used[conv_id] = time.monotonic()
             self._history.setdefault(conv_id, []).append(message)
+
+    async def add_before_last_user(self, conv_id: str, message: dict) -> None:
+        """Insert a message directly before the newest user turn.
+
+        Used for the per-turn context block, which must stay in history
+        where it was sent so later requests share the cached prefix.
+        """
+        async with self._get_lock(conv_id):
+            self._last_used[conv_id] = time.monotonic()
+            history = self._history.setdefault(conv_id, [])
+            for i in range(len(history) - 1, -1, -1):
+                if history[i].get("role") == "user":
+                    history.insert(i, message)
+                    return
+            history.append(message)
 
     def evict_idle(self, max_idle_seconds: float = _IDLE_EVICT_SECONDS) -> list[str]:
         """Drop state for conversations idle longer than max_idle_seconds.
@@ -213,11 +253,12 @@ class ContextManager:
             history = list(self._history.get(conv_id, []))
 
         # Hard limit: drop oldest messages until we fit.
-        # Drop from the front until the first user message so we never start
-        # with an orphaned tool or assistant message.
+        # Drop from the front until the first user message (or the context
+        # block sent with it) so we never start with an orphaned tool or
+        # assistant message.
         while history and self._estimate_messages_tokens(history) > hard_limit:
             history = history[1:]
-        while history and history[0].get("role") != "user":
+        while history and not _starts_turn(history):
             history = history[1:]
 
         return [{"role": "system", "content": system_prompt}, *history]
@@ -231,8 +272,9 @@ class ContextManager:
     ) -> None:
         """Summarize old turns when history approaches the soft token limit.
 
-        Keeps the _KEEP_RECENT_TURNS most-recent full turns verbatim and
-        replaces older turns with a single summary message.  Logs INFO
+        Keeps the most recent whole turns verbatim (as many as fit in
+        _KEEP_RECENT_SHARE of the soft limit, at least the last one) and
+        replaces older turns with a single summary block.  Logs INFO
         when triggered so users can correlate slower responses.
 
         If the LLM call for summarization fails, we log a warning and
@@ -248,17 +290,24 @@ class ContextManager:
         if history_tokens <= soft_limit:
             return  # Nothing to do.
 
-        keep_count = _KEEP_RECENT_TURNS * 2  # user+assistant pairs → messages
-        if len(history) <= keep_count:
-            return  # Not enough history to split; hard limit will handle it.
+        split = self._summary_split(history, int(soft_limit * _KEEP_RECENT_SHARE))
+        if split is None:
+            return  # Nothing older than the kept turns; hard limit will handle it.
 
-        to_summarize_raw = history[:-keep_count]
-        to_keep = history[-keep_count:]
-        # Summarizer uses async_complete (no tool support) — filter to text-only.
+        to_keep = history[split:]
+        # Summarizer uses async_complete (no tool support) — filter to text,
+        # carrying an earlier summary forward so its content is not lost.
         to_summarize = [
-            m for m in to_summarize_raw
-            if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)
+            m for m in history[:split]
+            if (
+                m.get("role") in ("user", "assistant")
+                and isinstance(m.get("content"), str)
+                and m["content"].strip()
+            )
+            or _is_summary(m)
         ]
+        if not any(m.get("role") == "user" for m in to_summarize):
+            return  # Only an earlier summary would be summarized again.
 
         _LOGGER.info(
             "AI Plugin: summarizing %d messages for conv_id=%s "
@@ -273,9 +322,12 @@ class ContextManager:
         if summary_text is None:
             return  # Summarization failed; hard limit is the safety net.
 
+        # A system block, like the per-turn context: stored as an assistant
+        # message at the front, get_messages dropped it as an orphan before
+        # every request, so no summary ever reached the model.
         summary_msg: dict[str, str] = {
-            "role": "assistant",
-            "content": f"Prior conversation summary: {summary_text}",
+            "role": "system",
+            "content": f"{_SUMMARY_HEADER}{summary_text.strip()}",
         }
 
         async with self._get_lock(conv_id):
@@ -283,6 +335,30 @@ class ContextManager:
             current = self._history.get(conv_id, [])
             if len(current) >= len(to_keep):
                 self._history[conv_id] = [summary_msg, *to_keep]
+
+    def _summary_split(self, history: list[dict], keep_tokens: int) -> int | None:
+        """Index where the kept recent turns begin, or None when nothing
+        older than them is left to summarize.
+
+        Splits only at turn starts (a user message, together with the
+        context block sent before it), so a kept turn never loses its
+        question, tool calls or context.
+        """
+        starts = []
+        for i, m in enumerate(history):
+            if m.get("role") != "user":
+                continue
+            if i > 0 and history[i - 1].get("role") == "system" and not _is_summary(history[i - 1]):
+                i -= 1
+            starts.append(i)
+        if not starts:
+            return None
+        split = starts[-1]
+        for start in reversed(starts[:-1]):
+            if self._estimate_messages_tokens(history[start:]) > keep_tokens:
+                break
+            split = start
+        return split if split > 0 else None
 
     async def remove_last_turn(self, conv_id: str) -> None:
         """Remove the last message from history (rollback on provider error).
@@ -293,6 +369,9 @@ class ContextManager:
         async with self._get_lock(conv_id):
             history = self._history.get(conv_id)
             if history:
+                history.pop()
+            # The user turn's context block goes with it.
+            if history and history[-1].get("role") == "system" and not _is_summary(history[-1]):
                 history.pop()
 
     async def clear(self, conv_id: str) -> None:

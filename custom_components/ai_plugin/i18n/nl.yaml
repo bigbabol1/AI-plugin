@@ -38,10 +38,17 @@ templates:
   sweep_all_on:  "OK, alle {label} zijn aan."
   sweep_all_off: "OK, alle {label} zijn uit."
   note_tool_limit:   "[Let op: limiet voor tool-aanroepen bereikt — het antwoord kan onvolledig zijn.]"
+  tool_wait:         "Een momentje."
 
   time_is:           "Het is {time}."
   timer_done:        "De timer is afgelopen."
   timer_done_named:  "De timer {label} is afgelopen."
+  phone_ringing:       "Ik laat je telefoon overgaan."
+  phone_ringing_named: "Ik laat de telefoon van {name} overgaan."
+  phone_seen_at:       "Home Assistant zag hem het laatst bij {place}."
+  phone_seen_away:     "Home Assistant zag hem het laatst buiten de deur."
+  phone_ring_text:     "Hier ben ik!"
+  phone_failed:        "Ik kon de telefoon niet bereiken."
 keywords:
   time_now:      ["hoe laat is het", "wat is de tijd", "zeg me de tijd", "hoe laat"]
   sun_set:       ["zonsondergang", "wanneer gaat de zon onder", "hoe laat gaat de zon onder", "wanneer is zonsondergang", "wanneer wordt het donker"]
@@ -68,3 +75,12 @@ patterns:
     - '^(?:sluit|sluiten)\s+(?:de\s+|het\s+)?(?P<name>.+?)$'
     - '^(?:doe|zet|trek)\s+(?:de\s+|het\s+)?(?P<name>.+?)\s+(?:dicht|toe)$'
     - '^(?P<name>.+?)\s+(?:sluiten|dicht|omlaag)$'
+  # "Where is my phone": rings it (Find my phone option). An optional
+  # (?P<owner>...) captures someone else's name; without it the phone is the speaker's.
+  find_phone:
+    - '^waar\s+(?:is|ligt|heb\s+ik)\s+mijn\s+(?:telefoon|mobiel|gsm|iphone|smartphone)(?:\s+(?:gelaten|gelegd))?$'
+    - '^(?:zoek|vind|bel)\s+mijn\s+(?:telefoon|mobiel|gsm|iphone|smartphone)$'
+    - '^laat\s+mijn\s+(?:telefoon|mobiel|gsm|iphone|smartphone)\s+(?:rinkelen|afgaan|overgaan)$'
+    - '^ik\s+kan\s+mijn\s+(?:telefoon|mobiel|gsm|iphone|smartphone)\s+niet\s+vinden$'
+    - '^(?:waar\s+is|zoek)\s+de\s+(?:telefoon|mobiel|gsm|iphone|smartphone)\s+van\s+(?P<owner>[\w\-]+)$'
+    - '^(?:waar\s+is|zoek)\s+(?P<owner>[\w\-]+?)(?:[\x27’]s|[\x27’])?\s+(?:telefoon|mobiel|gsm|iphone|smartphone)$'

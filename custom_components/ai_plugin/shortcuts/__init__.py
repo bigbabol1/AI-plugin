@@ -14,6 +14,7 @@ falls through to the LLM rather than guessing.
     media      playback, volume, mute
     actions    one named device on/off, open/close
     sweep      every light/fan/socket in a room or the whole home
+    phone      "where is my phone": ring a person's phone
     classify   is a short turn a real command, or our own TTS tail
 
 The names below are the surface other modules import; everything else is
@@ -25,13 +26,16 @@ from __future__ import annotations
 from .actions import async_try_action_shortcut
 from .classify import looks_like_command
 from .media import async_try_media_shortcut
+from .phone import async_ring_phone, match_find_phone
 from .sensors import try_shortcut
 from .sweep import async_try_domain_sweep_shortcut
 
 __all__ = [
     "async_try_action_shortcut",
+    "async_ring_phone",
     "async_try_domain_sweep_shortcut",
     "async_try_media_shortcut",
     "looks_like_command",
+    "match_find_phone",
     "try_shortcut",
 ]

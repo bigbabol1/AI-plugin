@@ -82,6 +82,9 @@ class EntityToolsMixin:
                 continue
             friendly = _s(ent_state.attributes.get("friendly_name")) if ent_state else ""
             friendly = friendly or _s(entry.name) or _s(entry.original_name) or entity_id
+            address = self._person_address(entity_id, ent_state, exposed_only)
+            if address:
+                state_val = f"{state_val}, last address: {address}"
             rows.append((entity_id, friendly, a_name or "-", state_val))
 
         if not rows:
@@ -198,6 +201,9 @@ class EntityToolsMixin:
             f"area: {area}",
             f"state: {state_val}",
         ]
+        address = self._person_address(entity_id, state, exposed_only)
+        if address:
+            lines.append(f"last address: {address}")
         if attrs:
             lines.append("attributes:")
             lines.extend(attrs)
@@ -321,6 +327,36 @@ class EntityToolsMixin:
             )
             return f"{head}\n{head_extra}\n" + "\n".join(other)
         return raw
+
+    def _person_address(self, entity_id: str, state, exposed_only: bool) -> str | None:
+        """The street address of a person who is not at home, or None.
+
+        The Companion app's "Geocoded location" sensor sits on the same
+        device as the person's GPS tracker, so the person's own trackers
+        lead to it. With exposed_only, the sensor must be exposed too:
+        exposing a person reveals whether they are home, not where they are.
+        """
+        if not entity_id.startswith("person.") or state is None or state.state == "home":
+            return None
+        ent_reg = er.async_get(self._hass)
+        devices = set()
+        for tracker in state.attributes.get("device_trackers") or ():
+            entry = ent_reg.async_get(tracker)
+            if entry is not None and entry.device_id:
+                devices.add(entry.device_id)
+        if not devices:
+            return None
+        for eid, entry in ent_reg.entities.items():
+            if not eid.startswith("sensor.") or entry.device_id not in devices:
+                continue
+            if not _s(getattr(entry, "unique_id", None)).endswith("_geocoded_location"):
+                continue
+            if exposed_only and not self._is_exposed(eid):
+                continue
+            sensor = self._hass.states.get(eid)
+            if sensor is not None and sensor.state not in ("", "unknown", "unavailable"):
+                return sensor.state
+        return None
 
     def _search_entities(
         self, query: str, limit: int = 10, exposed_only: bool = True

@@ -14,3 +14,7 @@ PyYAML
 # tests/components/ai_plugin package, not just the MCP tests. Every CI
 # run since mcp 2.x shipped was red for this reason alone.
 mcp>=1.0.0,<2
+# Voice recognition runs on numpy (an HA core dependency, so not in the
+# manifest). The full-model parity test additionally needs the model files
+# via AI_PLUGIN_VOICE_MODEL_DIR and is skipped without them.
+numpy

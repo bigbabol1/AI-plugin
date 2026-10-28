@@ -5,6 +5,7 @@
   Step  ─ web_search         as config step 3, plus searxng if selected
   Step  ─ advanced           as config step 4
   Step  ─ mcp_servers        add / edit / remove, in mcp_steps.py
+  Menu  ─ voice_id           voice recognition, in voice_id_steps.py
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from ..providers.openai_compat import (
 
 
 from .mcp_steps import MCPServerStepsMixin
+from .voice_id_steps import VoiceIDStepsMixin
 from .schemas import (
     _advanced_schema,
     _is_valid_url,
@@ -61,7 +63,7 @@ from .schemas import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class AIPluginOptionsFlow(MCPServerStepsMixin, config_entries.OptionsFlow):
+class AIPluginOptionsFlow(MCPServerStepsMixin, VoiceIDStepsMixin, config_entries.OptionsFlow):
     """Options flow: edit all non-credential settings post-install.
 
     Menu:
@@ -90,7 +92,7 @@ class AIPluginOptionsFlow(MCPServerStepsMixin, config_entries.OptionsFlow):
         """Show the top-level menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["provider_settings", "web_search", "advanced", "mcp_servers"],
+            menu_options=["provider_settings", "web_search", "advanced", "mcp_servers", "voice_id"],
         )
 
     # ── Provider settings ────────────────────────────────────────────────────

@@ -421,3 +421,27 @@ def test_model_capabilities_and_context_length_parsing() -> None:
     assert model_capabilities(None) is None
     assert model_context_length({"model_info": {}}) is None
     assert model_capabilities({"capabilities": "bogus"}) is None
+
+
+async def test_read_in_asks_for_one_token_with_the_turn_options() -> None:
+    provider = _make_ollama_provider("-1")
+    mock_resp = _mock_response(200, {"message": {"content": "o"}})
+    captured: dict = {}
+
+    def capturing_post(url, **kwargs):
+        captured.update(kwargs)
+        return mock_resp
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.post = capturing_post
+        assert await provider.async_warm([{"role": "user", "content": "."}]) is True
+    payload = captured["json"]
+    assert payload["options"]["num_predict"] == 1
+    assert payload["options"]["num_ctx"] == 8192
+    assert payload["keep_alive"] == -1
+
+
+async def test_read_in_is_skipped_on_servers_other_than_ollama() -> None:
+    provider = _make_ollama_provider(None)
+    provider._is_ollama = False
+    assert await provider.async_warm([{"role": "user", "content": "."}]) is None

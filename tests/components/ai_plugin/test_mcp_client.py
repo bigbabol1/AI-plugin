@@ -633,3 +633,130 @@ async def test_stderr_logged_at_warning_when_handshake_fails(caplog) -> None:
     assert stderr_records
     assert all(r.levelno == _logging.WARNING for r in stderr_records)
     assert "uvx mcp-server-time" in stderr_records[0].getMessage()
+
+
+async def test_registry_sends_a_tool_listed_twice_once() -> None:
+    """wikipedia-mcp lists every tool again with a "wikipedia_" prefix; the
+    prefixed copy is sent, the bare one dropped, and both names still route."""
+    registry = MCPToolRegistry([])
+    conn = MagicMock()
+    conn.state = _State.CONNECTED
+    conn.tools = [
+        _mock_tool("get_summary", "Get a summary of a Wikipedia article."),
+        _mock_tool("wikipedia_get_summary", "Get a summary of a Wikipedia article."),
+        _mock_tool("get_links", "Get the links in an article."),
+    ]
+    registry._servers = [conn]
+    registry._rebuild_tool_index()
+
+    names = [s["function"]["name"] for s in registry.get_tool_schemas()]
+    assert names == ["wikipedia_get_summary", "get_links"]
+    assert registry._tool_index["get_summary"] == (conn, "get_summary")
+
+
+async def test_registry_keeps_different_tools_with_the_same_description() -> None:
+    registry = MCPToolRegistry([])
+    conn = MagicMock()
+    conn.state = _State.CONNECTED
+    conn.tools = [_mock_tool("media_pause"), _mock_tool("media_next")]
+    registry._servers = [conn]
+
+    assert len(registry.get_tool_schemas()) == 2
+
+
+async def test_registry_keeps_a_prefixed_tool_with_other_parameters() -> None:
+    registry = MCPToolRegistry([])
+    conn = MagicMock()
+    conn.state = _State.CONNECTED
+    conn.tools = [
+        _mock_tool("search", "Search."),
+        _mock_tool("web_search", "Search.", {"type": "object", "properties": {"q": {}}}),
+    ]
+    registry._servers = [conn]
+
+    assert len(registry.get_tool_schemas()) == 2
+
+
+# ── Home Assistant's namespaced tool names ────────────────────────────────────
+
+
+def _connected(tools: list) -> MagicMock:
+    conn = MagicMock()
+    conn.state = _State.CONNECTED
+    conn.tools = tools
+    conn.call_tool = AsyncMock(return_value="ok")
+    return conn
+
+
+async def test_namespaced_tools_are_shown_bare_and_called_by_real_name() -> None:
+    """HA 2026 names tools intent__HassTurnOn; prompts and checks use HassTurnOn."""
+    registry = MCPToolRegistry([])
+    conn = _connected([
+        _mock_tool("intent__HassTurnOn", "on"),
+        _mock_tool("todo__HassListAddItem", "add"),
+        _mock_tool("get_time", "time"),
+    ])
+    registry._servers = [conn]
+
+    names = [s["function"]["name"] for s in registry.get_tool_schemas()]
+    assert names == ["HassTurnOn", "HassListAddItem", "get_time"]
+
+    await registry.call_tool("HassListAddItem", {"item": "butter"})
+    conn.call_tool.assert_awaited_once_with("todo__HassListAddItem", {"item": "butter"})
+    # The real name still routes.
+    await registry.call_tool("intent__HassTurnOn", {})
+    conn.call_tool.assert_awaited_with("intent__HassTurnOn", {})
+
+
+async def test_clashing_bare_names_keep_their_namespace() -> None:
+    registry = MCPToolRegistry([])
+    registry._servers = [_connected([
+        _mock_tool("fan__HassTurnOn", "a"),
+        _mock_tool("intent__HassTurnOn", "b"),
+        _mock_tool("intent__GetTime", "c"),
+        _mock_tool("GetTime", "d"),
+    ])]
+    names = [s["function"]["name"] for s in registry.get_tool_schemas()]
+    assert names == ["fan__HassTurnOn", "intent__HassTurnOn", "intent__GetTime", "GetTime"]
+
+
+async def test_refresh_picks_up_tools_added_after_connect() -> None:
+    """Exposing a to-do list adds HA's list tools to a live connection."""
+    conn = _MCPServerConnection({"transport": "http", "url": "http://x/api/mcp"})
+    conn._state = _State.CONNECTED
+    conn._tools = [_mock_tool("intent__HassTurnOn")]
+    session = MagicMock()
+    listing = MagicMock()
+    listing.tools = [_mock_tool("intent__HassTurnOn"), _mock_tool("todo__HassListAddItem")]
+    session.list_tools = AsyncMock(return_value=listing)
+    session.call_tool = AsyncMock(return_value=_mock_call_result("added"))
+    conn._session = session
+    registry = MCPToolRegistry([])
+    registry._servers = [conn]
+    registry._rebuild_tool_index()
+
+    await registry.async_refresh_tools()
+
+    names = [s["function"]["name"] for s in registry.get_tool_schemas()]
+    assert "HassListAddItem" in names
+    assert await registry.call_tool("HassListAddItem", {}) == "added"
+    session.call_tool.assert_awaited_once_with("todo__HassListAddItem", {})
+
+
+async def test_refresh_skips_servers_that_are_not_connected() -> None:
+    conn = _MCPServerConnection({"transport": "http", "url": "http://x/api/mcp"})
+    assert await conn.async_refresh_tools() is False
+
+
+def test_home_assistant_tools_are_told_apart_from_other_servers() -> None:
+    ha = _MCPServerConnection({"transport": "http", "url": "http://localhost:8123/api/mcp"})
+    ha._tools = [_mock_tool("intent__HassTurnOn")]
+    other = _MCPServerConnection({"transport": "stdio", "command": "uvx", "args": ["mcp-server-fetch"]})
+    other._tools = [_mock_tool("fetch")]
+    registry = MCPToolRegistry([])
+    registry._servers = [ha, other]
+    registry._rebuild_tool_index()
+    assert registry.is_home_assistant_tool("HassTurnOn")
+    assert registry.is_home_assistant_tool("intent__HassTurnOn")
+    assert not registry.is_home_assistant_tool("fetch")
+    assert not registry.is_home_assistant_tool("unknown")

@@ -63,9 +63,10 @@ _cfg_entries = _make_module(
 class _Platform:
     CONVERSATION = "conversation"
     AI_TASK = "ai_task"
+    STT = "stt"
 
 
-_make_module("homeassistant.const", Platform=_Platform)
+_make_module("homeassistant.const", Platform=_Platform, EVENT_STATE_CHANGED="state_changed")
 
 # ── homeassistant.exceptions ──────────────────────────────────────────────────
 
@@ -180,10 +181,149 @@ _conv_mod = _make_module(
     ChatLog=_StubChatLog,
     AssistantContent=_AssistantContent,
 )
+# ── homeassistant.components.stt ─────────────────────────────────────────────
+
+import enum as _enum
+from dataclasses import dataclass as _dataclass
+
+
+class _AudioFormats(str, _enum.Enum):
+    WAV = "wav"
+    OGG = "ogg"
+
+
+class _AudioCodecs(str, _enum.Enum):
+    PCM = "pcm"
+    OPUS = "opus"
+
+
+class _AudioBitRates(int, _enum.Enum):
+    BITRATE_8 = 8
+    BITRATE_16 = 16
+
+
+class _AudioSampleRates(int, _enum.Enum):
+    SAMPLERATE_8000 = 8000
+    SAMPLERATE_16000 = 16000
+
+
+class _AudioChannels(int, _enum.Enum):
+    CHANNEL_MONO = 1
+    CHANNEL_STEREO = 2
+
+
+class _SpeechResultState(str, _enum.Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+
+
+@_dataclass
+class _SpeechMetadata:
+    language: str
+    format: _AudioFormats
+    codec: _AudioCodecs
+    bit_rate: _AudioBitRates
+    sample_rate: _AudioSampleRates
+    channel: _AudioChannels
+
+
+@_dataclass
+class _SpeechResult:
+    text: str | None
+    result: _SpeechResultState
+
+
+@_dataclass
+class _SpeechAudioProcessing:
+    requires_external_vad: bool = True
+    prefers_auto_gain_enabled: bool = True
+    prefers_noise_reduction_enabled: bool = True
+
+
+class _SpeechToTextEntity:
+    @property
+    def audio_processing(self):
+        return _SpeechAudioProcessing()
+
+
+_stt_engines: dict = {}
+_stt_mod = _make_module(
+    "homeassistant.components.stt",
+    SpeechToTextEntity=_SpeechToTextEntity,
+    SpeechMetadata=_SpeechMetadata,
+    SpeechResult=_SpeechResult,
+    SpeechResultState=_SpeechResultState,
+    SpeechAudioProcessing=_SpeechAudioProcessing,
+    AudioFormats=_AudioFormats,
+    AudioCodecs=_AudioCodecs,
+    AudioBitRates=_AudioBitRates,
+    AudioSampleRates=_AudioSampleRates,
+    AudioChannels=_AudioChannels,
+    async_get_speech_to_text_engine=lambda hass, engine_id: _stt_engines.get(engine_id),
+    ENGINES=_stt_engines,
+)
+
+# ── homeassistant.components.assist_pipeline ─────────────────────────────────
+
+_pipeline_list: list = []
+
+
+async def _async_update_pipeline(hass, pipeline, **changes):
+    for key, val in changes.items():
+        setattr(pipeline, key, val)
+
+
+def _async_get_pipeline(hass, pipeline_id=None):
+    for p in _pipeline_list:
+        if pipeline_id is None or p.id == pipeline_id:
+            return p
+    raise KeyError(pipeline_id)
+
+
+_assist_pipeline_mod = _make_module(
+    "homeassistant.components.assist_pipeline",
+    async_get_pipelines=lambda hass: list(_pipeline_list),
+    async_get_pipeline=_async_get_pipeline,
+    async_update_pipeline=_async_update_pipeline,
+    PIPELINES=_pipeline_list,
+)
+
+# ── homeassistant.components.tts ──────────────────────────────────────────────
+
+
+class _ResultStream:
+    def __init__(self, engine, language, options):
+        self.engine, self.language, self.options = engine, language, options
+        self.message = None
+        self.url = f"/api/tts_proxy/{engine}-{language}.mp3"
+
+    def async_set_message(self, message):
+        self.message = message
+
+
+_tts_streams: list = []
+
+
+def _async_create_stream(hass, engine, language=None, options=None):
+    stream = _ResultStream(engine, language, options)
+    _tts_streams.append(stream)
+    return stream
+
+
+_tts_mod = _make_module(
+    "homeassistant.components.tts",
+    async_resolve_engine=lambda hass, engine: engine,
+    async_create_stream=_async_create_stream,
+    STREAMS=_tts_streams,
+)
+
 _make_module(
     "homeassistant.components",
+    tts=_tts_mod,
     conversation=_conv_mod,
     ai_task=_ai_task_mod,
+    stt=_stt_mod,
+    assist_pipeline=_assist_pipeline_mod,
 )
 
 # ── homeassistant.helpers.intent ─────────────────────────────────────────────
@@ -237,6 +377,32 @@ _ent_reg_mod = _make_module(
 
 _make_module("homeassistant.helpers.entity_platform", AddEntitiesCallback=object)
 
+# ── homeassistant.helpers.storage / aiohttp_client ───────────────────────────
+
+class _Store:
+    """In-memory Store stand-in."""
+
+    def __init__(self, hass=None, version=1, key="", **kw):
+        self.key = key
+        self.data = None
+
+    async def async_load(self):
+        return self.data
+
+    async def async_save(self, data):
+        import copy
+
+        self.data = copy.deepcopy(data)
+
+    async def async_remove(self):
+        self.data = None
+
+
+_storage_mod = _make_module("homeassistant.helpers.storage", Store=_Store)
+_aiohttp_client_mod = _make_module(
+    "homeassistant.helpers.aiohttp_client", async_get_clientsession=MagicMock()
+)
+
 # ── homeassistant.helpers ─────────────────────────────────────────────────────
 
 _helpers = _make_module(
@@ -245,6 +411,8 @@ _helpers = _make_module(
     area_registry=_area_reg_mod,
     entity_registry=_ent_reg_mod,
     device_registry=_dev_reg_mod,
+    storage=_storage_mod,
+    aiohttp_client=_aiohttp_client_mod,
 )
 
 # ── homeassistant.util.ulid ───────────────────────────────────────────────────
@@ -271,11 +439,22 @@ def _log_exception_noop(format_err, *args):  # noqa: ANN001
     pass
 
 _make_module("homeassistant.util.logging", log_exception=_log_exception_noop)
+
+
+def _slugify(text, *, separator="_"):  # noqa: ANN001
+    """Close enough to HA's slugify for tests: apostrophes vanish, the rest separates."""
+    import re as _re  # noqa: PLC0415
+
+    text = _re.sub(r"['’]", "", str(text or "").lower())
+    return _re.sub(r"[^a-z0-9]+", separator, text).strip(separator) or "unknown"
+
+
 _util_mod = _make_module(
     "homeassistant.util",
     ulid=sys.modules["homeassistant.util.ulid"],
     dt=sys.modules["homeassistant.util.dt"],
     logging=sys.modules["homeassistant.util.logging"],
+    slugify=_slugify,
 )
 
 # ── homeassistant.data_entry_flow ─────────────────────────────────────────────

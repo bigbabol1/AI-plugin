@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import date as _date
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,7 @@ from homeassistant.helpers import (
 from ..const import (
     CONF_CONTEXT_WINDOW,
     CONF_ENABLE_THINKING,
+    CONF_FIND_PHONE,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_SUMMARIZATION_ENABLED,
@@ -42,6 +44,7 @@ from ..const import (
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_ENABLE_THINKING,
+    DEFAULT_FIND_PHONE,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_SUMMARIZATION_ENABLED,
@@ -56,10 +59,26 @@ from ..shortcuts import (
     async_try_media_shortcut,
     try_shortcut,
 )
+from ..shortcuts.phone import (
+    RING_PHONE_SCHEMA,
+    RING_PHONE_TOOL,
+    async_ring_phone,
+    match_find_phone,
+    people_with_phones,
+    person_for_user,
+    resolve_owner,
+)
 from ..tools.ha_local import HALocalToolRegistry
-from ..tools.memory import TOOL_NAMES as MEMORY_TOOL_NAMES, TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS, MemoryTool
+from ..tools.memory import (
+    TOOL_NAMES as MEMORY_TOOL_NAMES,
+    TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS,
+    WRITE_TOOL_NAMES as MEMORY_WRITE_TOOLS,
+    MemoryTool,
+)
 from ..tools.web_search import TOOL_SCHEMA as WEB_SEARCH_SCHEMA, WebSearchTool
 from ..tools.browse_url import TOOL_SCHEMA as BROWSE_URL_SCHEMA, BrowseUrlTool
+from ..voice_id import VOICE_ENROLL_SCHEMA, VOICE_ENROLL_TOOL
+from .. import satellite_speech
 
 if TYPE_CHECKING:
     from ..providers.base import AbstractProvider
@@ -91,17 +110,55 @@ from .textproc import (
     _strip_narration,
 )
 from .timers import TimerAnnounceMixin
+from .warmup import PromptWarmupMixin
 from .toolcalls import _parse_raw_tool_call, _prune_ha_local_schemas, _readonly_schemas
 
 _LOGGER = logging.getLogger(__name__)
 
+# A look-up tool still running after this long gets the "one second" line on
+# voice turns. The line is heard only ~3 s after it is
+# started (speech rendering and the speaker starting; measured 2026-10-26),
+# and the reply then waits for it to finish. Started at 0.8 s it fired on
+# every web search and held answers that were ready before it was even
+# heard, so only look-ups still running at 2 s get it.
+TOOL_WAIT_LINE_DELAY_S = 2.0
 
-class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
+# Returned instead of running a look-up the model already ran, with the same
+# arguments, earlier in the same turn. A DHL drop-off question on 2026-10-27
+# ran one web search four times over (six searches, ~7 s more) because the
+# results named no address; repeating it could never have found one.
+REPEATED_LOOKUP_RESULT = (
+    "You already ran this exact {name} call in this turn; its result is above "
+    "and running it again returns the same thing. Do not repeat it. Answer the "
+    "user now with what you found, and say plainly what you could not find."
+)
+
+
+class _WaitLine:
+    """Per-tool-loop state of the wait line: pending timer, speaking task."""
+
+    __slots__ = ("task", "timer")
+
+    def __init__(self) -> None:
+        self.timer: asyncio.TimerHandle | None = None
+        self.task: asyncio.Task | None = None
+
+
+class Orchestrator(
+    EntityContextMixin, PromptBlocksMixin, PromptWarmupMixin, TimerAnnounceMixin
+):
     """Processes messages: history → system prompt → LLM → reply.
 
     One Orchestrator instance per config entry. Created at platform
     setup; replaced on options change via full entry reload.
     """
+
+    # Voice recognition manager (None when the entry has none).
+    _voice_id = None
+    # device_id → person recognised on the turn being processed, and the
+    # enrollment introduction to speak verbatim when the tool started one.
+    _turn_speakers: dict | None = None
+    _enroll_replies: dict | None = None
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._hass = hass
@@ -117,6 +174,7 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
         self._mcp: MCPToolRegistry | None = entry_data.get("mcp")
         self._memory: MemoryTool | None = entry_data.get("memory")
         self._ha_local: HALocalToolRegistry | None = entry_data.get("ha_local")
+        self._voice_id = entry_data.get("voice_id")
 
         opts = entry.options
         # Use real schema token budget if MCPToolRegistry is available.
@@ -194,6 +252,36 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
         return OpenAICompatProvider.from_options(dict(self._entry.options))
 
 
+    def _tool_schemas_for(
+        self, message: str, voice_mode: bool, device_id: str | None
+    ) -> list[dict]:
+        """The tool schemas sent with a turn, in the order they are sent."""
+        tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
+        if self._web_search is not None:
+            tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
+        if self._browse_url is not None:
+            tool_schemas = [BROWSE_URL_SCHEMA, *tool_schemas]
+        if self._memory is not None:
+            tool_schemas = [*MEMORY_TOOL_SCHEMAS, *tool_schemas]
+        if (
+            voice_mode
+            and device_id
+            and self._voice_id is not None
+            and self._voice_id.enabled
+            and self._voice_id.voice_enroll_allowed
+        ):
+            tool_schemas = [VOICE_ENROLL_SCHEMA, *tool_schemas]
+        if self._find_phone_enabled():
+            tool_schemas = [RING_PHONE_SCHEMA, *tool_schemas]
+        if self._ha_local is not None:
+            ha_schemas = self._ha_local.get_schemas()
+            if self._prune_schemas:
+                # Opt-in since v0.9.27: pruning changes the tool list per
+                # message, which busts the runtime's prompt prefix cache.
+                ha_schemas = _prune_ha_local_schemas(message, ha_schemas)
+            tool_schemas = [*ha_schemas, *tool_schemas]
+        return tool_schemas
+
     async def async_process(
         self,
         message: str,
@@ -239,6 +327,14 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
         from ..const import TIMER_DONE_SENTINEL  # noqa: PLC0415
         if message.startswith(TIMER_DONE_SENTINEL):
             return await self._handle_timer_done(message, device_id, lang)
+
+        # A voice-enrollment session on this satellite owns the turn: the
+        # answer is a voice sample, never a command (runs before shortcuts,
+        # so "turn everything off" is recorded, not executed).
+        if self._voice_id is not None and self._voice_id.enrollment_active(device_id):
+            enroll_reply = await self._voice_id.async_enrollment_turn(message, device_id)
+            if enroll_reply is not None:
+                return enroll_reply
 
         # Streaming gate: forward sentence-complete deltas to the voice
         # pipeline for early TTS — but only on turns where no verifier can
@@ -367,45 +463,107 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
                     )
                     return action_reply
 
+            # 1d2. "Where is my phone": ring it (Find my phone option). Whose
+            # phone it is needs the speaker, so this is the one shortcut that
+            # starts voice ID; if the turn still goes to the LLM (nobody
+            # recognised), step 3 reuses the same task.
+            speaker_task: asyncio.Task | None = None
+            owner = (
+                match_find_phone(message, lang) if self._find_phone_enabled() else None
+            )
+            if owner is not None:
+                if (
+                    not owner
+                    and self._voice_id is not None
+                    and voice_mode
+                    and self._voice_id.should_identify(message, device_id, user_id)
+                ):
+                    speaker_task = asyncio.get_running_loop().create_task(
+                        self._voice_id.async_identify(message, device_id)
+                    )
+                try:
+                    phone_reply = await self._find_phone_shortcut(
+                        owner, user_id, speaker_task, lang
+                    )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("AI Plugin: phone shortcut raised", exc_info=True)
+                    phone_reply = None
+                if phone_reply:
+                    _LOGGER.info(
+                        "AI Plugin: phone shortcut hit for conv=%s", conversation_id
+                    )
+                    await self._context_mgr.add_turn(
+                        conversation_id, "assistant", phone_reply
+                    )
+                    return phone_reply
+
+            # 1e. Every shortcut missed, so this turn goes to the LLM: only
+            # now is the voice fingerprinted (HA- and shortcut-handled turns
+            # never are). It runs while the tool list and history are built
+            # and is awaited just before the per-turn context needs it.
+            if (
+                speaker_task is None
+                and self._voice_id is not None
+                and voice_mode
+                and self._voice_id.should_identify(message, device_id, user_id)
+            ):
+                speaker_task = asyncio.get_running_loop().create_task(
+                    self._voice_id.async_identify(message, device_id)
+                )
+
             # 2. Collect tool schemas: ha_local + memory + web_search + MCP
             # tools. Done before history budgeting so the context manager can
             # reserve space for what is actually sent this request — the
             # constructor-time estimate ran before MCP connected and never
             # covered the built-in schemas, so history could overrun num_ctx
             # and the runtime silently dropped the system prompt.
-            tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
-            if self._web_search is not None:
-                tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
-            if self._browse_url is not None:
-                tool_schemas = [BROWSE_URL_SCHEMA, *tool_schemas]
-            if self._memory is not None:
-                tool_schemas = [*MEMORY_TOOL_SCHEMAS, *tool_schemas]
-            if self._ha_local is not None:
-                ha_schemas = self._ha_local.get_schemas()
-                if self._prune_schemas:
-                    # Opt-in since v0.9.27: pruning changes the tool list per
-                    # message, which busts the runtime's prompt prefix cache.
-                    ha_schemas = _prune_ha_local_schemas(message, ha_schemas)
-                tool_schemas = [*ha_schemas, *tool_schemas]
+            tool_schemas = self._tool_schemas_for(message, voice_mode, device_id)
+            self._note_prompt_head(system_prompt, tool_schemas, voice_mode)
             schema_tokens = self._context_mgr.estimate_tokens(str(tool_schemas))
 
             # 3. Volatile per-turn context (time, user facts, last action).
-            volatile = await self._build_volatile_block(user_id, conversation_id)
+            speaker = None
+            if speaker_task is not None:
+                try:
+                    speaker = await speaker_task
+                except Exception:  # noqa: BLE001 — unknown speaker, carry on
+                    _LOGGER.debug("AI Plugin: voice ID failed", exc_info=True)
+                if speaker is not None:
+                    # Memory reads and writes for this turn use the
+                    # recognised person's store instead of the anonymous one.
+                    user_id = speaker.memory_key
+            if self._turn_speakers is None:
+                self._turn_speakers = {}
+            if device_id:
+                if speaker is not None:
+                    self._turn_speakers[device_id] = speaker.person_id
+                elif speaker_task is not None:
+                    # Checked and not recognised: memory writes are refused.
+                    self._turn_speakers[device_id] = None
+                else:
+                    self._turn_speakers.pop(device_id, None)
+            volatile = await self._build_volatile_block(
+                user_id,
+                conversation_id,
+                speaker=speaker.name if speaker else None,
+                speaker_checked=speaker_task is not None,
+            )
             reserved_tokens = schema_tokens + self._context_mgr.estimate_tokens(volatile)
 
-            # 4. Build the message list (static system prompt + trimmed
-            # history), then slot the volatile block in directly before the
-            # newest user turn: everything ahead of it is byte-identical to
-            # the previous request, so the runtime's prefix cache applies.
-            messages = await self._context_mgr.get_messages(
-                conversation_id, system_prompt, tool_tokens=reserved_tokens
-            )
+            # 4. The volatile block goes into history directly before the
+            # newest user turn and stays there, so the next request repeats
+            # this one byte for byte up to its new block and the runtime's
+            # prefix cache covers the whole conversation. Sent but not kept,
+            # the block made every follow-up re-read all history after the
+            # system prompt: ~1.1 s for one web search's worth of history on
+            # the voice model (2026-10-28), growing with every turn.
             if volatile:
-                vol_msg = {"role": "system", "content": volatile}
-                if messages and messages[-1].get("role") == "user":
-                    messages.insert(len(messages) - 1, vol_msg)
-                else:
-                    messages.append(vol_msg)
+                await self._context_mgr.add_before_last_user(
+                    conversation_id, {"role": "system", "content": volatile}
+                )
+            messages = await self._context_mgr.get_messages(
+                conversation_id, system_prompt, tool_tokens=schema_tokens
+            )
 
             _LOGGER.debug(
                 "Processing message for conv_id=%s lang=%s voice=%s msg_count=%d tools=%d",
@@ -547,10 +705,14 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
             # web_search directly and injects results — no model cooperation.
             # Also fires on short follow-up questions referencing a prior
             # web search result ("when exactly did that happen?").
+            # Only when the model used no tool at all: having read the house
+            # (the weather entity, the to-do list), it did not answer from
+            # training data, and the forced search replaced a grounded answer
+            # with other cities' results (2026-10-27, 10-28).
             _needs_search = (
                 self._web_search is not None
                 and readonly_schemas
-                and not _any_tool_call(tool_msgs, "web_search")
+                and not tool_msgs
                 and (
                     _is_online_query(message)
                     or _is_online_followup(message, tool_msgs)
@@ -771,6 +933,32 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
+    def _is_lookup_tool(self, name: str) -> bool:
+        """Tools that reach out to the network (web search, page fetch, MCP
+        servers such as Wikipedia) rather than HA, memory or enrollment.
+
+        Home Assistant's own MCP tools are not look-ups: a slow HassTurnOn
+        would otherwise say "one second", and since actuator
+        replies are not spoken, that line would be all the user heard."""
+        if self._ha_local is not None and name in self._ha_local.tool_names:
+            return False
+        if self._mcp is not None and self._mcp.is_home_assistant_tool(name):
+            return False
+        return name not in MEMORY_TOOL_NAMES and name != VOICE_ENROLL_TOOL
+
+    def _lookup_key(self, name: str, arguments: object) -> str | None:
+        """Identity of a look-up call within one turn, or None for tools that
+        may rightly run twice (a second "volume up" is a second step)."""
+        if not self._is_lookup_tool(name):
+            return None
+        import json as _json
+
+        try:
+            args = _json.dumps(arguments, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return None
+        return f"{name}:{' '.join(args.lower().split())}"
+
     async def _tool_loop(
         self,
         messages: list[dict],
@@ -781,6 +969,69 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
         device_id: str | None = None,
         language: str | None = None,
         gate: "_DeltaGate | None" = None,
+    ) -> tuple[str, list[dict]]:
+        """Run the tool loop; on a voice turn whose look-up is slow, the
+        satellite first says "one second".
+
+        The line starts when a look-up tool is still running after
+        TOOL_WAIT_LINE_DELAY_S, so quick tools (time, calculator) never
+        trigger it. The reply is held until the line has played: otherwise
+        the answer would talk over it, and the follow-up microphone would
+        take the end of the line for the end of the answer.
+        """
+        wait = _WaitLine()
+        try:
+            return await self._run_tool_loop(
+                messages, tool_schemas, user_id, voice_mode, user_message,
+                device_id, language, gate, wait,
+            )
+        finally:
+            if wait.timer is not None:
+                wait.timer.cancel()
+            if wait.task is not None and not wait.task.done():
+                try:
+                    await asyncio.shield(wait.task)
+                except Exception:  # noqa: BLE001 — never fail the turn over it
+                    pass
+
+    def _arm_wait_line(
+        self, wait: "_WaitLine", name: str, voice_mode: bool,
+        device_id: str | None, gate: "_DeltaGate | None",
+    ) -> None:
+        if (
+            wait.task is not None
+            or not voice_mode
+            or not device_id
+            or self._hass is None
+            or not self._is_lookup_tool(name)
+        ):
+            return
+
+        def _speak() -> None:
+            wait.timer = None
+            if wait.task is not None:
+                return
+            _LOGGER.debug("AI Plugin: %s is slow — saying the wait line", name)
+            # The answer must not stream into TTS while the line plays.
+            if gate is not None:
+                gate.close()
+            wait.task = self._hass.async_create_task(
+                satellite_speech.async_say(self._hass, device_id, "tool_wait")
+            )
+
+        wait.timer = asyncio.get_running_loop().call_later(TOOL_WAIT_LINE_DELAY_S, _speak)
+
+    async def _run_tool_loop(
+        self,
+        messages: list[dict],
+        tool_schemas: list[dict],
+        user_id: str | None,
+        voice_mode: bool,
+        user_message: str,
+        device_id: str | None,
+        language: str | None,
+        gate: "_DeltaGate | None",
+        wait: "_WaitLine",
     ) -> tuple[str, list[dict]]:
         """Run the native function-calling loop: call LLM → execute tools → repeat.
 
@@ -794,6 +1045,7 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
 
         last_response = None
         history_messages: list[dict] = []
+        seen_lookups: set[str] = set()
         valid_tool_names = {
             s.get("function", {}).get("name")
             for s in tool_schemas
@@ -872,11 +1124,28 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
                 history_messages.append(msg)
 
             for tc in response.tool_calls:
+                lookup_key = self._lookup_key(tc.name, tc.arguments)
+                if lookup_key is not None and lookup_key in seen_lookups:
+                    _LOGGER.debug("AI Plugin: %s repeated with the same arguments — not run", tc.name)
+                    msg = tc.to_tool_result_message(REPEATED_LOOKUP_RESULT.format(name=tc.name))
+                    messages.append(msg)
+                    history_messages.append(msg)
+                    continue
+                if lookup_key is not None:
+                    seen_lookups.add(lookup_key)
+                self._arm_wait_line(wait, tc.name, voice_mode, device_id, gate)
+                tool_started = time.monotonic()
                 result = await self._dispatch_tool(
                     tc.name, tc.arguments, user_id, voice_mode, user_message,
                     device_id=device_id, language=language,
                     available_tools=valid_tool_names,
                 )
+                _LOGGER.debug(
+                    "AI Plugin: tool %s took %.2f s", tc.name, time.monotonic() - tool_started
+                )
+                if wait.timer is not None:
+                    wait.timer.cancel()
+                    wait.timer = None
                 if gate is not None and gate.active:
                     # Actuator turns get TTS-suppressed; get_entity misses
                     # trigger a reply-replacing verifier. Either way the
@@ -891,9 +1160,24 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
                 messages.append(msg)
                 history_messages.append(msg)
 
+            # A started voice enrollment speaks its own first question,
+            # word for word: a paraphrase is not a question to answer, and a
+            # failed start must never be reported as a success.
+            enroll_reply = (self._enroll_replies or {}).pop(device_id, None) if device_id else None
+            if enroll_reply:
+                if gate is not None:
+                    gate.close()
+                return enroll_reply, history_messages
+
         _lang = (language or "en").split("-")[0].lower()
         suffix = " " + L.template("note_tool_limit", _lang)
         return (last_response.reply_text() if last_response else "") + suffix, history_messages
+
+    def _speaker_unrecognised(self, device_id: str | None) -> bool:
+        """True when voice ID checked this device's turn and knew nobody:
+        facts said then would land in a store that is no one's."""
+        turn = self._turn_speakers or {}
+        return bool(device_id) and device_id in turn and turn[device_id] is None
 
     async def _dispatch_tool(
         self,
@@ -916,7 +1200,16 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
                 available_tools=available_tools,
                 announce_agent_id=self._timer_announce_agent_id(),
             )
+        if name == VOICE_ENROLL_TOOL and self._voice_id is not None:
+            return self._start_voice_enrollment(arguments, device_id, language)
+        if name == RING_PHONE_TOOL and self._find_phone_enabled():
+            return await self._ring_phone_tool(arguments, user_id, device_id, language)
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
+            if name in MEMORY_WRITE_TOOLS and self._speaker_unrecognised(device_id):
+                return (
+                    "[Not saved: the speaker's voice was not recognised, so nothing "
+                    "can be stored for them. Tell the user nothing was saved.]"
+                )
             return await self._memory.call_tool(
                 name, arguments, user_id=user_id, user_message=user_message
             )
@@ -942,6 +1235,115 @@ class Orchestrator(EntityContextMixin, PromptBlocksMixin, TimerAnnounceMixin):
             return await self._mcp.call_tool(name, arguments)
         return f"[Tool {name!r} unavailable — no handler configured]"
 
+
+    def _find_phone_enabled(self) -> bool:
+        entry = getattr(self, "_entry", None)
+        return bool(
+            getattr(self, "_hass", None) is not None
+            and entry is not None
+            and entry.options.get(CONF_FIND_PHONE, DEFAULT_FIND_PHONE) is True
+        )
+
+    def _find_person(self, name: str) -> str | None:
+        return self._voice_id.find_person(name) if self._voice_id is not None else None
+
+    async def _find_phone_shortcut(
+        self,
+        owner: str,
+        user_id: str | None,
+        speaker_task: asyncio.Task | None,
+        lang: str,
+    ) -> str | None:
+        """Ring the phone a find-my-phone turn asks for; None hands the turn
+        to the LLM, whose ring_phone tool asks whose phone it is."""
+        speaker = person_for_user(self._hass, user_id)
+        if speaker is None and speaker_task is not None:
+            try:
+                identity = await speaker_task
+            except Exception:  # noqa: BLE001 — unknown speaker
+                identity = None
+            speaker = identity.person_id if identity is not None else None
+        person_id = resolve_owner(
+            self._hass, owner, speaker_person=speaker, find_person=self._find_person
+        )
+        if person_id is None:
+            return None
+        return await async_ring_phone(
+            self._hass, person_id, lang, own=not owner and person_id == speaker
+        )
+
+    async def _ring_phone_tool(
+        self,
+        arguments: dict,
+        user_id: str | None,
+        device_id: str | None,
+        language: str | None,
+    ) -> str:
+        """Tool handler: ring the named person's phone, else the speaker's.
+
+        An unknown speaker gets a result naming the people who have a phone,
+        so the model asks whose and calls again; nothing rings on a guess.
+        """
+        lang = (language or "en").split("-")[0].lower()
+        name = str(arguments.get("person") or "").strip()
+        speaker = (self._turn_speakers or {}).get(device_id) if device_id else None
+        speaker = speaker or person_for_user(self._hass, user_id)
+        person_id = resolve_owner(
+            self._hass, name, speaker_person=speaker, find_person=self._find_person
+        )
+        if person_id is None:
+            known = ", ".join(sorted(people_with_phones(self._hass).values()))
+            heard = (
+                f"The name {name!r} matches nobody. " if name
+                else "The speaker's voice was not recognised. "
+            )
+            return (
+                f"[No phone rang. {heard}Ask the user whose phone to ring "
+                f"({known or 'nobody has a phone linked'}), then call ring_phone "
+                "with that name.]"
+            )
+        reply = await async_ring_phone(
+            self._hass, person_id, lang, own=not name and person_id == speaker
+        )
+        if reply is None:
+            return (
+                f"[No phone rang: {person_id} has no phone with the Home Assistant "
+                "app linked to them. Tell the user.]"
+            )
+        return f"[Done. Tell the user, in their language: {reply}]"
+
+    def _start_voice_enrollment(
+        self, arguments: dict, device_id: str | None, language: str | None
+    ) -> str:
+        """Tool handler: begin a guided enrollment on the calling satellite.
+
+        Without a usable name it falls back to the person voice recognition
+        named on this very turn (enrolling another microphone for someone
+        already known). On success the first question becomes the reply
+        verbatim (see _tool_loop); on failure the result says plainly that
+        nothing started, so the model cannot announce a success.
+        """
+        vid = self._voice_id
+        if not device_id or not vid.enabled or not vid.voice_enroll_allowed:
+            return "[Voice enrollment is not available here. Nothing was started.]"
+        name = str(arguments.get("person") or "").strip()
+        person_id = vid.find_person(name) if name else None
+        if person_id is None and not name:
+            person_id = (self._turn_speakers or {}).get(device_id)
+        if person_id is None:
+            known = ", ".join(sorted(str(p["name"]) for p in vid.persons().values()))
+            heard = f"The name {name!r} matches nobody. " if name else ""
+            return (
+                f"[Voice enrollment NOT started. {heard}Ask the user which of these "
+                f"people they are: {known or 'none'}. Then call this tool again with "
+                "that name.]"
+            )
+        lang = (language or "en").split("-")[0].lower()
+        text = vid.start_enrollment(device_id, person_id, lang)
+        if self._enroll_replies is None:
+            self._enroll_replies = {}
+        self._enroll_replies[device_id] = text
+        return f"Voice enrollment started. Say exactly: {text}"
 
     async def async_close(self) -> None:
         """Close provider/tool sessions and cancel background work."""

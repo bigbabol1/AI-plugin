@@ -160,6 +160,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 TOOL_NAMES = {"remember", "recall", "forget"}
+# The ones that change what is stored.
+WRITE_TOOL_NAMES = {"remember", "forget"}
 
 
 class MemoryTool:

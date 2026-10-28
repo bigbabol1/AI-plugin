@@ -4,6 +4,115 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.10.0 — it knows who is speaking
+
+### Added
+
+- **Voice recognition (speaker ID), off by default.** The assistant can tell
+  who is speaking on a voice turn, so each person gets their own memory from
+  any satellite. It runs inside Home Assistant on NumPy: no add-on, no cloud,
+  no onnxruntime. Switching it on downloads NVIDIA TitaNet-small once
+  (~13 MB, Apache-2.0, from this repository's `voice_model/` folder, checked
+  against pinned SHA-256 digests) and switches this integration's Assist
+  pipelines to a speech-to-text pass-through, which hands the audio to your
+  engine unchanged and keeps a copy in memory for 30 s. Turning it off
+  switches them back.
+  - **Enrollment** by voice (*"Learn my voice, I am Anna"*) or from
+    *Configure → Voice recognition → Enroll a voice*: the satellite asks
+    eight short questions in its pipeline's language and voice, also when
+    Mic to MediaPlayer plays its replies on another speaker. A missed answer
+    gets the question again; *"stop"* ends early.
+  - **Matching** compares against samples from the same kind of microphone
+    first. A person is named only above *Minimum match score* (default
+    `0.35`) and with a *Minimum lead* (`0.10`) over the next person;
+    anything else is unknown.
+  - The fingerprint is computed while the user is still speaking, so a
+    turn does not wait for it.
+  - Only fingerprints are stored, never audio. It is not a security
+    feature and never authorises actions.
+- **Find my phone, off by default.** *"Where is my phone?"*, *"Ring my
+  phone"*, *"Where is Anna's phone?"* ring the phone through the Companion
+  app, in all seven languages. Android speaks on the alarm channel at full
+  volume, also on silent; an iPhone gets a critical alert. Three rings, six
+  seconds apart. *"My phone"* is the recognised speaker's or the app user's;
+  with an unknown speaker and several phones, the assistant asks whose.
+  Phones are found through person → device tracker → Companion app, so
+  nothing has to be exposed. If Home Assistant last placed the phone away
+  from home, the reply says where.
+- **Where people are.** *"Where's my wife?"*, *"Is Anna home?"* and *"Who is
+  home?"* are answered from the exposed person entities, with *"my wife"*
+  resolved through the speaker's saved facts. Before, the model said it had
+  no information without looking. An away person's answer carries their
+  last street address only when the Companion app's *Geocoded location*
+  sensor on their phone is exposed too.
+- **"One second."** On a voice turn, a web search or another MCP look-up
+  still running after 2 s makes the satellite say a short wait line, in its
+  pipeline's language and voice. The answer waits until the line has
+  played.
+- **API keys for stdio MCP servers.** The add and edit screens have an API
+  key field and the environment variable it goes in.
+
+### Changed
+
+- **Memory is per person on satellites.** With voice recognition on, a
+  recognised speaker reads and writes their own facts. When it recognises
+  no one, `remember` and `forget` refuse and say nothing was saved, instead
+  of saving into a store that belongs to nobody. An unrecognised speaker is
+  told the voice could not be recognised this time, never that it is not
+  registered.
+- **Saved preferences apply to every answer.** A saved "always use metric
+  units" now reaches a question about anything, not only questions about the
+  user (feet in 12 of 12 replays before, metric in 20 of 20 after).
+- **Wikipedia is no longer offered as a popular MCP server.** Wikimedia
+  rate-limits the User-Agent every copy of the server shares, and its
+  look-ups then outlast the tool call. Web search answers the same
+  questions. Existing setups keep it until removed.
+
+### Fixed
+
+- **The conversation summary never reached the model.** It was stored as an
+  assistant message at the front of history, which every request drops, so
+  summarization only cut history to the last 8 messages. It is now an
+  `[EARLIER CONVERSATION]` block, and the recent turns kept verbatim are
+  bounded by tokens instead of a fixed count. This also affects v0.9.56.
+- **Follow-ups re-read the whole conversation.** The per-turn context block
+  (`[CURRENT TIME]`, `[SPEAKER]`, `[USER FACTS]`, `[LAST ACTION]`) is now kept
+  in history, so each request extends the previous one and Ollama reads only
+  the new turn (1.6 s → 0.5 s of read-in after one web search, growing with
+  every turn).
+- **The voice prompt is read in ahead of turns** after a restart, a late MCP
+  connect or a text turn, instead of costing 7–8 s on the next voice turn.
+  Only when voice actually reaches this agent.
+- **The same web search ran up to four times in one turn.** A repeated
+  look-up with the same arguments now returns a note to answer with what was
+  already found (12 of 12 replays answered).
+- **To-do lists exposed after start were out of reach**, and Home Assistant
+  2026's namespaced tool names (`todo__HassListAddItem`) matched none of the
+  plugin's checks. MCP tool lists are fetched again when exposure changes or
+  entities are added or removed. Namespaces are hidden from the model unless
+  two tools would clash, and duplicate MCP tools are sent once.
+- **A follow-up said into a quiet room was dropped as echo** when the reply
+  had ended within the last 6 s, even though the plugin had reopened the
+  microphone itself after the room went quiet.
+- **Forced web searches.** The online-question check searched the raw
+  question whenever it held a time word, including advice questions and
+  answers already grounded in the house. It now fires only when the model
+  used no tool at all, and questions about the user's own plans no longer
+  count as web questions.
+- "What's today on the news?" was taken for a device-state question and
+  forced a second, slower pass.
+- Flexing-arm and letter kaomoji such as `ᕦ(ò_ó)ᕤ` are stripped from voice
+  replies.
+- The self-echo filter's description now says what it drops: fragments of
+  one to three words heard while the reply was still playing, never a
+  command or a yes/no.
+
+### Notes
+
+- Pairs with **Mic to MediaPlayer v1.5.4**, which now signals the end of a
+  reply when the speaker stops instead of seconds later, so the follow-up
+  microphone opens sooner on routed speakers.
+
 ## v0.9.56 — the lights stay in your room
 
 ### Changed

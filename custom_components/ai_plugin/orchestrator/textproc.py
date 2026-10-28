@@ -71,14 +71,20 @@ _EMOJI_RE = re.compile(
 # that belong to the face), then any leftover glyphs of those classes.
 # The degree sign itself is NOT a trigger — "21°C" must survive.
 # ಠ/ಥ are Kannada letters that live almost exclusively in kaomoji when they
-# appear in the plugin's shipped languages (en/de/fr/es/pt/pl).
-_KAOMOJI_TRIGGER = "─-◿︰-﹏・･ಠಥ"
+# appear in the plugin's shipped languages (en/de/fr/es/pt/pl); so do the
+# Canadian syllabics used for flexing arms ("ᕦ(ò_ó)ᕤ", gemma-4 2026-10-26).
+_KAOMOJI_TRIGGER = "─-◿︰-﹏・･ಠಥ᐀-ᙿ"
 
 _KAOMOJI_GROUP_RE = re.compile(
     rf"[(（\[][^()（）\[\]]*[{_KAOMOJI_TRIGGER}][^()（）\[\]]*[)）\]]"
 )
 
-_KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏]+|[ಠಥ]\s*_\s*[ಠಥ]")
+_KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏᐀-ᙿ]+|[ಠಥ]\s*_\s*[ಠಥ]")
+
+# Faces made of ordinary letters and punctuation: one glyph each side of an
+# underscore ("(ò_ó)", "(T_T)", "(-_-)", "(>_<)") or two carets ("(^^)",
+# "(^o^)"). Maths such as "(5^2)" has no caret pair and survives.
+_KAOMOJI_FACE_RE = re.compile(r"[(（][^\s\w()（）]?[^\s()（）]_[^\s()（）][^\s\w()（）]?[)）]|[(（]\^.?\^[)）]")
 
 def _strip_emoji(text: str) -> str:
     """Remove emoji/pictographs/kaomoji. Safe for TTS and voice output."""
@@ -87,6 +93,7 @@ def _strip_emoji(text: str) -> str:
     cleaned = _EMOJI_RE.sub("", text)
     cleaned = _KAOMOJI_GROUP_RE.sub("", cleaned)
     cleaned = _KAOMOJI_CHAR_RE.sub("", cleaned)
+    cleaned = _KAOMOJI_FACE_RE.sub("", cleaned)
     # Collapse residual double-spaces introduced by stripped glyphs.
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()

@@ -16,11 +16,17 @@ import re
 # "any X on", "which X are off", "welche X sind an", etc. — used by the
 # grounding verifier to detect when the model answered from memory instead
 # of calling list_entities. Keep conservative to avoid false positives
-# (e.g. on plain greetings or commands).
+# (e.g. on plain greetings or commands). The state word must end the
+# question or be followed only by where/when ("…on in the kitchen?",
+# "…an gerade?"): as a preposition it starts a noun phrase instead
+# ("what's on the news", "what is on my calendar"), which is not a state.
 _STATE_SET_QUERY_RE = re.compile(
     r"\b(?:any|are\s+any|is\s+any|is\s+anything|which|what(?:'s|\s+is)?|"
     r"what's|welche|sind)\b.*?\b"
-    r"(?:on|off|open|closed|playing|active|running|an|aus|offen|auf)\b",
+    r"(?:on|off|open|closed|playing|active|running|an|aus|offen|auf)\b"
+    r"(?=\s*(?:[?.!,]|$)|\s+(?:in|im|upstairs|downstairs|outside|inside|"
+    r"right\s+now|now|currently|at\s+the\s+moment|gerade|jetzt|noch|"
+    r"oben|unten|drau(?:ss|ß)en)\b)",
     re.IGNORECASE,
 )
 
@@ -202,9 +208,21 @@ def _is_action_command(text: str) -> bool:
         return False
     return bool(_ACTION_COMMAND_RE.search(text))
 
+# To-do list writes (Home Assistant's MCP server, once a list is exposed).
+# They change the house like an actuator does, so a grounding retry must
+# not offer them and a turn that made one did act — "put butter on the
+# shopping list" must not be retried into a second item. Unlike actuators
+# their confirmation is spoken: nothing else tells the user it worked.
+_LIST_WRITE_TOOL_NAMES = (
+    "HassListAddItem", "HassListCompleteItem", "HassListRemoveItem",
+)
+
 def _any_actuator_call(tool_msgs: list[dict]) -> bool:
-    """True if any actuator tool was invoked in this turn."""
-    return any(_any_tool_call(tool_msgs, t) for t in _ACTUATOR_TOOL_NAMES)
+    """True if any actuator or list-write tool was invoked in this turn."""
+    return any(
+        _any_tool_call(tool_msgs, t)
+        for t in (*_ACTUATOR_TOOL_NAMES, *_LIST_WRITE_TOOL_NAMES)
+    )
 
 # Phrases get_entity / search_entities return when an entity can't be
 # resolved. When the model sees these in a tool result it is supposed

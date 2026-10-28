@@ -482,6 +482,32 @@ async def test_volatile_context_injected_before_user_turn() -> None:
     assert "light.lamp" not in msgs[0]["content"]
 
 
+async def test_follow_up_request_extends_the_previous_one() -> None:
+    """The context block stays in history where it was sent, so the next
+    request repeats the previous one exactly and only the new turn has to be
+    read. Dropped from history, it made every follow-up re-read the whole
+    conversation (~1.1 s for one web search's worth, 2026-10-28)."""
+    orch = _baseline_orch()
+    orch._last_entities["conv-pfx"] = "HassTurnOn(lamp → light.lamp @ kitchen)"
+    sent: list[list[dict]] = []
+
+    async def _capture(messages):
+        sent.append([dict(m) for m in messages])
+        return f"reply {len(sent)}"
+
+    orch._provider = MagicMock()
+    orch._provider.async_complete = AsyncMock(side_effect=_capture)
+
+    await orch.async_process("turn it off please", "conv-pfx", "en")
+    orch._last_entities["conv-pfx"] = "HassTurnOff(lamp → light.lamp @ kitchen)"
+    await orch.async_process("and the other one", "conv-pfx", "en")
+
+    first, second = sent
+    assert second[: len(first)] == first
+    assert [m["role"] for m in second[len(first):]] == ["assistant", "system", "user"]
+    assert "HassTurnOff" in second[-2]["content"]
+
+
 async def test_no_volatile_block_means_no_extra_message() -> None:
     orch = _baseline_orch()
 
@@ -508,6 +534,10 @@ def test_strip_emoji_removes_kaomoji() -> None:
     assert _strip_emoji("Sorry! (╯°□°）╯︵ ┻━┻") == "Sorry!"
     assert _strip_emoji("Nothing to cancel (・_・)") == "Nothing to cancel"
     assert _strip_emoji("shrug ¯\\_(ツ)_/¯ done") != ""  # must not crash
+    # Said by gemma-4 on a voice satellite, 2026-10-26.
+    assert _strip_emoji("It could crush a small car. ᕦ(ò_ó)ᕤ") == "It could crush a small car."
+    for face in ("(T_T)", "(-_-)", "(>_<)", "(^^)", "(^o^)", "(^_^)"):
+        assert _strip_emoji(f"Okay {face}") == "Okay", face
 
 
 def test_strip_emoji_preserves_degrees_and_parens() -> None:
@@ -515,6 +545,8 @@ def test_strip_emoji_preserves_degrees_and_parens() -> None:
 
     assert _strip_emoji("It is 21°C outside.") == "It is 21°C outside."
     assert _strip_emoji("Timer (eval) is running.") == "Timer (eval) is running."
+    assert _strip_emoji("Five squared (5^2) is 25.") == "Five squared (5^2) is 25."
+    assert _strip_emoji("The ratio (3:2) holds.") == "The ratio (3:2) holds."
 
 
 # ── v0.9.32: follow-up honoured on voice; per-device feedback guard ──────────

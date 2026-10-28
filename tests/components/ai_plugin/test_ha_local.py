@@ -924,3 +924,100 @@ async def test_area_named_in_message_matches_alias_and_ignores_sweep_words(
     )
     assert reg._area_named_in_message("turn off the house lights") is None
     assert reg._area_named_in_message("lights off") is None
+
+
+# ── where household members are ───────────────────────────────────────────────
+
+_ADDRESS = "Example Street 1, 12345 Sampletown"
+
+
+def _people_setup(patched_registries, monkeypatch, *, anna_state: str, exposed: set[str]):
+    """Anna (person) tracked by her phone, whose address sensor is on the
+    same device; Ben has no phone. Only entity ids in ``exposed`` are."""
+    import custom_components.ai_plugin.tools.ha_local.exposure as hl
+
+    entities = [
+        _entity("person.anna"),
+        _entity("person.ben"),
+        _entity("device_tracker.annas_phone", device_id="phone1"),
+        SimpleNamespace(**vars(_entity("sensor.anna_location", device_id="phone1")),
+                        unique_id="abc_geocoded_location"),
+        SimpleNamespace(**vars(_entity("sensor.annas_phone_battery", device_id="phone1")),
+                        unique_id="abc_battery_level"),
+    ]
+    hass, ar_r, er_r, dr_r = _make_hass(areas=[], entities=entities)
+    patched_registries(hass, ar_r, er_r, dr_r)
+    states = {
+        "person.anna": SimpleNamespace(
+            state=anna_state,
+            attributes={"friendly_name": "Anna", "device_trackers": ["device_tracker.annas_phone"]},
+        ),
+        "person.ben": SimpleNamespace(state="home", attributes={"friendly_name": "Ben"}),
+        "device_tracker.annas_phone": SimpleNamespace(state=anna_state, attributes={}),
+        "sensor.anna_location": SimpleNamespace(state=_ADDRESS, attributes={}),
+        "sensor.annas_phone_battery": SimpleNamespace(state="80", attributes={}),
+    }
+    hass.states.get.side_effect = states.get
+    monkeypatch.setattr(hl, "_ha_should_expose", lambda h, a, eid: eid in exposed)
+    monkeypatch.setattr(hl, "_EXPOSURE_API_AVAILABLE", True)
+    return HALocalToolRegistry(hass)
+
+
+@pytest.mark.asyncio
+async def test_list_people_gives_an_away_persons_last_address(
+    patched_registries, monkeypatch
+) -> None:
+    reg = _people_setup(
+        patched_registries, monkeypatch, anna_state="not_home",
+        exposed={"person.anna", "person.ben", "sensor.anna_location"},
+    )
+    out = await reg.call_tool("list_entities", {"domain": "person"})
+    assert f"person.anna — Anna [not_home, last address: {_ADDRESS}]" in out
+    assert "person.ben — Ben [home]" in out
+    assert "80" not in out
+
+
+@pytest.mark.asyncio
+async def test_unexposed_address_sensor_stays_hidden(patched_registries, monkeypatch) -> None:
+    """Exposing a person says whether they are home, not where they are."""
+    reg = _people_setup(
+        patched_registries, monkeypatch, anna_state="not_home",
+        exposed={"person.anna", "person.ben"},
+    )
+    out = await reg.call_tool("list_entities", {"domain": "person"})
+    assert "person.anna — Anna [not_home]" in out
+    assert _ADDRESS not in out
+    out = await reg.call_tool("get_entity", {"name_or_id": "person.anna"})
+    assert _ADDRESS not in out
+
+
+@pytest.mark.asyncio
+async def test_no_address_for_a_person_at_home(patched_registries, monkeypatch) -> None:
+    reg = _people_setup(
+        patched_registries, monkeypatch, anna_state="home",
+        exposed={"person.anna", "person.ben", "sensor.anna_location"},
+    )
+    out = await reg.call_tool("list_entities", {"domain": "person"})
+    assert "person.anna — Anna [home]" in out
+    assert _ADDRESS not in out
+
+
+@pytest.mark.asyncio
+async def test_get_entity_gives_an_away_persons_last_address(
+    patched_registries, monkeypatch
+) -> None:
+    reg = _people_setup(
+        patched_registries, monkeypatch, anna_state="Office",
+        exposed={"person.anna", "person.ben", "sensor.anna_location"},
+    )
+    out = await reg.call_tool("get_entity", {"name_or_id": "Anna"})
+    assert "state: Office" in out
+    assert f"last address: {_ADDRESS}" in out
+
+
+def test_prompts_route_people_questions_to_the_person_list() -> None:
+    from custom_components.ai_plugin.const import SYSTEM_PROMPT_DEFAULT, SYSTEM_PROMPT_VOICE
+
+    for prompt in (SYSTEM_PROMPT_VOICE, SYSTEM_PROMPT_DEFAULT):
+        assert "person entity" in prompt
+        assert "list_entities(domain=" in prompt and "person" in prompt

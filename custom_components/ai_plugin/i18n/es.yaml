@@ -31,10 +31,17 @@ templates:
   sweep_all_on:  "Listo, todo encendido."
   sweep_all_off: "Listo, todo apagado."
   note_tool_limit:   "[Nota: se alcanzó el límite de herramientas — la respuesta puede estar incompleta.]"
+  tool_wait:         "Un momento."
 
   time_is:           "Son las {time}."
   timer_done:        "El temporizador ha terminado."
   timer_done_named:  "El temporizador {label} ha terminado."
+  phone_ringing:       "Hago sonar tu teléfono."
+  phone_ringing_named: "Hago sonar el teléfono de {name}."
+  phone_seen_at:       "Home Assistant lo vio por última vez en {place}."
+  phone_seen_away:     "Home Assistant lo vio por última vez fuera de casa."
+  phone_ring_text:     "¡Aquí estoy!"
+  phone_failed:        "No he podido contactar con el teléfono."
 keywords:
   time_now:      ["qué hora es", "que hora es", "dime la hora"]
   sun_set:       ["puesta de sol", "cuándo se pone el sol", "a qué hora se pone el sol"]
@@ -53,3 +60,10 @@ patterns:
     - '^(?:abre|abrir)\s+(?:el\s+|la\s+|los\s+|las\s+)?(?P<name>.+?)$'
   action_close:
     - '^(?:cierra|cerrar)\s+(?:el\s+|la\s+|los\s+|las\s+)?(?P<name>.+?)$'
+  # "Where is my phone": rings it (Find my phone option). An optional
+  # (?P<owner>...) captures someone else's name; without it the phone is the speaker's.
+  find_phone:
+    - '^(?:dónde|donde)\s+(?:está|esta|he\s+dejado|dejé|deje)\s+mi\s+(?:teléfono|telefono|móvil|movil|celular|iphone)$'
+    - '^(?:busca|encuentra|haz\s+sonar|llama\s+a)\s+mi\s+(?:teléfono|telefono|móvil|movil|celular|iphone)$'
+    - '^no\s+encuentro\s+mi\s+(?:teléfono|telefono|móvil|movil|celular|iphone)$'
+    - '^(?:(?:dónde|donde)\s+(?:está|esta)|busca|haz\s+sonar)\s+el\s+(?:teléfono|telefono|móvil|movil|celular|iphone)\s+de\s+(?P<owner>[\w\-]+)$'

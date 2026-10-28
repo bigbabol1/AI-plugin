@@ -31,10 +31,17 @@ templates:
   sweep_all_on:  "OK, alle {label} sind an."
   sweep_all_off: "OK, alle {label} sind aus."
   note_tool_limit:   "[Hinweis: Werkzeuglimit erreicht — die Antwort ist möglicherweise unvollständig.]"
+  tool_wait:         "Einen Moment."
 
   time_is:           "Es ist {time} Uhr."
   timer_done:        "Der Timer ist abgelaufen."
   timer_done_named:  "Der Timer {label} ist abgelaufen."
+  phone_ringing:       "Ich lasse dein Handy klingeln."
+  phone_ringing_named: "Ich lasse das Handy von {name} klingeln."
+  phone_seen_at:       "Laut Home Assistant war es zuletzt bei {place}."
+  phone_seen_away:     "Laut Home Assistant war es zuletzt nicht zu Hause."
+  phone_ring_text:     "Hier bin ich!"
+  phone_failed:        "Ich konnte das Handy nicht erreichen."
 keywords:
   time_now:      ["wie spät ist es", "wie viel uhr ist es", "wieviel uhr ist es", "sag mir die uhrzeit", "wie spät"]
   sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]
@@ -59,3 +66,12 @@ patterns:
     - '^(?:schließe|schliesse)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)$'
     - '^mach(?:e)?\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+zu$'
     - '^(?P<name>.+?)\s+(?:schließen|schliessen|zumachen|runter(?:fahren)?)$'
+  # "Where is my phone": rings it (Find my phone option). An optional
+  # (?P<owner>...) captures someone else's name; without it the phone is the speaker's.
+  find_phone:
+    - '^(?:wo\s+ist|wo\s+liegt|wo\s+hab(?:e)?\s+ich)\s+mein\s+(?:handy|telefon|smartphone|iphone)(?:\s+(?:hingelegt|gelassen|liegen\s+lassen))?$'
+    - '^(?:finde|such(?:e)?|orte|klingel(?:e)?|ruf(?:e)?)\s+mein\s+(?:handy|telefon|smartphone|iphone)(?:\s+an)?$'
+    - '^(?:lass|lasse|mach)\s+mein\s+(?:handy|telefon|smartphone|iphone)\s+klingeln$'
+    - '^ich\s+finde\s+mein\s+(?:handy|telefon|smartphone|iphone)\s+nicht$'
+    - '^(?:wo\s+ist|wo\s+liegt|finde|such(?:e)?)\s+(?:das\s+)?(?:handy|telefon|smartphone|iphone)\s+von\s+(?P<owner>[\w\-]+)$'
+    - '^(?:wo\s+ist|wo\s+liegt|finde|such(?:e)?)\s+(?P<owner>[\w\-]+?)[\x27’]?\s+(?:handy|telefon|smartphone|iphone)$'

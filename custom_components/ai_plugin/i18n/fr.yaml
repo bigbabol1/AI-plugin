@@ -31,10 +31,17 @@ templates:
   sweep_all_on:  "C'est fait, tout est allumé."
   sweep_all_off: "C'est fait, tout est éteint."
   note_tool_limit:   "[Note : limite d'appels d'outils atteinte — la réponse peut être incomplète.]"
+  tool_wait:         "Un instant."
 
   time_is:           "Il est {time}."
   timer_done:        "Le minuteur est terminé."
   timer_done_named:  "Le minuteur {label} est terminé."
+  phone_ringing:       "Je fais sonner ton téléphone."
+  phone_ringing_named: "Je fais sonner le téléphone de {name}."
+  phone_seen_at:       "Home Assistant l'a vu en dernier à {place}."
+  phone_seen_away:     "Home Assistant l'a vu en dernier hors de la maison."
+  phone_ring_text:     "Je suis là !"
+  phone_failed:        "Je n'ai pas pu joindre le téléphone."
 keywords:
   time_now:      ["quelle heure est-il", "quelle heure il est", "l'heure actuelle"]
   sun_set:       ["coucher du soleil", "se couche le soleil", "à quelle heure se couche le soleil"]
@@ -53,3 +60,12 @@ patterns:
     - '^(?:ouvre|ouvrir)\s+(?:le\s+|la\s+|les\s+|l[\x27’]\s*)?(?P<name>.+?)$'
   action_close:
     - '^(?:ferme|fermer)\s+(?:le\s+|la\s+|les\s+|l[\x27’]\s*)?(?P<name>.+?)$'
+  # "Where is my phone": rings it (Find my phone option). An optional
+  # (?P<owner>...) captures someone else's name; without it the phone is the speaker's.
+  find_phone:
+    - '^(?:où|ou)\s+(?:est|se\s+trouve)\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
+    - '^(?:où|ou)\s+(?:ai-je|j[\x27’]ai)\s+(?:mis|laissé|laisse)\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
+    - '^(?:fais|faites)\s+sonner\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
+    - '^(?:trouve|retrouve|localise)\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
+    - '^je\s+(?:ne\s+)?trouve\s+(?:pas|plus)\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
+    - '^(?:(?:où|ou)\s+est|fais\s+sonner|trouve)\s+le\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)\s+(?:de\s+|d[\x27’]\s*)(?P<owner>[\w\-]+)$'

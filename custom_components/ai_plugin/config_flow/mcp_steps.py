@@ -22,6 +22,38 @@ from .schemas import _get_ha_url, _is_valid_url
 _LOGGER = logging.getLogger(__name__)
 
 
+def _key_fields(env_name: str, key: str) -> dict:
+    """The API key fields of the stdio add / edit forms. Pre-filled as
+    suggestions, not defaults, so that clearing the key removes it."""
+    return {
+        vol.Optional("mcp_key_env", description={"suggested_value": env_name}): selector.TextSelector(),
+        vol.Optional("mcp_key", description={"suggested_value": key}): selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+        ),
+    }
+
+
+def _shown_key_env(server: dict) -> str | None:
+    """The environment variable the edit form shows as the API key."""
+    return next(iter(server.get("env") or {}), None)
+
+
+def _with_key(server: dict, old_env: dict, shown: str | None, user_input: dict) -> dict:
+    """``server`` with the API key from the form applied to its environment.
+
+    The form shows one variable (``shown``); it is replaced by what was
+    entered, and an empty key removes it. Other variables are kept.
+    """
+    env = {k: v for k, v in old_env.items() if k != shown}
+    name = user_input.get("mcp_key_env", "").strip()
+    key = user_input.get("mcp_key", "").strip()
+    if name and key:
+        env[name] = key
+    if env:
+        server["env"] = env
+    return server
+
+
 class MCPServerStepsMixin:
     """MCP add / edit / remove screens. Mixed into AIPluginOptionsFlow."""
 
@@ -44,11 +76,6 @@ class MCPServerStepsMixin:
             "args_template": ["mcp-server-sqlite", "--db-path", "{value}"],
             "config_label": "database file path",
             "config_placeholder": "/config/buddy_notes.db",
-        },
-        "wikipedia": {
-            "label": "Wikipedia — quick factual lookups without a web search",
-            "command": "uvx",
-            "args": ["wikipedia-mcp"],
         },
         "calculator": {
             "label": "Calculator — precise math without model guessing",
@@ -295,9 +322,8 @@ class MCPServerStepsMixin:
                 errors["mcp_command"] = "command_required"
             else:
                 raw_args = user_input.get("mcp_args", "").strip()
-                self._pending_mcp.append(
-                    {"transport": "stdio", "command": command, "args": raw_args.split() if raw_args else []}
-                )
+                entry = {"transport": "stdio", "command": command, "args": raw_args.split() if raw_args else []}
+                self._pending_mcp.append(_with_key(entry, {}, None, user_input))
                 return await self.async_step_mcp_servers()
 
         return self.async_show_form(
@@ -306,6 +332,7 @@ class MCPServerStepsMixin:
                 {
                     vol.Required("mcp_command"): selector.TextSelector(),
                     vol.Optional("mcp_args", default=""): selector.TextSelector(),
+                    **_key_fields("", ""),
                 }
             ),
             errors=errors,
@@ -373,6 +400,7 @@ class MCPServerStepsMixin:
         """Edit an existing stdio MCP server (pre-filled with current values)."""
         errors: dict[str, str] = {}
         existing = self._pending_mcp[self._editing_idx]  # type: ignore[index]
+        key_env = _shown_key_env(existing)
 
         if user_input is not None:
             command = user_input.get("mcp_command", "").strip()
@@ -380,11 +408,14 @@ class MCPServerStepsMixin:
                 errors["mcp_command"] = "command_required"
             else:
                 raw_args = user_input.get("mcp_args", "").strip()
-                self._pending_mcp[self._editing_idx] = {  # type: ignore[index]
+                updated = {
                     "transport": "stdio",
                     "command": command,
                     "args": raw_args.split() if raw_args else [],
                 }
+                self._pending_mcp[self._editing_idx] = _with_key(  # type: ignore[index]
+                    updated, existing.get("env") or {}, key_env, user_input
+                )
                 self._editing_idx = None
                 return await self.async_step_mcp_servers()
 
@@ -397,6 +428,7 @@ class MCPServerStepsMixin:
                         "mcp_args",
                         default=" ".join(existing.get("args", [])),
                     ): selector.TextSelector(),
+                    **_key_fields(key_env or "", (existing.get("env") or {}).get(key_env or "", "")),
                 }
             ),
             errors=errors,

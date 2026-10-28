@@ -11,7 +11,11 @@ from __future__ import annotations
 import logging
 import re
 
-from .grounding import _ACTUATOR_TOOL_NAMES, _is_state_set_query
+from .grounding import (
+    _ACTUATOR_TOOL_NAMES,
+    _LIST_WRITE_TOOL_NAMES,
+    _is_state_set_query,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,7 +23,8 @@ def _readonly_schemas(schemas: list[dict]) -> list[dict]:
     """Schemas minus actuators — for grounding retries that must not act."""
     return [
         s for s in schemas
-        if s.get("function", {}).get("name") not in _ACTUATOR_TOOL_NAMES
+        if s.get("function", {}).get("name")
+        not in (*_ACTUATOR_TOOL_NAMES, *_LIST_WRITE_TOOL_NAMES)
     ]
 
 # Detect when a model emits a tool call as plain text ("content") instead of

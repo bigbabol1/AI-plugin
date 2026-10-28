@@ -72,6 +72,67 @@ _EXTRA_PATH_DIRS = [
 ]
 
 
+def _distinct(tools: list[Any]) -> list[Any]:
+    """Drop tools a server lists twice under two names.
+
+    Some servers publish every tool again under an alias (wikipedia-mcp
+    lists get_summary and wikipedia_get_summary, same description, same
+    parameters). The duplicates only cost prompt tokens, so one of each
+    is sent: the prefixed name, which says more to the model. Only a
+    name that is the other one plus a prefix counts as an alias; two
+    different tools that merely share a description are both kept.
+    Calls by either name still route.
+    """
+    by_key: dict[str, list[Any]] = {}
+    for tool in tools:
+        key = json.dumps(
+            [tool.description, tool.inputSchema], sort_keys=True, default=str
+        )
+        by_key.setdefault(key, []).append(tool)
+    dropped: set[int] = set()
+    for same in by_key.values():
+        for short in same:
+            if any(
+                long is not short and long.name.endswith(f"_{short.name}")
+                for long in same
+            ):
+                dropped.add(id(short))
+    return [t for t in tools if id(t) not in dropped]
+
+
+def _bare_name(name: str) -> str:
+    """A tool name without its namespace.
+
+    Since 2026, Home Assistant's MCP server names every tool after the
+    integration that provides it: intent__HassTurnOn, todo__HassListAddItem,
+    homeassistant__GetLiveContext. The prompts and the checks that decide
+    whether an action ran all use the plain names (HassTurnOn), so the
+    namespace is dropped before the model sees the tool.
+    """
+    _namespace, sep, bare = name.rpartition("__")
+    return bare if sep and _namespace and bare else name
+
+
+def _model_names(tools: list[Any]) -> dict[str, str]:
+    """The name each tool is shown to the model under, by its real name.
+
+    A tool keeps its real name when dropping the namespace would make it
+    clash with another tool.
+    """
+    real = [t.name for t in tools]
+    bare_count: dict[str, int] = {}
+    for name in real:
+        bare = _bare_name(name)
+        bare_count[bare] = bare_count.get(bare, 0) + 1
+    taken = set(real)
+    out: dict[str, str] = {}
+    for name in real:
+        bare = _bare_name(name)
+        clash = bare_count[bare] > 1 or (bare != name and bare in taken)
+        out[name] = name if clash else bare
+    return out
+
+
 def _server_label(config: dict[str, Any]) -> str:
     """Human-readable server identity for logs and error strings.
 
@@ -155,6 +216,37 @@ class _MCPServerConnection:
     @property
     def tools(self) -> list[Any]:
         return list(self._tools)
+
+    async def async_refresh_tools(self) -> bool:
+        """Fetch the tool list again. True when it changed.
+
+        Home Assistant's server offers a tool only while an entity it acts
+        on is exposed (the to-do tools need an exposed to-do list), so its
+        list changes after the connection was made.
+        """
+        if self._session is None or self._state != _State.CONNECTED:
+            return False
+        try:
+            result = await asyncio.wait_for(
+                self._session.list_tools(), timeout=_CALL_TIMEOUT
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning(
+                "AI Plugin MCP: could not refresh the tools of %r: %s",
+                self._name, exc,
+            )
+            return False
+        before = {t.name for t in self._tools}
+        self._tools = result.tools
+        after = {t.name for t in self._tools}
+        if before == after:
+            return False
+        _LOGGER.info(
+            "AI Plugin MCP: %r now has %d tools (added %s, removed %s)",
+            self._name, len(after),
+            sorted(after - before) or "none", sorted(before - after) or "none",
+        )
+        return True
 
     async def async_start(self) -> None:
         """Start the background connection task and return immediately.
@@ -407,8 +499,8 @@ class MCPToolRegistry:
         self._servers: list[_MCPServerConnection] = [
             _MCPServerConnection(cfg) for cfg in server_configs
         ]
-        # name → server index for O(1) routing
-        self._tool_index: dict[str, _MCPServerConnection] = {}
+        # model-facing or real name → (server, real name) for routing
+        self._tool_index: dict[str, tuple[_MCPServerConnection, str]] = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -434,15 +526,40 @@ class MCPToolRegistry:
             *(s.async_stop() for s in self._servers), return_exceptions=True
         )
 
+    async def async_refresh_tools(self) -> None:
+        """Fetch every connected server's tool list again."""
+        changed = await asyncio.gather(
+            *(s.async_refresh_tools() for s in self._servers),
+            return_exceptions=True,
+        )
+        if any(c is True for c in changed):
+            self._rebuild_tool_index()
+
     # ── tool access ───────────────────────────────────────────────────────────
+
+    def _model_names(self) -> dict[str, str]:
+        return _model_names([t for s in self._servers for t in s.tools])
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Return OpenAI-format tool schemas for all tools across all servers."""
+        names = self._model_names()
         schemas = []
         for server in self._servers:
             if server.state == _State.CONNECTED:
-                schemas.extend(openai_tool_schema(t) for t in server.tools)
+                for tool in _distinct(server.tools):
+                    schema = openai_tool_schema(tool)
+                    schema["function"]["name"] = names.get(tool.name, tool.name)
+                    schemas.append(schema)
         return schemas
+
+    def is_home_assistant_tool(self, name: str) -> bool:
+        """True for a tool of Home Assistant's own MCP server (/api/mcp):
+        device actions and state reads, not look-ups on the internet."""
+        route = self._tool_index.get(name)
+        if route is None:
+            return False
+        url = str(route[0]._config.get("url") or "")
+        return url.rstrip("/").endswith("/api/mcp")
 
     def estimate_schema_tokens(self) -> int:
         """Estimate the token cost of all current tool schemas.
@@ -463,19 +580,23 @@ class MCPToolRegistry:
         the case where a server reconnected and refreshed its tool list).
         Returns an error string on failure — never raises.
         """
-        server = self._tool_index.get(name)
-        if server is None:
+        route = self._tool_index.get(name)
+        if route is None:
             # Tool index may be stale — rebuild and retry once
             self._rebuild_tool_index()
-            server = self._tool_index.get(name)
-        if server is None:
+            route = self._tool_index.get(name)
+        if route is None:
             return f"[Unknown tool: {name!r}]"
-        return await server.call_tool(name, arguments)
+        server, real_name = route
+        return await server.call_tool(real_name, arguments)
 
     # ── private ───────────────────────────────────────────────────────────────
 
     def _rebuild_tool_index(self) -> None:
         self._tool_index = {}
+        names = self._model_names()
         for server in self._servers:
             for tool in server.tools:
-                self._tool_index[tool.name] = server
+                route = (server, tool.name)
+                self._tool_index[tool.name] = route
+                self._tool_index.setdefault(names.get(tool.name, tool.name), route)

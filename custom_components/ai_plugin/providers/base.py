@@ -47,6 +47,17 @@ class AbstractProvider(ABC):
         """
         return await self.async_chat(messages, tools)
 
+    async def async_warm(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> bool | None:
+        """Have the server read a prompt in ahead of the turn that sends it.
+
+        None when the server keeps nothing between requests (the default).
+        """
+        return None
+
     async def async_chat(
         self,
         messages: list[dict[str, Any]],

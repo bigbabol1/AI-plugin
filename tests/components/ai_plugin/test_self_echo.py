@@ -820,3 +820,125 @@ def test_echo_rule_keeps_its_six_second_grace(monkeypatch) -> None:
     ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=2.0))
     assert conv._speaker_was_playing(ent.hass, "dev_sat", 5.0)
     assert conv._PLAYBACK_ECHO_GRACE_S == 6.0
+
+
+async def test_enrollment_answer_is_not_mistaken_for_speaker_echo() -> None:
+    """2026-10-24: 'Shopping today.' answered an enrollment question while the
+    room speaker still reported playing and was dropped as TTS echo. During
+    enrollment only the text-match echo checks apply."""
+    ent = _entity()
+    ent._is_playback_overlap_echo = MagicMock(return_value=True)
+    ent._orchestrator._voice_id = MagicMock()
+    ent._orchestrator._voice_id.enrollment_active.return_value = True
+    ent._orchestrator._voice_id.wants_follow_up.return_value = True
+    await ent.async_process(_voice_input("Shopping today."))
+    ent._orchestrator.async_process.assert_awaited_once()
+
+    ent._orchestrator.async_process.reset_mock()
+    ent._orchestrator._voice_id.enrollment_active.return_value = False
+    await ent.async_process(_voice_input("Shopping today."))
+    ent._orchestrator.async_process.assert_not_awaited()
+
+
+async def test_close_phrase_does_not_end_enrollment() -> None:
+    """2026-10-26: the answer "…did some stuff on the PC. No, that's all."
+    matched the close phrase "that's all" and closed the microphone after
+    the second enrollment question. Outside enrollment it still closes."""
+    answer = "I got up, I made my porridge, did some stuff on the PC. No, that's all."
+    ent = _entity()
+    ent._orchestrator.async_process = AsyncMock(return_value="What is your favourite meal, and why?")
+    ent._orchestrator._voice_id = MagicMock()
+    ent._orchestrator._voice_id.enrollment_active.return_value = True
+    ent._orchestrator._voice_id.wants_follow_up.return_value = True
+    result = await ent.async_process(_voice_input(answer))
+    assert result.continue_conversation is True
+
+    ent._orchestrator._voice_id.enrollment_active.return_value = False
+    ent._orchestrator._voice_id.wants_follow_up.return_value = False
+    result = await ent.async_process(_voice_input(answer))
+    assert result.continue_conversation is False
+
+
+# ── which replies count ───────────────────────────────────────────────────────
+
+
+def test_superseded_reply_is_not_an_echo_source() -> None:
+    """Repeating the agent's earlier question back is a command, not echo
+    (2026-10-27: 'Add to the shopping list. Butter.' was dropped)."""
+    from custom_components.ai_plugin.conversation import _echo_candidates
+
+    recent = [
+        (29.8, "What would you like me to add to the shopping list?"),
+        (14.0, "I've added coffee beans to your shopping list."),
+    ]
+    turn = "Add to the shopping list. Butter."
+    assert _is_self_echo(turn, [r for _a, r in recent]) is True  # old behaviour
+    assert _is_self_echo(turn, _echo_candidates(recent)) is False
+
+
+def test_newest_reply_counts_for_the_whole_window() -> None:
+    from custom_components.ai_plugin.conversation import _echo_candidates
+
+    recent = [(29.0, "The living room is twenty one degrees right now.")]
+    assert _echo_candidates(recent) == [recent[0][1]]
+
+
+def test_older_reply_counts_while_it_could_still_play() -> None:
+    from custom_components.ai_plugin.conversation import _echo_candidates
+
+    older = "The living room is twenty one degrees right now."
+    recent = [(3.0, older), (1.0, "Okay.")]
+    assert _echo_candidates(recent) == [older, "Okay."]
+    assert _echo_candidates([]) == []
+
+
+async def test_turn_on_a_microphone_reopened_into_a_quiet_room_is_kept(monkeypatch) -> None:
+    """2026-10-28: the reply ended at 29.5 s, we reopened the mic at 31.3 s
+    once the room was quiet, and "Maybe the festival?" (heard as "Movie The
+    festival.") arrived at 35.1 s. The speaker had stopped 5.5 s earlier,
+    inside the 6 s grace, so the turn was dropped and the conversation lost.
+    Nothing recorded after a quiet reopen can be our reply."""
+    import time
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(seconds_ago=5.5))
+    ent._orchestrator.async_process = AsyncMock(return_value=REPLY)
+    await ent.async_process(_voice_input("why is it so hot today", device_id="dev_sat"))
+    ent._reopened_store()["dev_sat"] = time.monotonic()
+    ent._orchestrator.async_process.reset_mock()
+
+    await ent.async_process(_voice_input("Movie The festival.", device_id="dev_sat"))
+
+    ent._orchestrator.async_process.assert_awaited_once()
+
+
+async def test_a_reopen_before_the_latest_reply_does_not_count(monkeypatch) -> None:
+    """The reopen protects only turns recorded after the reply it waited for."""
+    import time
+
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(seconds_ago=2.0))
+    ent._reopened_store()["dev_sat"] = time.monotonic() - 30.0
+
+    result = await _first_then(ent, " tremble down.", REPLY)
+
+    assert result.response.speech["plain"]["speech"] == ""
+    ent._orchestrator.async_process.assert_not_awaited()
+
+
+async def test_reopen_records_a_quiet_room_only(monkeypatch) -> None:
+    from custom_components.ai_plugin import conversation as conv
+
+    async def _no_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(conv.asyncio, "sleep", _no_sleep)
+
+    ent, hass, _ = _entity_with_satellite(monkeypatch)
+    monkeypatch.setattr(conv, "_reply_audio_active", lambda *a: False)
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", "Two words", 0.5)
+    assert "d1" in ent._reopened_store()
+
+    ent, hass, _ = _entity_with_satellite(monkeypatch)
+    monkeypatch.setattr(conv, "_reply_audio_active", lambda *a: True)
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", "Two words", 0.5)
+    hass.services.async_call.assert_awaited_once()  # reopened at the cap
+    assert "d1" not in ent._reopened_store()

@@ -70,6 +70,7 @@
           "max_tool_iterations": "Tool call limit",
           "self_echo_filter": "Ignore the satellite hearing its own reply",
           "timer_announce": "Announce timers instead of on-device ring",
+          "find_phone": "Find my phone",
           "feedback_loop_devices": "Force-end conversations on these satellites",
           "keep_alive": "Ollama keep-alive (e.g. 30m, -1)",
           "prune_tool_schemas": "Prune tool schemas per message",
@@ -91,8 +92,9 @@
           "follow_up_delay": "For satellites whose replies play on separate speakers (Google/Cast, Mic to MediaPlayer): the satellite reopens its microphone when its OWN playback ends, about a second before the room actually goes quiet, and records the tail of its own reply. Above 0, AI Plugin takes over — it ends the turn, waits until its reply has finished playing plus a fixed 1-second settle, waits this many seconds, then reopens the microphone itself. 1 second is a good starting point; raise it if the satellite still hears the end of its own reply. 0 keeps the satellite in charge.",
           "enable_thinking": "Let reasoning models (qwen3, deepseek-r1) generate chain-of-thought before answering. Off by default — Assist needs final answers, not scratchpads. Internal reasoning blocks are always stripped from the displayed reply regardless of this setting.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
-          "self_echo_filter": "For satellites whose TTS plays through a separate speaker: drop voice turns that match the reply just spoken, so 'Listen for follow-up' does not loop. Short turns are never filtered.",
+          "self_echo_filter": "For satellites whose replies play through a separate speaker: drop voice turns that repeat part of the reply just spoken, and fragments of one to three words heard while a speaker in the room was still playing it (a command or a yes/no is kept), so a follow-up does not loop on the reply. Mostly needed with a quiet gap of 0: above 0, AI Plugin reopens the microphone only once the room is quiet.",
           "timer_announce": "Voice timers are announced through Mic to MediaPlayer (or assist_satellite.announce) at expiry instead of ringing on the satellite. For satellites whose own speaker is silenced. Note: the device shows no timer LEDs in this mode.",
+          "find_phone": "\"Where is my phone?\" rings the phone loudly, also on silent: Android speaks through the alarm channel at full volume, an iPhone plays a critical alert (allow Critical Alerts in the Home Assistant app). Only phones running the Home Assistant app and linked to a person can ring. \"My phone\" is the speaker's when voice recognition knows them; otherwise AI Plugin asks whose.",
           "feedback_loop_devices": "Satellites whose TTS plays through a separate speaker re-hear their own reply and re-trigger listening. Conversations on listed devices always end after one turn; all others honour the follow-up toggle.",
           "keep_alive": "How long Ollama keeps the model in VRAM after a request. Empty = server default (5m). Use -1 for always loaded.",
           "prune_tool_schemas": "Drop unlikely discovery tools per message. Saves a few hundred tokens but defeats Ollama's prompt caching — leave off for lower latency.",
@@ -111,8 +113,8 @@
       "cannot_connect": "Could not connect to the provider. Check that your AI provider is running.",
       "invalid_api_key": "Invalid API key. Check your credentials.",
       "model_no_tools": "This model reports no tool-calling capability — the integration needs tools to control devices. Pick a tool-capable model (e.g. qwen3).",
-        "context_exceeds_model": "Larger than this model's maximum context length — lower the context window.",
-        "model_required": "Enter a model name.",
+      "context_exceeds_model": "Larger than this model's maximum context length — lower the context window.",
+      "model_required": "Enter a model name.",
       "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
       "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL."
     },
@@ -128,7 +130,8 @@
           "provider_settings": "Provider settings",
           "web_search": "Web search",
           "advanced": "Advanced",
-          "mcp_servers": "MCP servers"
+          "mcp_servers": "MCP servers",
+          "voice_id": "Voice recognition"
         }
       },
       "provider_settings": {
@@ -190,6 +193,7 @@
           "max_tool_iterations": "Tool call limit",
           "self_echo_filter": "Ignore the satellite hearing its own reply",
           "timer_announce": "Announce timers instead of on-device ring",
+          "find_phone": "Find my phone",
           "feedback_loop_devices": "Force-end conversations on these satellites",
           "keep_alive": "Ollama keep-alive (e.g. 30m, -1)",
           "prune_tool_schemas": "Prune tool schemas per message",
@@ -209,8 +213,9 @@
           "follow_up_delay": "For satellites whose replies play on separate speakers (Google/Cast, Mic to MediaPlayer): the satellite reopens its microphone when its OWN playback ends, about a second before the room actually goes quiet, and records the tail of its own reply. Above 0, AI Plugin takes over — it ends the turn, waits until its reply has finished playing plus a fixed 1-second settle, waits this many seconds, then reopens the microphone itself. 1 second is a good starting point; raise it if the satellite still hears the end of its own reply. 0 keeps the satellite in charge.",
           "enable_thinking": "Let reasoning models (qwen3, deepseek-r1) generate chain-of-thought before answering. Off by default — Assist needs final answers, not scratchpads. Internal reasoning blocks are always stripped from the displayed reply regardless of this setting.",
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
-          "self_echo_filter": "For satellites whose TTS plays through a separate speaker: drop voice turns that match the reply just spoken, so 'Listen for follow-up' does not loop. Short turns are never filtered.",
+          "self_echo_filter": "For satellites whose replies play through a separate speaker: drop voice turns that repeat part of the reply just spoken, and fragments of one to three words heard while a speaker in the room was still playing it (a command or a yes/no is kept), so a follow-up does not loop on the reply. Mostly needed with a quiet gap of 0: above 0, AI Plugin reopens the microphone only once the room is quiet.",
           "timer_announce": "Voice timers are announced through Mic to MediaPlayer (or assist_satellite.announce) at expiry instead of ringing on the satellite. For satellites whose own speaker is silenced. Note: the device shows no timer LEDs in this mode.",
+          "find_phone": "\"Where is my phone?\" rings the phone loudly, also on silent: Android speaks through the alarm channel at full volume, an iPhone plays a critical alert (allow Critical Alerts in the Home Assistant app). Only phones running the Home Assistant app and linked to a person can ring. \"My phone\" is the speaker's when voice recognition knows them; otherwise AI Plugin asks whose.",
           "feedback_loop_devices": "Satellites whose TTS plays through a separate speaker re-hear their own reply and re-trigger listening. Conversations on listed devices always end after one turn; all others honour the follow-up toggle.",
           "keep_alive": "How long Ollama keeps the model in VRAM after a request. Empty = server default (5m). Use -1 for always loaded.",
           "prune_tool_schemas": "Drop unlikely discovery tools per message. Saves a few hundred tokens but defeats Ollama's prompt caching — leave off for lower latency.",
@@ -276,11 +281,15 @@
         "description": "Runs a local MCP tool as a subprocess.\nExample: command = uvx   args = mcp-server-time",
         "data": {
           "mcp_command": "Command",
-          "mcp_args": "Arguments (space-separated)"
+          "mcp_args": "Arguments (space-separated)",
+          "mcp_key_env": "API key variable",
+          "mcp_key": "API key"
         },
         "data_description": {
           "mcp_command": "The executable to run (e.g. uvx, npx, python).",
-          "mcp_args": "Arguments separated by spaces (e.g. mcp-server-time --local)."
+          "mcp_args": "Arguments separated by spaces (e.g. mcp-server-time --local).",
+          "mcp_key_env": "Environment variable the server reads its key from (see the server's documentation), e.g. BRAVE_API_KEY.",
+          "mcp_key": "Optional. Leave empty if the server needs no key; clear it to remove a saved key."
         }
       },
       "mcp_edit_pick": {
@@ -304,11 +313,15 @@
         "title": "Edit stdio MCP Server",
         "data": {
           "mcp_command": "Command",
-          "mcp_args": "Arguments (space-separated)"
+          "mcp_args": "Arguments (space-separated)",
+          "mcp_key_env": "API key variable",
+          "mcp_key": "API key"
         },
         "data_description": {
           "mcp_command": "The executable to run.",
-          "mcp_args": "Arguments separated by spaces."
+          "mcp_args": "Arguments separated by spaces.",
+          "mcp_key_env": "Environment variable the server reads its key from (see the server's documentation), e.g. BRAVE_API_KEY.",
+          "mcp_key": "Optional. Leave empty if the server needs no key; clear it to remove a saved key."
         }
       },
       "mcp_remove": {
@@ -316,18 +329,64 @@
         "data": {
           "mcp_index": "Server to remove"
         }
+      },
+      "voice_id": {
+        "title": "Voice recognition",
+        "description": "Recognises who is speaking on voice turns that reach the AI, so each person gets their own memory. Only voice fingerprints are stored, never audio. It is not a security feature and never authorises actions.\n\n{status}",
+        "menu_options": {
+          "voice_id_settings": "Settings",
+          "voice_id_enroll": "Enroll a voice",
+          "voice_id_delete": "Delete a voice"
+        }
+      },
+      "voice_id_settings": {
+        "title": "Voice recognition settings",
+        "description": "Turning this on downloads the voice model once (about 13 MB) and switches this integration's Assist pipelines to a speech-to-text pass-through that keeps a copy of each command's audio in memory for 30 seconds. Turning it off switches them back.",
+        "data": {
+          "voice_id_enabled": "Recognise voices",
+          "voice_id_voice_enroll": "Allow starting enrollment by voice (\"learn my voice, I am Anna\")",
+          "voice_id_threshold": "Minimum match score",
+          "voice_id_margin": "Minimum lead over the next person"
+        },
+        "data_description": {
+          "voice_id_threshold": "Higher means fewer wrong names and more 'unknown'. Default 0.35.",
+          "voice_id_margin": "How clearly the best match must beat the second. Default 0.10."
+        }
+      },
+      "voice_id_enroll": {
+        "title": "Enroll a voice",
+        "description": "Choose who is enrolling and where. The satellite then introduces itself and asks eight short questions. Answer each in a full sentence; nothing said is carried out as a command. Say \"stop\" to end early. Repeat on a satellite of another type (for example the bathroom) for better recognition there.",
+        "data": {
+          "person": "Person",
+          "satellite": "Satellite"
+        }
+      },
+      "voice_id_delete": {
+        "title": "Delete a voice",
+        "description": "Removes every stored voice fingerprint of this person. Their memory is kept.",
+        "data": {
+          "person": "Person"
+        }
       }
     },
     "error": {
       "cannot_connect": "Could not connect to the provider. Check that your AI provider is running.",
       "invalid_api_key": "Invalid API key. Check your credentials.",
       "model_no_tools": "This model reports no tool-calling capability — the integration needs tools to control devices. Pick a tool-capable model (e.g. qwen3).",
-        "context_exceeds_model": "Larger than this model's maximum context length — lower the context window.",
-        "model_required": "Enter a model name.",
+      "context_exceeds_model": "Larger than this model's maximum context length — lower the context window.",
+      "model_required": "Enter a model name.",
       "invalid_url": "Enter a valid URL (e.g. http://localhost:11434/v1)",
       "searxng_unreachable": "Could not reach your SearXNG instance. Check the URL.",
       "command_required": "Enter a command to run."
     },
-    "abort": {}
+    "abort": {
+      "voice_id_disabled": "Turn on voice recognition in Settings first.",
+      "voice_id_no_persons": "Add people under Settings → People first; voices are linked to them.",
+      "voice_id_no_satellites": "No voice satellite found.",
+      "voice_id_enroll_started": "Enrollment started — {satellite} is asking its first question.",
+      "voice_id_nothing_enrolled": "No voices are enrolled.",
+      "voice_id_deleted": "Voice deleted.",
+      "voice_id_enroll_armed": "The satellite could not be started. Say the wake word to {satellite} within 5 minutes and it will start asking its questions."
+    }
   }
 }

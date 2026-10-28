@@ -83,6 +83,22 @@ _META_CONVO_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Questions about the user's own plans, or asking for advice, carry a time
+# word without needing the web: "what should I wear today?", "anything
+# scheduled for today?". Every forced search in the logs from 2026-10-22 to
+# 10-28 was one of these, and searching the raw question returned other
+# cities' events and generic articles.
+_PERSONAL_RE = re.compile(
+    r"\b(?:"
+    r"should\s+(?:i|we)|do\s+you\s+think|what\s+do\s+you\s+think|"
+    r"schedul\w*|calendar|agenda|appointments?|reminders?|to-?do|"
+    # German
+    r"soll(?:te)?\s+(?:ich|wir)|meinst\s+du|denkst\s+du|"
+    r"termine?n?|kalender|erinnerung(?:en)?"
+    r")\b",
+    re.IGNORECASE,
+)
+
 def _is_online_query(text: str) -> bool:
     """Return True when the message almost certainly needs live web data.
 
@@ -95,12 +111,15 @@ def _is_online_query(text: str) -> bool:
     - Query is meta-conversation about the previous reply ("you said that
       just now"). The "just now" inside _TEMPORAL_ANCHOR_RE would otherwise
       cause a useless web_search on chat-about-chat messages.
+    - Query is about the user's own plans or asks for advice.
     """
     if not text:
         return False
     if _HA_SENSOR_RE.search(text):
         return False
     if _META_CONVO_RE.search(text):
+        return False
+    if _PERSONAL_RE.search(text):
         return False
     if _TEMPORAL_ANCHOR_RE.search(text):
         return True

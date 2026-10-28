@@ -39,6 +39,11 @@ CONF_FEEDBACK_LOOP_DEVICES = "feedback_loop_devices"
 CONF_TIMER_ANNOUNCE = "timer_announce"
 DEFAULT_TIMER_ANNOUNCE = False
 
+# "Where is my phone": ring a person's phone through the Companion app.
+# Off by default; when on, only phones linked to a person entity can ring.
+CONF_FIND_PHONE = "find_phone"
+DEFAULT_FIND_PHONE = False
+
 # Machine-generated conversation_command prefix — never spoken by users.
 TIMER_DONE_SENTINEL = "AI_PLUGIN_TIMER_DONE"
 
@@ -240,6 +245,7 @@ SYSTEM_PROMPT_DEFAULT = (
     "- Proper-named devices like 'Gustav', 'Dora', 'mood light', 'stehlampe', 'flurlicht' are ENTITY names, NOT areas. Call get_entity or search_entities to resolve them.\n"
     "- DEVICE-NOUN commands ('air purifier', 'humidifier', 'kettle', 'air filter', 'luftreiniger', 'luftbefeuchter', 'wasserkocher', 'wasserkocher', 'fan', 'reading lamp', 'mood light', 'TV', 'speaker') refer to a SPECIFIC device, NOT an area or a domain category. For these you MUST: (1) CALL search_entities with the device noun as query, (2) read the returned list, pick the most likely match, (3) CALL HassTurnOn / HassTurnOff with the returned entity_id. NEVER use set_area_state for these — set_area_state is only for plural-domain commands ('lights', 'fans', 'covers' as a category) or whole-home/whole-room sweeps.\n"
     "- Areas are ROOMS only ('kitchen', 'bedroom', 'living room', 'hallway'). If a tool says 'area X doesn't exist', the user named an entity — retry via get_entity / search_entities instead of giving up.\n"
+    "- To answer where a household member is ('where is Anna', 'is my wife home', 'who is home'): each member is a person entity whose state says where they are. Turn a relation ('my wife', 'my husband') into the name from [USER FACTS] first, then CALL list_entities(domain='person') and answer from that person's row: [home] = at home, [not_home] = away from home, any other state = the place they are at; a last address in the row is where they were last seen. Never say you lack location information without calling it.\n"
     "- Never invent entity_ids, area names, or states. If a discovery tool returns empty, say so plainly; do not fabricate.\n"
     "- Discovery tools default to entities exposed to the conversation assistant. To inspect hidden or diagnostic entities, pass exposed_only=false.\n"
     "\n"
@@ -258,7 +264,7 @@ SYSTEM_PROMPT_DEFAULT = (
     "[MEMORY TOOLS]\n"
     "- A [USER FACTS] block (if present below) already contains every fact previously saved about this user, numbered. Answer questions about the user's name, preferences, routines, or past statements directly from that block — do NOT call recall first when [USER FACTS] is present.\n"
     "- recall returns the same list as a tool result; call it only if [USER FACTS] is absent or empty.\n"
-    "- remember saves a new fact; invoke it on durable preferences or explicit 'remember X' requests.\n"
+    "- remember saves a new fact; invoke it on durable preferences or explicit 'remember X' requests. Only tell the user you will remember something after remember answered 'Remembered'; if it refused, say nothing was saved.\n"
     "- forget removes a fact. Only call forget when the user references a fact that ACTUALLY appears in [USER FACTS]. If the user says 'forget that I drive a Ferrari' but no Ferrari fact is listed, reply that no such fact is stored — do NOT call forget with a guessed index. When a matching fact IS listed, prefer forget(index=N) using its number — it works in any language. Fall back to forget(fact='...') only when no index is available.\n"
     "- Never describe these actions in prose. Invoke the tool silently and answer from its result.\n"
     "\n"
@@ -304,7 +310,7 @@ SYSTEM_PROMPT_DEFAULT = (
     "- If a discovery tool returns no results, try a looser filter (drop area, drop domain, switch to search_entities) before giving up.\n"
     "- NEVER suggest visiting a website. YOU are the interface.\n"
     "- Never narrate or announce tool calls. Do NOT say 'Calling list_entities...', 'Let me check...', 'Found entity X, checking its state...', 'I'll turn it on for you', 'I'm checking the temperature', 'I found a light named X. I'll turn it red'. Invoke tools silently and reply ONLY with the final answer AFTER the tool returns.\n"
-    "- Never return an empty reply. If you have no tool result to summarise, state plainly what you couldn't do and suggest a next step.\n"
+    "- Never return an empty reply, except after a playback change (see [MEDIA PLAYBACK]). If you have no tool result to summarise, state plainly what you couldn't do and suggest a next step.\n"
     "\n"
     "[TIMERS]\n"
     "- Voice timers are first-class. Use start_timer / cancel_timer / pause_timer / unpause_timer / increase_timer / decrease_timer / timer_status.\n"
@@ -401,13 +407,20 @@ SYSTEM_PROMPT_VOICE = (
     "search_entities('TV') → HassTurnOn(entity_id).\n"
     "- \"Which rooms\": list_areas. \"What's in X\": list_entities(area=X).\n"
     "- \"Any lights on\", \"are any lights on\", \"which lights are on\", \"what's on\", \"any windows open\": list_entities(domain=..., state=\"on\"/\"off\"/\"open\"). Never answer from memory; never check just one device; never report one light and claim the rest are off — list EVERY row returned.\n"
+    "- People: \"where is <person>\", \"is <person> home\", \"who is home\", \"where's my wife\". "
+    "Each household member is a person entity whose state says where they are. Turn a relation "
+    "(\"my wife\", \"my husband\") into the name from [USER FACTS] first. CALL "
+    "list_entities(domain=\"person\") and answer from that person's row: [home] = at home, "
+    "[not_home] = away from home, any other state = the place they are at; a last address in the "
+    "row is where they were last seen, give its street and city. Never say you lack location "
+    "information without calling it.\n"
     "- Never invent entity_ids or area names. "
     "If unsure, call a discovery tool first.\n"
     "\n"
     "Memory tools:\n"
     "- If a [USER FACTS] block is present, answer from it directly; do not call recall.\n"
     "- recall returns the same list when [USER FACTS] is absent.\n"
-    "- remember saves a new fact on durable preferences or explicit 'remember X'.\n"
+    "- remember saves a new fact on durable preferences or explicit 'remember X'. Only say you'll remember something after remember answered 'Remembered'; if it refused, say nothing was saved.\n"
     "- forget removes a fact: only when it's listed in [USER FACTS]. Prefer forget(index=N); fact='...' is a substring fallback. If not listed, say so — never guess an index.\n"
     "- Invoke silently; never narrate.\n"
     "\n"
@@ -437,7 +450,7 @@ SYSTEM_PROMPT_VOICE = (
     "- If the search result is empty or off-topic, say plainly 'I couldn't find specific information about that for today' — no padding, no redirects.\n"
     "\n"
     "Never narrate or announce tool calls. Do NOT say 'Calling X', 'Let me check', 'Found entity Y. I'll do Z', 'I'll turn it on for you', 'I'm checking the temperature'. Speak ONLY the final answer AFTER the tool returns.\n"
-    "Never return an empty reply. If there is nothing to report, say so in one sentence.\n"
+    "Never return an empty reply, except after a playback change (see Music playback). If there is nothing to report, say so in one sentence.\n"
     "\n"
     "Timers:\n"
     "- ALWAYS extract the EXACT duration the user said. Never substitute a default. Word order varies; all of these mean minutes=10, name='pasta': 'set a pasta timer for 10 minutes', 'timer for 10 minutes called pasta', '10 minute pasta timer', 'pasta in 10 minutes'. Call start_timer with that duration. Confirm in one short sentence including name + duration the tool actually received (e.g. '10 minute pasta timer running').\n"
@@ -460,3 +473,16 @@ SYSTEM_PROMPT_VOICE = (
 
 # Token budget warning threshold (tokens remaining for history)
 TOKEN_BUDGET_WARNING_THRESHOLD = 1000
+
+# Voice recognition (speaker ID). Off by default: enabling downloads the
+# model (~13 MB) and routes the plugin's pipelines through the STT
+# pass-through. Fingerprints are computed only on turns that reach the LLM.
+CONF_VOICE_ID_ENABLED = "voice_id_enabled"
+DEFAULT_VOICE_ID_ENABLED = False
+CONF_VOICE_ID_VOICE_ENROLL = "voice_id_voice_enroll"
+DEFAULT_VOICE_ID_VOICE_ENROLL = True
+CONF_VOICE_ID_THRESHOLD = "voice_id_threshold"
+CONF_VOICE_ID_MARGIN = "voice_id_margin"
+# How long an LLM turn may wait for the fingerprint before it proceeds as
+# "unknown". 6 s of speech took 0.8-1.0 s on an Odroid N2.
+VOICE_ID_WAIT_SECONDS = 1.5

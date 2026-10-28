@@ -6,7 +6,7 @@ import re
 import voluptuous as vol
 
 # Placeholders allowed in templates. Engine substitutes these via str.format.
-ALLOWED_PLACEHOLDERS = {"label", "val", "unit", "time", "area"}
+ALLOWED_PLACEHOLDERS = {"label", "val", "unit", "time", "area", "name", "place"}
 
 
 class LocalizationError(Exception):

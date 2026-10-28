@@ -38,6 +38,10 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
 - Follow-up listening: always, never, or **let the model decide** by asking a question.
 - Self-echo filtering for satellites whose replies play on a separate speaker.
 - First-class voice timers, with an optional announce mode for any speaker.
+- **Voice recognition** *(optional)*: knows who is speaking, so each person gets their own memory. It runs inside Home Assistant, with no add-on and no cloud.
+- **Find my phone** *(optional)*: "Where is my phone?" rings it loudly, even on silent.
+- **Where people are**: "Where's my wife?", "Is Anna home?", "Who is home?" are answered from Home Assistant's people.
+- A short "One second." while a slow web look-up runs, so silence never means the question got lost.
 
 **⚡ Fast on local hardware**
 - A deterministic shortcut layer answers common commands in **~0.01–0.05 s** without calling the LLM.
@@ -179,6 +183,43 @@ A satellite that routes its reply audio to an external media player (Google/Cast
 
 </details>
 
+### Voice recognition
+
+The assistant can tell who is speaking on a voice turn, so each person has their own memory: *"What's my favourite colour?"* gets your answer, not your partner's. It also decides whose phone *"Where is my phone?"* rings and who *"my wife"* is.
+
+**Switch it on** under **Configure → Voice recognition → Settings → Recognise voices**. Then teach it each voice, either by saying *"Learn my voice, I am Anna"* to a satellite, or under **Voice recognition → Enroll a voice**. The satellite asks eight short questions; answer each in a full sentence. Nothing said during enrollment is carried out as a command, and *"stop"* ends it early. Voices are linked to Home Assistant's people, so add them under **Settings → People** first.
+
+**How it works.**
+- It runs entirely inside Home Assistant, on NumPy. Nothing is sent anywhere, and no add-on is needed.
+- The first time it is switched on, it downloads the voice model once (about 13 MB, NVIDIA TitaNet-small, Apache-2.0, from this repository's [`voice_model/`](voice_model/) folder) and checks it against pinned SHA-256 digests.
+- This integration's Assist pipelines are switched to a speech-to-text pass-through. It hands the audio to your speech-to-text engine unchanged and keeps a copy in memory for 30 seconds. Turning the feature off switches the pipelines back.
+- The fingerprint is computed while you are still speaking, so it adds no delay. It is used on turns that reach the AI and by [Find my phone](#find-my-phone). Home Assistant's own commands and the plugin's other shortcuts don't need it.
+- Only voice fingerprints are stored, never audio.
+
+**When it names someone.** A person is named only when their score clears **Minimum match score** (default `0.35`) and beats the next person by **Minimum lead** (default `0.10`). It compares against samples recorded on the same kind of microphone first, because a bathroom satellite sounds very different from a ReSpeaker. A voice that matches no one closely enough is treated as unknown: it can still use the shared memory but cannot save to it, and the assistant says it could not tell who is speaking this time.
+
+**For better recognition**, enroll on each type of satellite you use. A voice enrolled only in the kitchen is recognised less often in the bathroom.
+
+> [!IMPORTANT]
+> Voice recognition is a convenience, not a security feature. It never authorises actions, and a similar voice or a recording can be taken for someone else.
+
+### Find my phone
+
+*"Where is my phone?"*, *"Ring my phone"*, *"Wo ist mein Handy?"*, or *"Where is Anna's phone?"* rings the phone through the Home Assistant Companion app, in all seven languages. Switch it on under **Configure → Advanced → Find my phone** (off by default).
+
+- **Android** speaks a short line on the alarm channel at full volume. It plays on silent, and the phone's volume is restored afterwards.
+- **iPhone** gets a critical alert, the only sound an iPhone plays on mute. Allow **Critical Alerts** for the Home Assistant app in the iPhone's notification settings.
+- The phone rings three times, six seconds apart. The first ring is sent before the reply, so a failed push is reported instead of announced.
+- **Whose phone.** *"My phone"* means the phone of the speaker recognised by [voice recognition](#voice-recognition), or of the logged-in user in the app. A named person (*"Anna's phone"*) is found by name. If the speaker is unknown and the home has more than one phone, the assistant asks whose.
+- **Which phones.** A phone can ring when it runs the Companion app and its device tracker belongs to a person. The plugin finds it through Home Assistant's own links, so nothing has to be exposed to Assist.
+- If Home Assistant last placed the phone away from home, the reply says where.
+
+### Where people are
+
+*"Where's my wife?"*, *"Is Anna home?"* and *"Who is home?"* are answered from Home Assistant's **person** entities that are exposed to Assist. *"My wife"* or *"my husband"* is resolved through the speaker's saved facts, so tell it once: *"Remember that my wife is Anna."*
+
+The answer is *at home*, *away*, or the name of the zone the person is in. When someone is away, the reply adds their last street address only if the Companion app's **Geocoded location** sensor on their phone is exposed too. Exposing a person tells the assistant whether they are home, not where they are.
+
 ### Voice timers
 
 Timers are first-class tools: `start_timer`, `cancel_timer`, `pause_timer`, `unpause_timer`, `increase_timer`, `decrease_timer` and `timer_status`. A deterministic safety net treats the spoken utterance as the ground truth for the duration, so "10 seconds" never becomes 10 minutes, even if the model fills a slot wrongly.
@@ -199,6 +240,10 @@ The assistant remembers facts across conversations and across restarts:
 **Recall is usually free.** Saved facts are loaded into a `[USER FACTS]` block at the start of every turn. That block is a late, cache-stable system message, so the model answers "what's my…" questions without a tool round trip, and each round trip is a full extra generation pass on a small model.
 
 **Per-user and plain text.** Facts are stored at `<config>/.ai_plugin_memory_<user_id>.json`, one file per HA user (`…_anonymous.json` for unauthenticated turns). The files are readable, so don't ask it to remember secrets.
+
+**Per person on satellites.** Voice turns from a satellite carry no HA user. With [voice recognition](#voice-recognition) on, a recognised speaker uses their own facts: the file of the HA user linked to their person, or one named after the person. When voice recognition is on but recognises no one, `remember` and `forget` refuse and say nothing was saved, so a fact never lands in a store that belongs to nobody.
+
+**Preferences apply everywhere.** A saved preference such as *"always use metric units"* applies to every answer, whatever the topic, not only to questions about you.
 
 **`forget` won't delete the wrong fact.** It removes by the fact's number first and falls back to a fuzzy match. If the fact isn't stored, it says so instead of guessing.
 
@@ -268,6 +313,11 @@ On a 7–12B model, latency is won or lost in three places:
 | Ollama keep-alive | unset | Keeps the model in VRAM between requests |
 | Prune tool schemas | off | Per-message schema pruning. Defeats the prefix cache, so leave it off. |
 | Announce timers | off | Timer completions play on a media player instead of the on-device ring |
+| Find my phone | off | "Where is my phone?" rings it through the Companion app (see [Find my phone](#find-my-phone)) |
+| Recognise voices | off | Speaker recognition for per-person memory (see [Voice recognition](#voice-recognition)) |
+| Allow starting enrollment by voice | on | "Learn my voice, I am Anna" starts enrollment on that satellite |
+| Minimum match score | `0.35` | Higher means fewer wrong names and more "unknown" |
+| Minimum lead over the next person | `0.10` | How clearly the best match must beat the second |
 | Ignore the satellite hearing its own reply | on | Self-echo filter |
 | Force-end conversations on these satellites | none | Feedback-loop guard for setups with TTS on a separate speaker |
 | Location bias | on | Scopes "near me" searches to your home (fails open) |
@@ -286,6 +336,9 @@ On a 7–12B model, latency is won or lost in three places:
 | The assistant answers itself in a loop | Replies are playing on a separate speaker. See [Follow-up listening](#follow-up-listening). |
 | Timer LEDs count down but there's no sound | The ring plays on the satellite's own speaker. Enable **Announce timers**. |
 | Empty replies from reasoning models | Upgrade Ollama to 0.20+. |
+| My voice is often not recognised | Enroll again on that type of satellite: samples from the same kind of microphone count first. If it still misses, lower **Minimum match score** a little. |
+| The iPhone shows the find-my-phone notification but makes no sound | Allow **Critical Alerts** for the Home Assistant app in the iPhone's notification settings. |
+| "Where is Anna?" says it has no information | Expose Anna's **person** entity to Assist. For a street address when she is away, also expose her phone's *Geocoded location* sensor. |
 
 ## Development
 
@@ -304,5 +357,8 @@ The unit suite runs against stubbed Home Assistant modules, so no HA install is 
 noncommercial purpose: your own home, hobby projects, study, research, and charities, schools or
 public bodies. Commercial use, including selling it or bundling it into a paid product or service,
 needs a separate license; open an issue to ask. Contributions are accepted under the same terms.
+
+The optional voice-recognition model in [`voice_model/`](voice_model/) is NVIDIA TitaNet-small under the
+Apache License 2.0, not PolyForm; see [voice_model/README.md](voice_model/README.md).
 
 Release history is in [CHANGELOG.md](CHANGELOG.md).

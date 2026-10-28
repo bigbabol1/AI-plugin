@@ -188,6 +188,23 @@ class OpenAICompatProvider(AbstractProvider):
             return await self._chat_ollama(messages, tools)
         return await self._chat_openai(messages, tools)
 
+    async def async_warm(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> bool | None:
+        """Have Ollama read a prompt in without answering it (one token).
+
+        Every option that decides how the prompt is held (num_ctx, think,
+        keep_alive) is the same as on a real turn, so the next turn
+        starting with the same messages finds them already read. None when
+        the server is not Ollama.
+        """
+        if not await self._detect_ollama():
+            return None
+        await self._chat_ollama(messages, tools, num_predict=1)
+        return True
+
     async def _chat_openai(
         self,
         messages: list[dict[str, Any]],
@@ -296,6 +313,7 @@ class OpenAICompatProvider(AbstractProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         on_delta: Any = None,
+        num_predict: int | None = None,
     ) -> ChatResponse:
         """Call Ollama's native /api/chat so options.num_ctx actually takes effect."""
         session = self._get_session()
@@ -308,6 +326,8 @@ class OpenAICompatProvider(AbstractProvider):
             options["top_p"] = self._top_p
         if self._max_tokens:
             options["num_predict"] = self._max_tokens
+        if num_predict is not None:
+            options["num_predict"] = num_predict
         if self._context_window:
             options["num_ctx"] = self._context_window
         payload: dict[str, Any] = {

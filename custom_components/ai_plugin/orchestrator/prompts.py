@@ -53,15 +53,21 @@ class PromptBlocksMixin:
         return "\n\n".join(p for p in parts if p)
 
     async def _build_volatile_block(
-        self, user_id: str | None, conversation_id: str
+        self,
+        user_id: str | None,
+        conversation_id: str,
+        speaker: str | None = None,
+        speaker_checked: bool = False,
     ) -> str:
-        """Per-turn context ([CURRENT TIME], [USER FACTS], [LAST ACTION]).
+        """Per-turn context ([CURRENT TIME], [SPEAKER], [USER FACTS], [LAST ACTION]).
 
         Injected as a system message directly before the newest user turn
-        so the static prompt head above stays cache-stable.
+        so the static prompt head above stays cache-stable. [SPEAKER] is
+        present only when voice recognition named the speaker.
         """
         parts = [
             self._build_time_block(),
+            _speaker_block(speaker, speaker_checked),
             await self._build_user_facts_block(user_id),
         ]
         last = self._last_entities.get(conversation_id)
@@ -115,12 +121,22 @@ class PromptBlocksMixin:
         if not facts:
             return ""
         numbered = "\n".join(f"{i}. {f}" for i, f in enumerate(facts, 1))
+        # Preferences must reach answers on any topic: scoped to "questions
+        # about who they are", a saved "ALWAYS use metric" was ignored for
+        # "what is known about the Megalodon?" (feet in 12/12 replays of the
+        # real turn, metric in 20/20 with this wording; 2026-10-27). The
+        # conversion example is what made the difference, a general rule in
+        # the system prompt alone did not.
         return (
             "[USER FACTS]\n"
             "Facts previously saved by the user. Use them when answering "
-            "questions about who they are or their preferences. To remove "
-            "a fact, call forget(index=N, fact='<keyword>') with the matching "
-            "number. Never call forget for a fact that is not listed here.\n"
+            "questions about who they are. Preferences among them (units, "
+            "language, style) apply to EVERY answer, whatever the topic: if "
+            "one says to use metric units, give every measurement in metric, "
+            "converting figures you know in other units (feet to metres, "
+            "pounds to kilograms, Fahrenheit to Celsius). To remove a fact, "
+            "call forget(index=N, fact='<keyword>') with the matching number. "
+            "Never call forget for a fact that is not listed here.\n"
             f"{numbered}"
         )
 
@@ -171,3 +187,37 @@ class PromptBlocksMixin:
             "near_user=true on web_search. The plugin will scope the "
             "query to this area; do not invent a city name."
         )
+
+
+def _speaker_block(speaker: str | None, checked: bool) -> str:
+    """[SPEAKER] for this turn. Explicit about who speaks NOW: with the name
+    in history from an earlier turn, the model kept telling the second
+    speaker the first speaker's name although their voice had been
+    recognised (2026-10-24)."""
+    if speaker:
+        return (
+            "[SPEAKER]\n"
+            f"The person speaking now was recognised by voice as {speaker}. "
+            f"Treat them as {speaker}, even if earlier turns of this conversation "
+            f"were someone else. [USER FACTS] below are {speaker}'s."
+        )
+    if checked:
+        # "Not recognised" alone read as "never enrolled": an enrolled user who
+        # scored just under the threshold was told "I haven't been able to
+        # recognize your voice yet" and offered enrollment again (2026-10-28).
+        # The last-but-two sentence keeps "learn my voice" working; without it,
+        # the model stopped calling the enrollment tool.
+        return (
+            "[SPEAKER]\n"
+            "Voice recognition is on, but it could not tell who is speaking this "
+            "time: the voice did not match a known voice closely enough, which "
+            "happens to known voices too (distance, noise, a short phrase). Never "
+            "say their voice is unknown, not registered or not set up. If they ask "
+            "why you did not recognise them, say in your own words that you could "
+            "not tell from their voice this time and that you listen again on "
+            "everything they say next. A request to learn their voice is still "
+            "carried out as usual. Do not assume they are anyone named earlier in "
+            "this conversation; ask if it matters. Nothing can be saved to memory "
+            "for them."
+        )
+    return ""

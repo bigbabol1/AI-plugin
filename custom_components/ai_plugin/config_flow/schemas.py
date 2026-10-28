@@ -38,6 +38,7 @@ from ..const import (
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
     CONF_TIMER_ANNOUNCE,
+    CONF_FIND_PHONE,
     CONF_TAVILY_API_KEY,
     CONF_TEMPERATURE,
     CONF_TOP_P,
@@ -55,6 +56,7 @@ from ..const import (
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SELF_ECHO_FILTER,
     DEFAULT_TIMER_ANNOUNCE,
+    DEFAULT_FIND_PHONE,
     DEFAULT_SUMMARIZATION_ENABLED,
     DEFAULT_VOICE_MODE,
     DEFAULT_WEB_SEARCH_BACKEND,
@@ -282,6 +284,10 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
             vol.Optional(
                 CONF_TIMER_ANNOUNCE,
                 default=current.get(CONF_TIMER_ANNOUNCE, DEFAULT_TIMER_ANNOUNCE),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_FIND_PHONE,
+                default=current.get(CONF_FIND_PHONE, DEFAULT_FIND_PHONE),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_FEEDBACK_LOOP_DEVICES,
