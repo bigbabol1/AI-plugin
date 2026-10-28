@@ -69,6 +69,7 @@ from ..shortcuts.phone import (
     resolve_owner,
 )
 from ..tools.ha_local import HALocalToolRegistry
+from ..tools.ha_local.lights import hass_light_set_args
 from ..tools.memory import (
     TOOL_NAMES as MEMORY_TOOL_NAMES,
     TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS,
@@ -1232,6 +1233,8 @@ class Orchestrator(
             url = arguments.get("url", "")
             return await self._browse_url.async_browse(url, strip_urls=voice_mode)
         if self._mcp is not None:
+            if name == "HassLightSet":
+                arguments = hass_light_set_args(arguments)
             return await self._mcp.call_tool(name, arguments)
         return f"[Tool {name!r} unavailable — no handler configured]"
 

@@ -41,6 +41,7 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
 - **Voice recognition** *(optional)*: knows who is speaking, so each person gets their own memory. It runs inside Home Assistant, with no add-on and no cloud.
 - **Find my phone** *(optional)*: "Where is my phone?" rings it loudly, even on silent.
 - **Where people are**: "Where's my wife?", "Is Anna home?", "Who is home?" are answered from Home Assistant's people.
+- **Light colours**: "Make the light warm white" or "turn the lights blue" changes the lights in the room you are in. White shades become a colour temperature.
 - A short "One second." while a slow web look-up runs, so silence never means the question got lost.
 
 **⚡ Fast on local hardware**

@@ -1,8 +1,9 @@
-"""Area actions and relative brightness.
+"""Area actions, relative brightness and light colour.
 
 set_area_state is the bulk switch; set_brightness exists because HA's
 own HassLightSet is absolute only and cannot step, so "a bit brighter"
-had nowhere to go.
+had nowhere to go. It also carries colour, because it is the one light
+tool that defaults to the calling satellite's room.
 """
 
 from __future__ import annotations
@@ -15,10 +16,107 @@ from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
 )
+from homeassistant.util import color as color_util
 
 from .formatting import _s
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# White shades are colour TEMPERATURES, not colours. HA's colour names
+# have no "warm white", so HassLightSet(color="warm white") is refused
+# outright, and set_brightness had no colour at all: "make the light warm
+# white" set the hobby-room bulb to 80 % three times and left it blue
+# (2026-10-28; the model sent set_brightness(color="warm white") in 10/10
+# replays). Kelvin values are the usual points printed on bulb boxes.
+_WHITE_SHADES_K = {
+    "candlelight": 2200, "candle": 2200, "extra warm white": 2200,
+    "warm white": 2700, "soft white": 2700, "warm": 2700,
+    "white": 4000, "neutral white": 4000, "natural white": 4000,
+    "neutral": 4000,
+    "cool white": 5000, "cold white": 5000, "cool": 5000, "cold": 5000,
+    "daylight": 6500, "daylight white": 6500,
+    # The DE and FR pipelines' own words, for a model that passes them through.
+    "kerzenlicht": 2200, "warmweiß": 2700, "warmweiss": 2700,
+    "warmes weiß": 2700, "weiß": 4000, "weiss": 4000,
+    "neutralweiß": 4000, "neutralweiss": 4000, "kaltweiß": 5000,
+    "kaltweiss": 5000, "tageslicht": 6500,
+    "blanc chaud": 2700, "blanc": 4000, "blanc neutre": 4000,
+    "blanc froid": 5000, "lumière du jour": 6500,
+}
+
+# HA's colour table is English only (CSS names).
+_COLOUR_WORDS = {
+    "rot": "red", "blau": "blue", "grün": "green", "gruen": "green",
+    "gelb": "yellow", "lila": "purple", "violett": "violet", "rosa": "pink",
+    "türkis": "turquoise", "tuerkis": "turquoise",
+    "rouge": "red", "bleu": "blue", "vert": "green", "jaune": "yellow",
+    "rose": "pink",
+}
+
+# Colour modes that can show any colour; color_temp alone is white-only.
+_COLOUR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
+
+
+def light_colour(text: str) -> tuple[str, object, str] | None:
+    """Parse a colour the model passed: ("kelvin", K, label), ("rgb", rgb, label) or None."""
+    key = re.sub(r"[\s_-]+", " ", _s(text).strip().lower())
+    key = re.sub(r"\s+(?:light|licht|lumi[eè]re)$", "", key)
+    if not key:
+        return None
+    if key in _WHITE_SHADES_K:
+        kelvin = _WHITE_SHADES_K[key]
+        return ("kelvin", kelvin, f"{key} ({kelvin} K)")
+    key = _COLOUR_WORDS.get(key, key)
+    try:
+        rgb = color_util.color_name_to_rgb(key)
+    except ValueError:
+        return None
+    return ("rgb", tuple(rgb), key)
+
+
+def hass_light_set_args(arguments: dict) -> dict:
+    """Make a HassLightSet colour HA's intent can take.
+
+    A white shade becomes the temperature slot (kelvin) and a German or
+    French colour word its English name; anything else passes unchanged,
+    so HA's own validation still answers for it.
+    """
+    colour = arguments.get("color")
+    if not isinstance(colour, str):
+        return arguments
+    parsed = light_colour(colour)
+    if parsed is None:
+        return arguments
+    kind, value, label = parsed
+    out = dict(arguments)
+    if kind == "kelvin":
+        del out["color"]
+        out.setdefault("temperature", value)
+    else:
+        out["color"] = label
+    return out
+
+
+def _colour_data(colour: tuple[str, object, str], attrs) -> dict | None:
+    """Service data showing ``colour`` on one light, or None if it cannot."""
+    modes = set(attrs.get("supported_color_modes") or ())
+    kind, value, _label = colour
+    if kind == "kelvin":
+        if "color_temp" in modes:
+            kelvin = value
+            low = attrs.get("min_color_temp_kelvin")
+            high = attrs.get("max_color_temp_kelvin")
+            if isinstance(low, (int, float)):
+                kelvin = max(int(low), kelvin)
+            if isinstance(high, (int, float)):
+                kelvin = min(int(high), kelvin)
+            return {"color_temp_kelvin": kelvin}
+        # HA emulates a temperature on a colour-only light.
+        return {"color_temp_kelvin": value} if modes & _COLOUR_MODES else None
+    # HA would turn a colour on a white-only light into some temperature
+    # (red into the warmest white); say it cannot instead.
+    return {"rgb_color": list(value)} if modes & _COLOUR_MODES else None
 
 
 _ACTION_DOMAINS = {"light", "switch", "fan", "cover", "climate"}
@@ -264,22 +362,39 @@ class LightToolsMixin:
         exposed_only: bool = True,
         device_id: str | None = None,
         allow_sweep: bool = False,
+        color: str | None = None,
     ) -> str:
-        """Relative or absolute brightness for lights in an area or one lamp.
+        """Relative or absolute brightness, and colour, for lights in an area or one lamp.
 
         Read-modify-write happens HERE, not in the model. 'dimmer' clamps
         at _BRIGHTNESS_FLOOR_PCT so it can never reach 0 and switch a
         light off — turning off is HassTurnOff/set_area_state's job.
+        A colour with no level leaves each light's brightness alone.
         """
         _LOGGER.debug(
-            "set_brightness: command=%r level=%r area=%r name=%r",
-            command, level, area, name,
+            "set_brightness: command=%r level=%r area=%r name=%r color=%r",
+            command, level, area, name, color,
         )
-        if command not in ("brighter", "dimmer", "set"):
+        colour = None
+        if color:
+            colour = light_colour(color)
+            if colour is None:
+                return (
+                    f"set_brightness: unknown colour {color!r}. Pass an "
+                    "English colour name ('red', 'light blue') or a white "
+                    "shade ('warm white', 'neutral white', 'cool white', "
+                    "'daylight')."
+                )
+            # "Make it warm white" arrives as command='set' with no level.
+            if command not in ("brighter", "dimmer") and level is None:
+                command = ""
+        if command not in ("brighter", "dimmer", "set") and colour is None:
             return (
                 "set_brightness: command must be 'brighter', 'dimmer' or "
                 "'set'."
             )
+        if command not in ("brighter", "dimmer", "set"):
+            command = "set" if level is not None else ""
         if command == "set":
             if level is None:
                 return "set_brightness: 'set' needs level (1-100)."
@@ -387,14 +502,21 @@ class LightToolsMixin:
 
         # Read current brightness, compute the target, group by value so
         # lights sharing a target take one service call.
-        by_target: dict[int, list[str]] = {}
+        by_target: dict[tuple, list[str]] = {}
         skipped_off: list[str] = []
         unavailable: list[str] = []
+        no_colour: list[str] = []
         for eid in ids:
             st = hass.states.get(eid)
             if st is None or st.state in ("unavailable", "unknown"):
                 unavailable.append(eid)
                 continue
+            extra: dict = {}
+            if colour is not None:
+                extra = _colour_data(colour, st.attributes)
+                if extra is None:
+                    no_colour.append(eid)
+                    continue
             is_on = st.state == "on"
             raw = st.attributes.get("brightness")
             cur_pct = 0
@@ -407,7 +529,9 @@ class LightToolsMixin:
                 # On but no brightness attribute (on/off-only light).
                 cur_pct = 100
 
-            if command == "set":
+            if not command:
+                new_pct = None
+            elif command == "set":
                 new_pct = level
             elif command == "brighter":
                 new_pct = min(100, max(_BRIGHTNESS_FLOOR_PCT, cur_pct + _BRIGHTNESS_STEP_PP))
@@ -416,9 +540,19 @@ class LightToolsMixin:
                     skipped_off.append(eid)
                     continue
                 new_pct = max(_BRIGHTNESS_FLOOR_PCT, cur_pct - _BRIGHTNESS_STEP_PP)
-            by_target.setdefault(int(new_pct), []).append(eid)
+            key = (
+                None if new_pct is None else int(new_pct),
+                tuple((k, tuple(v) if isinstance(v, list) else v) for k, v in extra.items()),
+            )
+            by_target.setdefault(key, []).append(eid)
 
         if not by_target:
+            if no_colour:
+                return (
+                    f"None of the lights in {scope_label} can show "
+                    f"{colour[2]}: {', '.join(no_colour)} cannot change "
+                    "colour. Tell the user."
+                )
             if skipped_off:
                 return (
                     f"No lights on in {scope_label} to dim "
@@ -427,25 +561,35 @@ class LightToolsMixin:
             return f"No usable lights in {scope_label}."
 
         applied: list[str] = []
-        for target_pct, group in sorted(by_target.items()):
+        for (target_pct, colour_items), group in by_target.items():
+            data = {k: list(v) if isinstance(v, tuple) else v for k, v in colour_items}
+            if target_pct is not None:
+                data["brightness_pct"] = target_pct
             try:
                 await hass.services.async_call(
                     "light",
                     "turn_on",
-                    {"brightness_pct": target_pct},
+                    data,
                     target={"entity_id": group},
                     blocking=True,
                 )
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.exception("AI Plugin set_brightness failed")
                 return f"[set_brightness failed: {exc}]"
-            applied.append(f"{len(group)} to {target_pct}%")
+            applied.append(
+                f"{len(group)} to {target_pct}%" if target_pct is not None
+                else f"{len(group)} light(s)"
+            )
 
         note = ""
+        if colour is not None:
+            note += f", colour {colour[2]}"
+        if no_colour:
+            note += f", {len(no_colour)} cannot change colour ({', '.join(no_colour)})"
         if skipped_off:
             note += f", {len(skipped_off)} already off"
         if unavailable:
             note += f", {len(unavailable)} unavailable"
-        _out = f"OK — {command} in {scope_label}: " + ", ".join(applied) + note
+        _out = f"OK — {command or 'colour'} in {scope_label}: " + ", ".join(applied) + note
         _LOGGER.debug("set_brightness -> %s", _out)
         return _out

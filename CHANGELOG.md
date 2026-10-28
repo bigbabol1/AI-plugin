@@ -4,6 +4,32 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v0.10.1 — light colours
+
+### Fixed
+
+- **"Make the light warm white" changed the brightness and left the colour.**
+  The light tool that defaults to the satellite's own room had no colour, so
+  the request turned into a brightness change, and because that change
+  succeeded the spoken reply was dropped: the light stayed the old colour
+  and nothing was said. Home Assistant's own `HassLightSet` refused the same
+  request, because its colour names have no white shades.
+  - `set_brightness` now takes a `color`: a colour name (*red*, *light
+    blue*) or a white shade (*warm white*, *neutral white*, *cool white*,
+    *daylight*, also *warmweiß*, *kaltweiß*, *blanc chaud*). White shades
+    become a colour temperature within each bulb's range. Without a level,
+    only the colour changes and the brightness stays.
+  - A bulb that can only do white is never given a colour (Home Assistant
+    would turn red into its warmest white); the reply says so instead.
+  - An unknown colour name is refused rather than passed on, because
+    `light.turn_on` silently turns an unknown name white.
+  - `HassLightSet` calls with a white shade are converted to its
+    `temperature` slot.
+
+Measured on `gemma-4-12B-it IQ4_XS` against the real voice prompt: 50 of 50
+colour requests correct (0 of 20 before), 30 of 30 brightness and on/off
+requests unchanged.
+
 ## v0.10.0 — it knows who is speaking
 
 ### Added

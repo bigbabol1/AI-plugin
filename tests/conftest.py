@@ -449,11 +449,30 @@ def _slugify(text, *, separator="_"):  # noqa: ANN001
     return _re.sub(r"[^a-z0-9]+", separator, text).strip(separator) or "unknown"
 
 
+# homeassistant.util.color — a slice of HA's CSS colour table, with its
+# lookup rule (spaces dropped, case folded, ValueError when unknown).
+_COLORS = {
+    "red": (255, 0, 0), "blue": (0, 0, 255), "green": (0, 128, 0),
+    "white": (255, 255, 255), "yellow": (255, 255, 0), "pink": (255, 192, 203),
+    "purple": (128, 0, 128), "lightblue": (173, 216, 230),
+}
+
+
+def _color_name_to_rgb(color_name):  # noqa: ANN001
+    rgb = _COLORS.get(color_name.replace(" ", "").lower())
+    if not rgb:
+        raise ValueError("Unknown color")
+    return rgb
+
+
+_make_module("homeassistant.util.color", color_name_to_rgb=_color_name_to_rgb)
+
 _util_mod = _make_module(
     "homeassistant.util",
     ulid=sys.modules["homeassistant.util.ulid"],
     dt=sys.modules["homeassistant.util.dt"],
     logging=sys.modules["homeassistant.util.logging"],
+    color=sys.modules["homeassistant.util.color"],
     slugify=_slugify,
 )
 

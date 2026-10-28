@@ -322,14 +322,18 @@ TOOL_SCHEMAS.append(
         "function": {
             "name": "set_brightness",
             "description": (
-                "Make lights brighter or dimmer, or set an absolute "
-                "brightness. Use this for RELATIVE brightness requests — "
+                "Make lights brighter or dimmer, set an absolute "
+                "brightness, or change their colour or white shade. Use "
+                "this for RELATIVE brightness requests — "
                 "HassLightSet is absolute only and cannot step. Examples: "
                 "'brighter' / 'heller' / 'make it brighter in the living "
                 "room' -> set_brightness('brighter', area='living room'). "
                 "'dimmer' / 'dunkler' / 'dim the lights' -> "
                 "set_brightness('dimmer'). 'set the lights to 40 percent' "
-                "-> set_brightness('set', level=40). Each brighter/dimmer "
+                "-> set_brightness('set', level=40). 'make the light warm "
+                "white' / 'Licht warmweiß' -> set_brightness('set', "
+                "color='warm white'). 'turn the lights blue' -> "
+                "set_brightness('set', color='blue'). Each brighter/dimmer "
                 f"step is {_BRIGHTNESS_STEP_PP} percentage points and "
                 f"'dimmer' stops at {_BRIGHTNESS_FLOOR_PCT}% — it NEVER "
                 "turns lights off. To actually switch lights off use "
@@ -364,6 +368,16 @@ TOOL_SCHEMAS.append(
                         "description": (
                             "Optional single lamp name or entity_id, when "
                             "the user named one device rather than a room."
+                        ),
+                    },
+                    "color": {
+                        "type": "string",
+                        "description": (
+                            "Colour or white shade in English, when the "
+                            "user asks for one: 'red', 'light blue', 'warm "
+                            "white', 'neutral white', 'cool white', "
+                            "'daylight'. With 'set' and no level only the "
+                            "colour changes and brightness stays."
                         ),
                     },
                     **_EXPOSED_ONLY_PROP,

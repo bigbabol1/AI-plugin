@@ -318,3 +318,204 @@ def test_complaints_recover_the_command(utterance: str, expected: str) -> None:
     dimmer = bool(_DIMMER_RE.search(utterance))
     brighter = bool(_BRIGHTER_RE.search(utterance))
     assert (dimmer, brighter) == (expected == "dimmer", expected == "brighter")
+
+
+# ── colour ──────────────────────────────────────────────────────────────────
+# "Make the light warm white" set the hobby-room bulb to 80 % three times
+# and left it blue (2026-10-28): set_brightness had no colour, and HA's
+# HassLightSet refuses "warm white" as an unknown colour name.
+
+
+def _colour_state(state: str, modes: list[str], brightness: int | None = 204):
+    attrs = {
+        "supported_color_modes": modes,
+        "min_color_temp_kelvin": 2000,
+        "max_color_temp_kelvin": 6500,
+    }
+    if brightness is not None:
+        attrs["brightness"] = brightness
+    return SimpleNamespace(state=state, attributes=attrs)
+
+
+def _turn_on_data(hass):
+    """Return [(service data, sorted entity_ids)] for every turn_on issued."""
+    out = []
+    for call in hass.services.async_call.await_args_list:
+        args, kwargs = call
+        assert args[:2] == ("light", "turn_on")
+        out.append((args[2], sorted(kwargs["target"]["entity_id"])))
+    return out
+
+
+async def test_warm_white_sets_a_temperature_and_keeps_brightness(
+    patched_registries,
+) -> None:
+    """The model's own call: set with a colour and no level."""
+    areas = [_area("a1", "Hobbyraum")]
+    ents = [_entity("light.smartbulb", area_id="a1")]
+    states = {"light.smartbulb": _colour_state("on", ["color_temp", "hs"])}
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, states)
+    dr_.async_get.return_value = SimpleNamespace(area_id="a1")
+    patched_registries(ar_, er_, dr_)
+
+    out = await HALocalToolRegistry(hass)._set_brightness(
+        command="set", device_id="sat1", color="warm white"
+    )
+    assert out.startswith("OK")
+    assert "warm white" in out
+    assert _turn_on_data(hass) == [
+        ({"color_temp_kelvin": 2700}, ["light.smartbulb"]),
+    ]
+
+
+async def test_colour_with_a_level_sets_both(patched_registries) -> None:
+    areas = [_area("a1", "kitchen")]
+    ents = [_entity("light.k", area_id="a1")]
+    states = {"light.k": _colour_state("off", ["hs"], brightness=None)}
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, states)
+    patched_registries(ar_, er_, dr_)
+
+    out = await HALocalToolRegistry(hass)._set_brightness(
+        command="set", level=40, area="kitchen", color="blue"
+    )
+    assert out.startswith("OK")
+    assert _turn_on_data(hass) == [
+        ({"rgb_color": [0, 0, 255], "brightness_pct": 40}, ["light.k"]),
+    ]
+
+
+async def test_temperature_is_clamped_to_the_bulb(patched_registries) -> None:
+    areas = [_area("a1", "kitchen")]
+    ents = [_entity("light.k", area_id="a1")]
+    st = _colour_state("on", ["color_temp"])
+    st.attributes["min_color_temp_kelvin"] = 3000
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, {"light.k": st})
+    patched_registries(ar_, er_, dr_)
+
+    await HALocalToolRegistry(hass)._set_brightness(
+        command="set", area="kitchen", color="candlelight"
+    )
+    assert _turn_on_data(hass) == [({"color_temp_kelvin": 3000}, ["light.k"])]
+
+
+async def test_a_white_only_light_is_not_given_a_colour(
+    patched_registries,
+) -> None:
+    """HA would turn red into the warmest white on a color_temp bulb; the
+    user must hear that it cannot, and the reply must not be blanked."""
+    areas = [_area("a1", "kitchen")]
+    ents = [_entity("light.tw", area_id="a1"), _entity("light.rgb", area_id="a1")]
+    states = {
+        "light.tw": _colour_state("on", ["color_temp"]),
+        "light.rgb": _colour_state("on", ["rgb"]),
+    }
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, states)
+    patched_registries(ar_, er_, dr_)
+
+    out = await HALocalToolRegistry(hass)._set_brightness(
+        command="set", area="kitchen", color="red"
+    )
+    assert out.startswith("OK")
+    assert "1 cannot change colour (light.tw)" in out
+    assert _turn_on_data(hass) == [({"rgb_color": [255, 0, 0]}, ["light.rgb"])]
+
+    hass.services.async_call.reset_mock()
+    del states["light.rgb"]
+    er_.entities.pop("light.rgb")
+    out = await HALocalToolRegistry(hass)._set_brightness(
+        command="set", area="kitchen", color="red"
+    )
+    assert not out.startswith("OK")
+    assert "cannot change colour" in out
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_unknown_colour_is_refused_not_turned_white(
+    patched_registries,
+) -> None:
+    """light.turn_on(color_name=...) falls back to WHITE on an unknown name."""
+    areas = [_area("a1", "kitchen")]
+    ents = [_entity("light.k", area_id="a1")]
+    hass, ar_, er_, dr_ = _make_hass(
+        areas, ents, {"light.k": _colour_state("on", ["hs"])}
+    )
+    patched_registries(ar_, er_, dr_)
+
+    out = await HALocalToolRegistry(hass)._set_brightness(
+        command="set", area="kitchen", color="sunset glow"
+    )
+    assert "unknown colour" in out
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_dispatcher_passes_the_colour_through(patched_registries) -> None:
+    areas = [_area("a1", "Hobbyraum")]
+    ents = [_entity("light.smartbulb", area_id="a1")]
+    states = {"light.smartbulb": _colour_state("on", ["color_temp", "hs"])}
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, states)
+    dr_.async_get.return_value = SimpleNamespace(area_id="a1")
+    patched_registries(ar_, er_, dr_)
+    reg = HALocalToolRegistry(hass)
+    reg._is_exposed = lambda eid: True
+
+    out = await reg.call_tool(
+        "set_brightness", {"command": "set", "color": "warm white"},
+        device_id="sat1", user_message="Make the light warm white.",
+    )
+    assert out.startswith("OK")
+    assert _turn_on_data(hass) == [
+        ({"color_temp_kelvin": 2700}, ["light.smartbulb"]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("warm white", ("kelvin", 2700)),
+        ("Warm-White", ("kelvin", 2700)),
+        ("warmweiß", ("kelvin", 2700)),
+        ("blanc froid", ("kelvin", 5000)),
+        ("daylight", ("kelvin", 6500)),
+        ("white", ("kelvin", 4000)),
+        ("Light Blue", ("rgb", (173, 216, 230))),
+        ("rot", ("rgb", (255, 0, 0))),
+        ("sunset glow", None),
+        ("", None),
+    ],
+)
+def test_light_colour_parsing(text, expected) -> None:
+    from custom_components.ai_plugin.tools.ha_local.lights import light_colour
+
+    got = light_colour(text)
+    assert (got[:2] if got else None) == expected
+
+
+def test_hass_light_set_white_shade_becomes_a_temperature() -> None:
+    from custom_components.ai_plugin.tools.ha_local.lights import (
+        hass_light_set_args,
+    )
+
+    assert hass_light_set_args({"name": "Smartbulb", "color": "warm white"}) == {
+        "name": "Smartbulb", "temperature": 2700,
+    }
+    assert hass_light_set_args({"area": "Küche", "color": "blau"}) == {
+        "area": "Küche", "color": "blue",
+    }
+    # Unknown names stay for HA's own validation to answer.
+    assert hass_light_set_args({"color": "sunset glow"}) == {"color": "sunset glow"}
+    assert hass_light_set_args({"brightness": 40}) == {"brightness": 40}
+
+
+def test_both_prompts_route_colour_to_set_brightness() -> None:
+    from custom_components.ai_plugin.const import (
+        SYSTEM_PROMPT_DEFAULT,
+        SYSTEM_PROMPT_VOICE,
+    )
+
+    for prompt in (SYSTEM_PROMPT_VOICE, SYSTEM_PROMPT_DEFAULT):
+        assert "color=" in prompt and "warm white" in prompt
+        assert "Never answer a colour request by changing only" in prompt
+    schema = next(
+        s for s in TOOL_SCHEMAS if s["function"]["name"] == "set_brightness"
+    )
+    assert "color" in schema["function"]["parameters"]["properties"]

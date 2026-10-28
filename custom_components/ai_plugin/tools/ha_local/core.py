@@ -149,7 +149,8 @@ class HALocalToolRegistry(
                     elif said_all_b:
                         area_b = "all"
                 cmd_b = _s(arguments.get("command")).strip().lower()
-                if cmd_b not in ("brighter", "dimmer", "set"):
+                colour_b = _s(arguments.get("color")).strip() or None
+                if cmd_b not in ("brighter", "dimmer", "set") and not colour_b:
                     msg_b = user_message or ""
                     if _DIMMER_RE.search(msg_b):
                         cmd_b = "dimmer"
@@ -170,6 +171,7 @@ class HALocalToolRegistry(
                     exposed_only=exposed_only,
                     device_id=device_id,
                     allow_sweep=said_all_b,
+                    color=colour_b,
                 )
 
             if name == "set_area_state":
