@@ -23,7 +23,7 @@ RECORDED_LOOP: tuple[tuple[float, float, str, str], ...] = (
     (
         0.0, 16.9,
         " It's really hot today.",
-        'It’s really hot today with temperatures in the mid-to-upper 70s right now and heading toward the upper 90s by afternoon! The heatwave has been going on for about five days already, but don’t worry — it should start easing up over the next couple of days as high pressure weakens. Stay hydrated and maybe crank up that Tado Thermostat in your living room if you want some relief!',
+        'It’s really hot today with temperatures in the mid-to-upper 70s right now and heading toward the upper 90s by afternoon! The heatwave has been going on for about five days already, but don’t worry — it should start easing up over the next couple of days as high pressure weakens. Stay hydrated and maybe crank up that Thermostat in your living room if you want some relief!',
     ),
     (
         42.4, 42.4,

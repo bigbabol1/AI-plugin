@@ -659,6 +659,151 @@ async def test_promise_without_tool_call_is_replaced_with_failure_notice() -> No
     assert orch._provider.async_chat.await_count >= 2
 
 
+def _voice_orch_with_intent(tool_name: str, reply: str) -> Orchestrator:
+    """Voice-mode orchestrator whose model calls one MCP intent, then replies."""
+    from custom_components.ai_plugin.providers import ChatResponse, ToolCall
+
+    orch = _baseline_orch(
+        _make_mock_entry({
+            CONF_BASE_URL: "http://localhost:11434/v1",
+            CONF_MODEL: "llama3.2:3b",
+            CONF_VOICE_MODE: True,
+        })
+    )
+    provider = MagicMock()
+    provider.async_chat = AsyncMock(side_effect=[
+        ChatResponse(
+            content=None,
+            tool_calls=[ToolCall(id="c1", name=tool_name, arguments={})],
+        ),
+        ChatResponse(content=reply, tool_calls=[]),
+    ])
+    orch._provider = provider
+    mcp = MagicMock()
+    mcp.get_tool_schemas = MagicMock(
+        return_value=[{"type": "function", "function": {"name": tool_name}}]
+    )
+    mcp.call_tool = AsyncMock(return_value='{"response_type": "action_done"}')
+    orch._mcp = mcp
+    return orch
+
+
+async def test_started_timer_is_not_retried_as_an_unexecuted_command() -> None:
+    """Live 2026-10-29: after start_timer answered, "Set a timer for 13
+    minutes." still got the action-command retry, a second model call
+    told to switch lights."""
+    orch = _voice_orch_with_intent("start_timer", "13 minute timer running.")
+
+    reply = await orch.async_process(
+        message="Set a timer for 13 minutes.",
+        conversation_id="conv-timer",
+        language="en",
+    )
+
+    assert reply == "13 minute timer running."
+    assert orch._provider.async_chat.await_count == 2
+
+
+async def test_first_reply_to_an_action_command_is_capped() -> None:
+    """Live 2026-10-31: "Dim the light." looped in hidden reasoning up to
+    512 tokens, 18.9 s of silence before the retry. Only the first reply is
+    capped; the one after the tool result is not."""
+    from custom_components.ai_plugin.orchestrator.core import (
+        ACTION_FIRST_REPLY_MAX_TOKENS,
+    )
+
+    orch = _voice_orch_with_intent("HassLightSet", "")
+    await orch.async_process(
+        message="Dim the light.", conversation_id="conv-cap", language="en",
+    )
+    first, second = orch._provider.async_chat.await_args_list
+    assert first.kwargs.get("max_tokens") == ACTION_FIRST_REPLY_MAX_TOKENS
+    assert "max_tokens" not in second.kwargs
+
+
+async def test_the_action_command_retry_is_capped_too() -> None:
+    orch, _ = _orch_with_actuator_tools()
+    orch._provider = _provider_saying("I'll turn off all the lights now!")
+    await orch.async_process(
+        message="Switch all lights off.", conversation_id="conv-cap2", language="en",
+    )
+    caps = [c.kwargs.get("max_tokens") for c in orch._provider.async_chat.await_args_list]
+    assert len(caps) >= 2 and all(caps), caps
+
+
+async def test_a_question_is_not_capped() -> None:
+    orch = _voice_orch_with_intent("HassGetWeather", "Sunny, 14 degrees.")
+    await orch.async_process(
+        message="What's the weather like?", conversation_id="conv-cap3", language="en",
+    )
+    assert all(
+        "max_tokens" not in c.kwargs for c in orch._provider.async_chat.await_args_list
+    )
+
+
+async def test_voice_thermostat_change_keeps_its_confirmation() -> None:
+    """A new set-point is neither visible nor audible, so it is spoken.
+
+    Observed: "Set the heating to 21 degrees." on a kitchen satellite set
+    the thermostat in silence, and the user repeated the command.
+    """
+    orch = _voice_orch_with_intent(
+        "HassClimateSetTemperature", "Heating set to 21 degrees."
+    )
+
+    reply = await orch.async_process(
+        message="Set the heating to 21 degrees.",
+        conversation_id="conv-climate",
+        language="en",
+    )
+
+    assert reply == "Heating set to 21 degrees."
+
+
+async def test_voice_light_switch_stays_silent() -> None:
+    """A light switch is its own confirmation; the reply stays suppressed."""
+    orch = _voice_orch_with_intent("HassTurnOn", "The kitchen light is on.")
+
+    reply = await orch.async_process(
+        message="Turn on the kitchen light.",
+        conversation_id="conv-light",
+        language="en",
+    )
+
+    assert reply == ""
+
+
+async def test_a_silenced_confirmation_stays_in_history() -> None:
+    """Live 2026-10-31: after a silent "Dim the lights.", a repeated "Dim
+    the light." got no tool call from the first reply. With an empty
+    assistant turn in history the voice model treated the previous turn as
+    unfinished and answered it; the confirmation it gave there is kept in
+    history now, only the speech is suppressed."""
+    orch = _voice_orch_with_intent("HassLightSet", "I have dimmed the lights for you.")
+
+    reply = await orch.async_process(
+        message="Dim the lights.", conversation_id="conv-hist", language="en",
+    )
+
+    assert reply == ""
+    history = orch._context_mgr.get_history("conv-hist")
+    assert history[-1] == {
+        "role": "assistant", "content": "I have dimmed the lights for you.",
+    }
+
+
+async def test_a_silenced_media_confirmation_stays_in_history() -> None:
+    orch = _voice_orch_with_intent("HassMediaNext", "Skipped to the next song.")
+
+    reply = await orch.async_process(
+        message="Next song.", conversation_id="conv-hist-media", language="en",
+    )
+
+    assert reply == ""
+    history = orch._context_mgr.get_history("conv-hist-media")
+    assert history[-1]["content"] == "Skipped to the next song."
+
+
 async def test_informative_reply_without_tool_call_is_kept() -> None:
     """A truthful 'can't find it' answer is not a promise — keep it."""
     orch, _ = _orch_with_actuator_tools()
@@ -673,3 +818,47 @@ async def test_informative_reply_without_tool_call_is_kept() -> None:
     )
 
     assert reply == "There is no device called kettle in the bedroom."
+
+
+# ── a satellite keeps its conversation for 15 minutes ────────────────────────
+
+
+def _satellite_entity(voice: bool = True):
+    entity = _entity_for_continue({})
+    entity._orchestrator.is_voice_device = MagicMock(return_value=voice)
+    return entity
+
+
+def _at(entity, seconds: float, device: str | None, conversation: str) -> str:
+    from custom_components.ai_plugin import conversation as module
+
+    with patch.object(module.time, "monotonic", return_value=1000.0 + seconds):
+        return entity._satellite_history_id(device, conversation)
+
+
+def test_a_new_ha_conversation_within_15_minutes_continues_the_old_one() -> None:
+    entity = _satellite_entity()
+    assert _at(entity, 0, "sat", "A") == "A"
+    assert _at(entity, 300, "sat", "B") == "A"
+    assert _at(entity, 300 + 899, "sat", "C") == "A"
+
+
+def test_after_15_quiet_minutes_a_satellite_starts_over() -> None:
+    entity = _satellite_entity()
+    _at(entity, 0, "sat", "A")
+    assert _at(entity, 901, "sat", "B") == "B"
+    assert _at(entity, 902, "sat", "C") == "B"
+
+
+def test_each_satellite_has_its_own_conversation() -> None:
+    entity = _satellite_entity()
+    _at(entity, 0, "bedroom", "A")
+    assert _at(entity, 1, "kitchen", "B") == "B"
+    assert _at(entity, 2, "bedroom", "C") == "A"
+
+
+@pytest.mark.parametrize("device", [None, "browser"])
+def test_the_assist_panel_still_starts_over_when_reopened(device) -> None:
+    entity = _satellite_entity(voice=False)
+    assert _at(entity, 0, device, "A") == "A"
+    assert _at(entity, 1, device, "B") == "B"

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from custom_components.ai_plugin.providers import ChatResponse
 from custom_components.ai_plugin.voice_id import Identity, VoiceIDManager
 from custom_components.ai_plugin.voice_id import enrollment as ve
 
@@ -148,7 +149,7 @@ def _voice_orch(voice):
     orch._voice_id = voice
     provider = MagicMock()
     provider.async_complete = AsyncMock(return_value="It is sunny.")
-    provider.async_chat = AsyncMock(return_value=SimpleNamespace(content="It is sunny.", tool_calls=[]))
+    provider.async_chat = AsyncMock(return_value=ChatResponse(content="It is sunny.", tool_calls=[]))
     orch._provider = provider
     return orch
 

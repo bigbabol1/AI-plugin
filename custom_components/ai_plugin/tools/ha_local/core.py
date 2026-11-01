@@ -9,6 +9,7 @@ against entity/area/device registries directly:
     get_entity(name_or_id)                → one entity: id, name, area, state, attrs
     search_entities(query)                → substring match across names/aliases
     set_area_state(area, domain, action)  → bulk action on all entities in an area
+    set_climate_mode(mode, name?, area?)  → thermostat operating mode (auto, heat, off…)
 
 Discovery responses are capped at ~1500 characters so they fit comfortably in
 the model's context; overflow reports a truncation count so the model can
@@ -26,6 +27,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from . import exposure
+from .climate import ClimateToolsMixin
 from .entities import EntityToolsMixin
 from .formatting import _MAX_RESPONSE_CHARS, _cap, _s  # noqa: F401
 from .lights import (
@@ -47,7 +49,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class HALocalToolRegistry(
-    EntityToolsMixin, LightToolsMixin, MediaToolsMixin, TimerToolsMixin
+    EntityToolsMixin, LightToolsMixin, ClimateToolsMixin, MediaToolsMixin,
+    TimerToolsMixin,
 ):
     """Registry of discovery tools running against HA's in-process registries."""
 
@@ -295,6 +298,14 @@ class HALocalToolRegistry(
                     exposed_only=exposed_only,
                     device_id=device_id,
                 )
+            if name == "set_climate_mode":
+                return await self._set_climate_mode(
+                    mode=_s(arguments.get("mode")).strip(),
+                    name=_s(arguments.get("name")).strip() or None,
+                    area=_s(arguments.get("area")).strip() or None,
+                    exposed_only=exposed_only,
+                    device_id=device_id,
+                )
             if name == "play_music":
                 return await self._play_music(
                     query=_s(arguments.get("query")).strip(),
@@ -303,6 +314,7 @@ class HALocalToolRegistry(
                     radio_mode=arguments.get("radio_mode"),
                     exposed_only=exposed_only,
                     device_id=device_id,
+                    from_taste=str(arguments.get("from_taste")).lower() == "true",
                 )
             if name == "media_command":
                 return await self._media_command(
@@ -310,6 +322,7 @@ class HALocalToolRegistry(
                     area=_s(arguments.get("area")).strip() or None,
                     exposed_only=exposed_only,
                     level=arguments.get("level"),
+                    device_id=device_id,
                 )
             return f"[Unknown local tool: {name!r}]"
         except Exception as exc:  # noqa: BLE001

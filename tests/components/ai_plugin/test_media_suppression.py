@@ -258,3 +258,102 @@ def test_readonly_schemas_drop_all_actuators() -> None:
     ]
     kept = [s["function"]["name"] for s in _readonly_schemas(schemas)]
     assert kept == ["list_entities", "get_entity", "search_entities", "web_search"]
+
+
+# ── thermostat changes are not perceptible, so they keep their reply ─────────
+
+
+def test_climate_set_temperature_is_unobservable() -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _any_unobservable_action
+
+    msgs = [
+        _call_msg("HassClimateSetTemperature", "c1"),
+        _result_msg("c1", '{"response_type": "action_done"}'),
+    ]
+    assert _any_unobservable_action(msgs) is True
+
+
+def test_light_switch_is_not_unobservable() -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _any_unobservable_action
+
+    msgs = [
+        _call_msg("HassTurnOn", "c1"),
+        _result_msg("c1", "Turned on the light"),
+    ]
+    assert _any_unobservable_action(msgs) is False
+
+
+def test_light_plus_climate_turn_is_unobservable() -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _any_unobservable_action
+
+    msgs = [
+        _call_msg("HassTurnOff", "c1"),
+        _result_msg("c1", "Turned off the light"),
+        _call_msg("HassClimateSetMode", "c2"),
+        _result_msg("c2", '{"response_type": "action_done"}'),
+    ]
+    assert _any_unobservable_action(msgs) is True
+
+
+def test_heating_off_via_set_area_state_is_unobservable() -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _any_unobservable_action
+
+    msgs = [
+        _call_msg("set_area_state", "c1"),
+        _result_msg("c1", "OK — turn_off 1 climate(s) in Wohnzimmer: Thermostat."),
+    ]
+    assert _any_unobservable_action(msgs) is True
+
+
+def test_heating_off_via_intent_is_unobservable() -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _any_unobservable_action
+
+    msgs = [
+        _call_msg("HassTurnOff", "c1"),
+        _result_msg(
+            "c1",
+            '{"response_type": "action_done", "data": {"success": '
+            '[{"name": "Thermostat", "type": "entity", '
+            '"id": "climate.thermostat"}], "failed": []}}',
+        ),
+    ]
+    assert _any_unobservable_action(msgs) is True
+
+
+def test_light_sweep_via_set_area_state_is_not_unobservable() -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _any_unobservable_action
+
+    msgs = [
+        _call_msg("set_area_state", "c1"),
+        _result_msg("c1", "OK — turn_off 3 light(s) in Küche: Spots, Strip, Lamp."),
+    ]
+    assert _any_unobservable_action(msgs) is False
+
+
+def test_climate_mode_change_is_an_unobservable_success() -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import (
+        _any_actuator_success,
+        _any_unobservable_action,
+    )
+
+    msgs = [
+        _call_msg("set_climate_mode", "c1"),
+        _result_msg("c1", "OK — set climate.thermostat (was heat) to auto"),
+    ]
+    assert _any_actuator_success(msgs) is True
+    assert _any_unobservable_action(msgs) is True
+
+
+def test_refused_climate_mode_is_not_a_success() -> None:
+    """A refused mode must keep the model's explanation, never be blanked."""
+    from custom_components.ai_plugin.orchestrator.grounding import _any_actuator_success
+
+    msgs = [
+        _call_msg("set_climate_mode", "c1"),
+        _result_msg(
+            "c1",
+            "[set_climate_mode failed: climate.thermostat has no 'cool' "
+            "mode; it supports heat, off, auto]",
+        ),
+    ]
+    assert _any_actuator_success(msgs) is False

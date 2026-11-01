@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import random
+import re
 from typing import Any
 
 from homeassistant.helpers import (
@@ -40,6 +42,45 @@ _MEDIA_COMMAND_SERVICES = {
 }
 
 
+# "Play music" names nothing to play, but Music Assistant searches for it anyway:
+# the literal word found a country mix, every time, for someone who had saved
+# electronic and pop as their taste (2026-11-01). Sent back for the model to fill
+# in from [USER FACTS], or to ask.
+_NOTHING_NAMED_RE = re.compile(
+    r"^(?:(?:some|any|good|nice|great|the|my|current|etwas|irgendeine?|gute|de\s+la|"
+    r"un\s+poco\s+de|alguma|jakąś|wat|een\s+beetje)\s+)*"
+    r"(?:music|musik|musique|m[uú]sica|muziek|muzyk[aę]|songs?|tunes|lieder|"
+    r"something|anything|was|etwas|irgendwas|quelque\s+chose|algo|coś|iets)"
+    r"(?:\s+(?:else|different|nice|good|i\s+like|you\s+like|for\s+me|anderes|sch[öo]nes|"
+    r"die\s+ich\s+mag|que\s+j[\x27’]aime|que\s+me\s+gusta))*$",
+    re.IGNORECASE,
+)
+NOTHING_NAMED_RESULT = (
+    "[Nothing played: no music was named. If [USER FACTS] gives their taste, call "
+    "play_music again with its genres, comma separated, and from_taste=true. If it "
+    "does not, ask what they would like to hear.]"
+)
+_TASTE_WORDS_RE = re.compile(
+    r"\b(?:music|musik|musique|m[uú]sica|muziek|muzyk[aę]|playlists?)\b", re.IGNORECASE
+)
+_TASTE_PLAYLISTS = 6
+
+
+def taste_genres(query: str) -> list[str]:
+    """The genres in a taste: "electronic music and pop music playlists" gives
+    electronic and pop."""
+    parts = query.split(",") if "," in query else re.split(
+        r"\s+(?:and|und|et|y|e|i|en)\s+", query, flags=re.IGNORECASE
+    )
+    genres = [" ".join(_TASTE_WORDS_RE.sub(" ", part).split()) for part in parts]
+    return [genre for genre in genres if genre]
+
+
+def names_nothing_to_play(query: str) -> bool:
+    """True for "music", "some music", "something different": no actual choice."""
+    return bool(_NOTHING_NAMED_RE.match(query.strip().rstrip(".!?")))
+
+
 class MediaToolsMixin:
     """play_music / media_command / media_status."""
 
@@ -51,6 +92,7 @@ class MediaToolsMixin:
         radio_mode: bool | None = None,
         exposed_only: bool = True,
         device_id: str | None = None,
+        from_taste: bool = False,
     ) -> str:
         """Search and play music in an area via Music Assistant.
 
@@ -65,6 +107,9 @@ class MediaToolsMixin:
         query = (query or "").strip()
         if not query:
             return "[play_music needs a query — what should I play?]"
+        genres = taste_genres(query) if from_taste else []
+        if (from_taste and not genres) or (not from_taste and names_nothing_to_play(query)):
+            return NOTHING_NAMED_RESULT
 
         # No area specified → resolve to the calling satellite's area.
         # Voice users in the living room saying 'play jazz' should not
@@ -116,22 +161,153 @@ class MediaToolsMixin:
                 "music providers.]"
             )
 
-        # Resolve area
-        needle = area.strip().lower()
-        area_reg = ar.async_get(self._hass)
-        target_area = None
-        for a in area_reg.async_list_areas():
-            if _s(a.name).lower() == needle:
-                target_area = a
-                break
-            aliases = getattr(a, "aliases", None) or ()
-            if any(_s(al).lower() == needle for al in aliases):
-                target_area = a
-                break
+        target_area = self._music_area(area)
         if target_area is None:
             return f"Unknown area {area!r}. Try list_areas."
 
-        # Pick the area's primary Music-Assistant media_player.
+        entity_id = self._music_player_in_area(target_area, exposed_only)
+        if entity_id is None:
+            scope = "exposed " if exposed_only else ""
+            return f"No {scope}media_player in {target_area.name}."
+
+        title = query
+        if from_taste:
+            query, title = await self._taste_playlist(genres)
+            media_type = "playlist"
+        await self._set_shuffle(entity_id, from_taste)
+
+        try:
+            _auto_radio = radio_mode if radio_mode is not None else (media_type == "track")
+            await self._hass.services.async_call(
+                "music_assistant",
+                "play_media",
+                target={"entity_id": entity_id},
+                service_data={
+                    "media_id": query,
+                    "media_type": media_type,
+                    "radio_mode": _auto_radio,
+                },
+                blocking=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin play_music failed")
+            return f"[play_music failed: {exc}]"
+
+        return f"OK — playing {title!r} ({media_type}) on {entity_id}."
+
+    async def _taste_playlist(self, genres: list[str]) -> tuple[str, str]:
+        """A playlist for "play some music": (what to play, its name).
+
+        A random genre of the taste, and a random playlist among the top results,
+        not the one played last. Always the first result, it was the same music
+        every time (2026-11-01). If the search fails, the genre itself is played.
+        """
+        genre = random.choice(genres)
+        try:
+            entries = self._hass.config_entries.async_entries("music_assistant")
+            response = await self._hass.services.async_call(
+                "music_assistant",
+                "search",
+                {
+                    "config_entry_id": entries[0].entry_id,
+                    "name": genre,
+                    "media_type": ["playlist"],
+                    "limit": _TASTE_PLAYLISTS,
+                },
+                blocking=True,
+                return_response=True,
+            )
+            playlists = [p for p in (response or {}).get("playlists", []) if p.get("uri")]
+        except Exception:  # noqa: BLE001 — the genre alone still plays something
+            _LOGGER.debug("AI Plugin play_music: playlist search failed", exc_info=True)
+            playlists = []
+        last = getattr(self, "_last_taste_playlist", None)
+        playlists = [p for p in playlists if p["uri"] != last] or playlists
+        if not playlists:
+            return genre, genre
+        chosen = random.choice(playlists)
+        self._last_taste_playlist = chosen["uri"]
+        return chosen["uri"], str(chosen.get("name") or genre).strip()
+
+    async def _set_shuffle(self, entity_id: str, shuffle: bool) -> None:
+        """On for a playlist chosen from the taste. Off again only where this
+        turned it on: an album asked for by name plays in order, but a speaker
+        someone shuffles on purpose stays shuffled."""
+        turned_on = self.__dict__.setdefault("_shuffled_by_us", set())
+        state = self._hass.states.get(entity_id)
+        attributes = getattr(state, "attributes", None) or {}
+        was_on = attributes.get("shuffle") is True
+        if not shuffle and entity_id not in turned_on:
+            return
+        try:
+            await self._hass.services.async_call(
+                "media_player",
+                "shuffle_set",
+                {"shuffle": shuffle},
+                target={"entity_id": entity_id},
+                blocking=True,
+            )
+        except Exception:  # noqa: BLE001 — never a reason not to play
+            _LOGGER.debug("AI Plugin play_music: shuffle failed", exc_info=True)
+            return
+        # Sent even if it already reports on: a speaker reporting on went off as
+        # the playlist started, so the first one played in order (2026-11-01).
+        if not shuffle:
+            turned_on.discard(entity_id)
+        elif not was_on:
+            turned_on.add(entity_id)
+
+    async def move_music(self, area: str, device_id: str | None = None) -> str:
+        """Move what is playing to another room, through Music Assistant."""
+        if not self._hass.services.has_service("music_assistant", "transfer_queue"):
+            return "[move_music needs Music Assistant. Tell the user.]"
+        from ...shortcuts.registry import _resolve_area  # noqa: PLC0415
+
+        # Also by synonym: "Schlafzimmer" for an area called bedroom.
+        target_area = self._music_area(area or "") or _resolve_area(self._hass, area or "")
+        if target_area is None:
+            return f"[Unknown area {area!r}. Try list_areas.]"
+        target = self._music_player_in_area(target_area, True)
+        if target is None:
+            return f"[No speaker in {target_area.name}. Tell the user.]"
+        ent_reg = er.async_get(self._hass)
+        playing = sorted(
+            eid for eid, entry in ent_reg.entities.items()
+            if eid.startswith("media_player.")
+            and entry.platform == "music_assistant"
+            and (state := self._hass.states.get(eid)) is not None
+            and state.state == "playing"
+        )
+        if not playing:
+            return "[Nothing is playing, so there is nothing to move. Ask what to play.]"
+        if target in playing:
+            return f"[It is already playing in {target_area.name}. Tell the user.]"
+        try:
+            await self._hass.services.async_call(
+                "music_assistant",
+                "transfer_queue",
+                target={"entity_id": target},
+                service_data={"source_player": playing[0], "auto_play": True},
+                blocking=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin move_music failed")
+            return f"[move_music failed: {exc}]"
+        return f"OK — moved the music from {playing[0]} to {target}."
+
+    def _music_area(self, area: str):
+        """The area with this exact name or alias, or None."""
+        needle = area.strip().lower()
+        for a in ar.async_get(self._hass).async_list_areas():
+            if _s(a.name).lower() == needle:
+                return a
+            aliases = getattr(a, "aliases", None) or ()
+            if any(_s(al).lower() == needle for al in aliases):
+                return a
+        return None
+
+    def _music_player_in_area(self, target_area, exposed_only: bool) -> str | None:
+        """The area's primary Music-Assistant media_player, or None."""
         # Filter by REGISTRY platform == "music_assistant" (stable; works
         # whether the speaker is on or off). The previous heuristic of
         # checking state.attributes.app_id only matched when the speaker
@@ -165,8 +341,7 @@ class MediaToolsMixin:
                 other.append(eid)
 
         if not ma_native and not other:
-            scope = "exposed " if exposed_only else ""
-            return f"No {scope}media_player in {target_area.name}."
+            return None
 
         entity_id: str | None = None
         if ma_native:
@@ -194,25 +369,7 @@ class MediaToolsMixin:
             "play_music: target area=%r, ma_native=%d, other=%d, picked=%r",
             target_area.name, len(ma_native), len(other), entity_id,
         )
-
-        try:
-            _auto_radio = radio_mode if radio_mode is not None else (media_type == "track")
-            await self._hass.services.async_call(
-                "music_assistant",
-                "play_media",
-                target={"entity_id": entity_id},
-                service_data={
-                    "media_id": query,
-                    "media_type": media_type,
-                    "radio_mode": _auto_radio,
-                },
-                blocking=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.exception("AI Plugin play_music failed")
-            return f"[play_music failed: {exc}]"
-
-        return f"OK — playing {query!r} ({media_type}) on {entity_id}."
+        return entity_id
 
     def _media_players_in_area(
         self, target_area, exposed_only: bool = True
@@ -243,6 +400,7 @@ class MediaToolsMixin:
         area: str | None,
         exposed_only: bool = True,
         level: int | None = None,
+        device_id: str | None = None,
     ) -> str:
         """Pause, resume, skip, stop, mute, or change volume.
 
@@ -316,6 +474,11 @@ class MediaToolsMixin:
                 st = self._hass.states.get(eid)
                 if st and st.state in relevant_states:
                     target_ids.append(eid)
+            from ...shortcuts.media import narrow_media_targets  # noqa: PLC0415
+
+            target_ids = narrow_media_targets(self._hass, target_ids, device_id, command)
+            if command == "resume" and not target_ids:
+                return "[Nothing is paused, so there is nothing to continue. Ask what to play.]"
             if not target_ids:
                 state_label = " / ".join(sorted(relevant_states))
                 return (
@@ -326,13 +489,18 @@ class MediaToolsMixin:
 
         service = _MEDIA_COMMAND_SERVICES[command]
         try:
-            await self._hass.services.async_call(
-                "media_player",
-                service,
-                data or None,
-                target={"entity_id": target_ids},
-                blocking=True,
-            )
+            if command in ("volume_up", "volume_down"):
+                from ...shortcuts.volume import async_step_volume  # noqa: PLC0415
+
+                await async_step_volume(self._hass, target_ids, command)
+            else:
+                await self._hass.services.async_call(
+                    "media_player",
+                    service,
+                    data or None,
+                    target={"entity_id": target_ids},
+                    blocking=True,
+                )
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("AI Plugin media_command %s failed", command)
             return f"[media_command {command} failed: {exc}]"

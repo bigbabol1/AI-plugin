@@ -38,8 +38,12 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
 - Follow-up listening: always, never, or **let the model decide** by asking a question.
 - Self-echo filtering for satellites whose replies play on a separate speaker.
 - First-class voice timers, with an optional announce mode for any speaker.
+- **Alarms, reminders and things to do later**: "Wake me up at 7", "Remind me to take out the trash tomorrow at 6", "Turn off the lights in 30 minutes". They survive a restart.
+- **A conversation lasts 15 minutes** on a satellite, so "and the bedroom?" still knows what it follows.
+- **Calendar entries by voice**: "Put the dentist on my calendar for Friday at 10".
+- **Messages and moving music**: "Tell Anna dinner is ready", "Tell the kitchen…", "Move the music to the bedroom".
 - **Voice recognition** *(optional)*: knows who is speaking, so each person gets their own memory. It runs inside Home Assistant, with no add-on and no cloud.
-- **Find my phone** *(optional)*: "Where is my phone?" rings it loudly, even on silent.
+- **Find my phone**: "Where is my phone?" rings it loudly, even on silent.
 - **Where people are**: "Where's my wife?", "Is Anna home?", "Who is home?" are answered from Home Assistant's people.
 - **Light colours**: "Make the light warm white" or "turn the lights blue" changes the lights in the room you are in. White shades become a colour temperature.
 - A short "One second." while a slow web look-up runs, so silence never means the question got lost.
@@ -204,9 +208,46 @@ The assistant can tell who is speaking on a voice turn, so each person has their
 > [!IMPORTANT]
 > Voice recognition is a convenience, not a security feature. It never authorises actions, and a similar voice or a recording can be taken for someone else.
 
+### Alarms, reminders and things to do later
+
+Timers count down a length of time and only ring. These are for a clock time, and they are stored, so a restart does not lose them.
+
+| You say | What happens |
+|---|---|
+| *"Set an alarm for 6:30 on Friday"*, *"Wake me up at 7"*, *"…every weekday"* | Speaks on this satellite every 10 seconds for up to 3 minutes: "Your alarm is ringing.", or what it is for if you said so ("Time to wake up", "The pasta is ready") |
+| *"Stop"*, *"Snooze"*, *"Snooze for 5 minutes"* (while it rings) | Ends it, or rings again in 9 or 5 minutes |
+| *"Remind me to take out the trash tomorrow at 6"* | Spoken once here, and sent to your phone if the assistant knows who you are |
+| *"Turn off the lights in 30 minutes"*, *"At 10 dim the lights"* | Runs then as if you had just said it, in the same room |
+| *"What alarms do I have?"*, *"Cancel my alarm"* | Lists or cancels alarms, reminders and scheduled actions |
+
+- An alarm or reminder can go to another room: *"Set an alarm for 7 in the bedroom"*. That room needs a satellite.
+- If Home Assistant was down when something came due, an alarm or action still runs if it is less than 10 minutes late, and a reminder if it is less than 24 hours late. After that it is dropped and logged, so a light never switches off hours later.
+- A reminder that nothing could play or receive is left as a Home Assistant notification.
+- Repeats are `daily`, `weekdays`, `weekends`, `weekly` and `biweekly`.
+
+### Messages and moving music
+
+| You say | What happens |
+|---|---|
+| *"Tell Anna dinner is ready"*, *"Send Anna a message that I am late"* | A notification on Anna's phone, with your name if the assistant knows who you are |
+| *"Tell the kitchen dinner is ready"* | Spoken on the satellite in that room |
+| *"Tell everyone dinner is ready"* | Home Assistant's own broadcast to every satellite |
+| *"Remind Anna to buy milk at 5"* | The reminder goes to Anna's phone, or is spoken here if she has none |
+| *"Move the music to the bedroom"*, *"Take this to the kitchen"* | What is playing moves to that room. Needs Music Assistant |
+
+*"Play some music"* with nothing named plays from the taste you saved (*"Remember that I like jazz and soul"*): a different playlist each time, shuffled. With none saved, it asks what you would like to hear.
+
+While a satellite listens, speakers playing in its room go down to 20% of their volume, so it can tell your voice from the music. They come back as soon as it has your words. This works on any satellite, and a *"turn it down"* changes the volume by 10 points.
+
+With voice recognition on, music that wakes a satellite by mistake gets no answer: a word or two transcribed from at least 6 seconds of audio, not a command, in a voice that matches nobody, with music playing in the room. Lyrics that come out as a full sentence still get an answer. *Ignore the satellite hearing its own reply* turns this off.
+
+### Calendar entries
+
+*"Put the dentist on my calendar for Friday at 10"* adds an event, one hour long unless you say otherwise, or all day if you give no time. A birthday repeats every year on its own, and *"every week"* or *"every month"* works too. A one-off date that has already passed is refused rather than added out of sight. It only uses calendars that are **exposed to Assist** and accept new events, such as a Local Calendar. With several, it asks which. If none qualifies it says so. Reading a calendar comes from Home Assistant's own tools and works the same way.
+
 ### Find my phone
 
-*"Where is my phone?"*, *"Ring my phone"*, *"Wo ist mein Handy?"*, or *"Where is Anna's phone?"* rings the phone through the Home Assistant Companion app, in all seven languages. Switch it on under **Configure → Advanced → Find my phone** (off by default).
+*"Where is my phone?"*, *"Ring my phone"*, *"Wo ist mein Handy?"*, or *"Where is Anna's phone?"* rings the phone through the Home Assistant Companion app, in all seven languages.
 
 - **Android** speaks a short line on the alarm channel at full volume. It plays on silent, and the phone's volume is restored afterwards.
 - **iPhone** gets a critical alert, the only sound an iPhone plays on mute. Allow **Critical Alerts** for the Home Assistant app in the iPhone's notification settings.
@@ -245,6 +286,8 @@ The assistant remembers facts across conversations and across restarts:
 **Per person on satellites.** Voice turns from a satellite carry no HA user. With [voice recognition](#voice-recognition) on, a recognised speaker uses their own facts: the file of the HA user linked to their person, or one named after the person. When voice recognition is on but recognises no one, `remember` and `forget` refuse and say nothing was saved, so a fact never lands in a store that belongs to nobody.
 
 **Preferences apply everywhere.** A saved preference such as *"always use metric units"* applies to every answer, whatever the topic, not only to questions about you.
+
+**Bring your own memory.** Turn off *Long-term memory* under Advanced to remove the three tools, the `[USER FACTS]` block and the memory rules from the prompt, for example when an MCP server provides the memory. Saved facts stay on disk and return when you turn it on again. With voice recognition on, the assistant still knows who is speaking, but nothing is stored per person.
 
 **`forget` won't delete the wrong fact.** It removes by the fact's number first and falls back to a fuzzy match. If the fact isn't stored, it says so instead of guessing.
 
@@ -314,7 +357,7 @@ On a 7–12B model, latency is won or lost in three places:
 | Ollama keep-alive | unset | Keeps the model in VRAM between requests |
 | Prune tool schemas | off | Per-message schema pruning. Defeats the prefix cache, so leave it off. |
 | Announce timers | off | Timer completions play on a media player instead of the on-device ring |
-| Find my phone | off | "Where is my phone?" rings it through the Companion app (see [Find my phone](#find-my-phone)) |
+| Long-term memory | on | `remember` / `recall` / `forget` and the saved facts. Off if you bring your own memory; saved facts are kept (see [Long-term memory](#long-term-memory)) |
 | Recognise voices | off | Speaker recognition for per-person memory (see [Voice recognition](#voice-recognition)) |
 | Allow starting enrollment by voice | on | "Learn my voice, I am Anna" starts enrollment on that satellite |
 | Minimum match score | `0.35` | Higher means fewer wrong names and more "unknown" |

@@ -184,6 +184,47 @@ async def test_dimmer_skips_lights_already_off(patched_registries) -> None:
     assert "already off" in out
 
 
+def _onoff_state(state: str):
+    return SimpleNamespace(
+        state=state, attributes={"supported_color_modes": ["onoff"], "color_mode": "onoff"}
+    )
+
+
+async def test_dimmer_leaves_an_on_off_light_alone_and_says_so(
+    patched_registries,
+) -> None:
+    """Live 2026-10-31: an on/off-only night light was reported
+    "dimmed to 80%" twice; HA drops brightness for such a light."""
+    areas = [_area("a1", "bedroom")]
+    ents = [_entity("light.bed", area_id="a1"), _entity("light.night", area_id="a1")]
+    states = {"light.bed": _state("on", 255), "light.night": _onoff_state("on")}
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, states)
+    patched_registries(ar_, er_, dr_)
+
+    out = await HALocalToolRegistry(hass)._set_brightness(command="dimmer", area="bedroom")
+    assert _calls(hass) == {80: ["light.bed"]}
+    assert "1 on/off only, not changed (light.night)" in out
+
+    for command, level in (("brighter", None), ("set", 50)):
+        hass.services.async_call.reset_mock()
+        await HALocalToolRegistry(hass)._set_brightness(
+            command=command, level=level, area="bedroom"
+        )
+        assert all("light.night" not in ids for ids in _calls(hass).values()), command
+
+
+async def test_a_room_of_on_off_lights_cannot_be_dimmed(patched_registries) -> None:
+    areas = [_area("a1", "hall")]
+    ents = [_entity("light.night", area_id="a1")]
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, {"light.night": _onoff_state("on")})
+    patched_registries(ar_, er_, dr_)
+
+    out = await HALocalToolRegistry(hass)._set_brightness(command="dimmer", area="hall")
+    assert not out.startswith("OK")
+    assert "can only be switched on or off" in out
+    hass.services.async_call.assert_not_awaited()
+
+
 async def test_brighter_turns_an_off_light_on_at_one_step(
     patched_registries,
 ) -> None:

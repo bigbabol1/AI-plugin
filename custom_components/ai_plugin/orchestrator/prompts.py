@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from ..const import (
+    CONF_MEMORY_ENABLED,
     CONF_SYSTEM_PROMPT,
+    DEFAULT_MEMORY_ENABLED,
     FOLLOW_UP_AUTO,
     FOLLOW_UP_AUTO_RULE,
     SYSTEM_PROMPT_DEFAULT,
@@ -22,9 +25,26 @@ from ..const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# The memory section of SYSTEM_PROMPT_DEFAULT and of SYSTEM_PROMPT_VOICE, up to
+# the blank line that ends it. Replaced when the memory is off; the prompts
+# themselves stay one constant each, so an enabled memory changes no byte.
+_MEMORY_RULES_RE = re.compile(r"(?:\[MEMORY TOOLS\]|Memory tools:)\n.*?\n\n", re.S)
+# Without any rule the model confirmed what it could not do: "Remember that I
+# like tea." got "I have noted that you like tea." in 3 of 3 replays. "No tool"
+# leaves room for a memory an MCP server provides.
+MEMORY_OFF_RULE = (
+    "Memory:\n"
+    "- Nothing is saved between conversations. If the user asks you to remember "
+    "or forget something and no tool does it, say you cannot. Never claim it "
+    "was saved or removed.\n\n"
+)
+
 
 class PromptBlocksMixin:
     """System prompt assembly. Mixed into Orchestrator."""
+
+    def _memory_enabled(self) -> bool:
+        return self._entry.options.get(CONF_MEMORY_ENABLED, DEFAULT_MEMORY_ENABLED)
 
     async def _build_system_prompt(self, voice_mode: bool) -> str:
         """Return the STATIC system prompt for this request.
@@ -43,6 +63,8 @@ class PromptBlocksMixin:
         load-bearing language-specific behaviour.
         """
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
+        if not self._memory_enabled():
+            base = _MEMORY_RULES_RE.sub(lambda _: MEMORY_OFF_RULE, base)
         location_block = await self._build_location_block()
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
         parts = [base, location_block]
@@ -67,7 +89,7 @@ class PromptBlocksMixin:
         """
         parts = [
             self._build_time_block(),
-            _speaker_block(speaker, speaker_checked),
+            _speaker_block(speaker, speaker_checked, self._memory_enabled()),
             await self._build_user_facts_block(user_id),
         ]
         last = self._last_entities.get(conversation_id)
@@ -189,7 +211,7 @@ class PromptBlocksMixin:
         )
 
 
-def _speaker_block(speaker: str | None, checked: bool) -> str:
+def _speaker_block(speaker: str | None, checked: bool, memory: bool = True) -> str:
     """[SPEAKER] for this turn. Explicit about who speaks NOW: with the name
     in history from an earlier turn, the model kept telling the second
     speaker the first speaker's name although their voice had been
@@ -199,7 +221,8 @@ def _speaker_block(speaker: str | None, checked: bool) -> str:
             "[SPEAKER]\n"
             f"The person speaking now was recognised by voice as {speaker}. "
             f"Treat them as {speaker}, even if earlier turns of this conversation "
-            f"were someone else. [USER FACTS] below are {speaker}'s."
+            f"were someone else."
+            + (f" [USER FACTS] below are {speaker}'s." if memory else "")
         )
     if checked:
         # "Not recognised" alone read as "never enrolled": an enrolled user who
@@ -217,7 +240,7 @@ def _speaker_block(speaker: str | None, checked: bool) -> str:
             "not tell from their voice this time and that you listen again on "
             "everything they say next. A request to learn their voice is still "
             "carried out as usual. Do not assume they are anyone named earlier in "
-            "this conversation; ask if it matters. Nothing can be saved to memory "
-            "for them."
+            "this conversation; ask if it matters."
+            + (" Nothing can be saved to memory for them." if memory else "")
         )
     return ""

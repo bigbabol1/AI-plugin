@@ -1,7 +1,7 @@
 """Speak a short sentence on a satellite outside the normal reply.
 
-Used for the voice-enrollment questions and for the "one second" line
-while a slow tool runs. The sentence is rendered like
+Used for the voice-enrollment questions, the "one second" line while a
+slow tool runs, and announce-mode timers. The sentence is rendered like
 HA's own satellite announcements: with the satellite's Assist pipeline
 TTS engine, language and voice, so it sounds like every other reply there.
 
@@ -46,31 +46,59 @@ def satellite_entity(hass, device_id: str | None) -> str | None:
     return None
 
 
-def satellite_pipeline(hass, device_id: str):
+def satellite_in_area(hass, raw: str) -> str | None:
+    """The device of a satellite in the named room, or None."""
+    from homeassistant.helpers import device_registry as dr  # noqa: PLC0415
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    from .shortcuts.registry import _entry_area_id, _resolve_area  # noqa: PLC0415
+
+    area = _resolve_area(hass, raw)
+    if area is None:
+        return None
+    dev_reg = dr.async_get(hass)
+    for entry in er.async_get(hass).entities.values():
+        if entry.entity_id.startswith("assist_satellite.") and (
+            _entry_area_id(hass, entry, dev_reg) == area.id
+        ):
+            return entry.device_id
+    return None
+
+
+def satellite_pipeline(hass, device_id: str, lang: str | None = None):
     """The Assist pipeline this satellite runs (its "Assistant" select,
-    "preferred" meaning HA's preferred pipeline), or None."""
+    "preferred" meaning HA's preferred pipeline), or None.
+
+    With ``lang``, a pipeline of the satellite's in that language wins
+    over its main one (a second wake word may run another language)."""
     try:
         from homeassistant.components import assist_pipeline  # noqa: PLC0415
         from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
 
         reg = er.async_get(hass)
-        chosen = None
+        selects = []
         for entry in reg.entities.values():
             if entry.device_id != device_id or not entry.entity_id.startswith("select."):
                 continue
             state = hass.states.get(entry.entity_id)
             if state is None or "preferred" not in (state.attributes.get("options") or []):
                 continue
-            # Satellites with two wake words have a second pipeline select
-            # ("…_2"); the first one is the main assistant.
-            if chosen is None or str(chosen[0].unique_id).endswith("_2"):
-                chosen = (entry, state.state)
-        if chosen is None or chosen[1] == "preferred":
-            return assist_pipeline.async_get_pipeline(hass, None)
-        return next(
-            (p for p in assist_pipeline.async_get_pipelines(hass) if p.name == chosen[1]),
-            assist_pipeline.async_get_pipeline(hass, None),
-        )
+            selects.append((entry, state.state))
+        # Satellites with two wake words have a second pipeline select
+        # ("…_2"); the first one is the main assistant.
+        selects.sort(key=lambda s: str(s[0].unique_id).endswith("_2"))
+        preferred = assist_pipeline.async_get_pipeline(hass, None)
+        pipelines = list(assist_pipeline.async_get_pipelines(hass))
+        candidates = [
+            preferred if choice == "preferred"
+            else next((p for p in pipelines if p.name == choice), preferred)
+            for _, choice in selects
+        ] or [preferred]
+        if lang:
+            for pipeline in candidates:
+                if pipeline_lang(pipeline, "") == lang:
+                    return pipeline
+        return candidates[0]
     except Exception:  # noqa: BLE001
         _LOGGER.debug("AI Plugin: pipeline lookup failed", exc_info=True)
         return None
@@ -170,6 +198,49 @@ async def _wait_for_call_or_playback(hass, task: asyncio.Future, speaker: str | 
         await asyncio.wait({task}, timeout=_POLL_S)
         waited += _POLL_S
     return False
+
+
+async def async_announce(
+    hass, device_id: str, template_key: str, lang: str, **fmt: object
+) -> str | None:
+    """Speak the i18n template ``template_key`` on the device's satellite
+    without waiting for it to play; returns the sentence, or None when
+    there is nowhere to play it. Never raises.
+
+    The voice is the satellite's Assist pipeline in ``lang`` if it has one,
+    else its main pipeline, and the sentence is written in that pipeline's
+    language, so text and voice never disagree. Text alone would be read by
+    the TTS engine's own default voice: HA Cloud's here was German and read
+    "Timer is up." with a German accent.
+    """
+    try:
+        from .i18n import L  # noqa: PLC0415
+
+        satellite = satellite_entity(hass, device_id)
+        if satellite is None:
+            return None
+        pipeline = satellite_pipeline(hass, device_id, lang)
+        text = L.template(template_key, pipeline_lang(pipeline, lang), **fmt)
+        url = speech_url(hass, text, pipeline)
+        if mic2mp_for(hass, satellite) is not None:
+            data = {"satellite_entity_id": satellite}
+            if url:
+                data["audio_url"] = url
+            else:
+                data["message"] = text
+            call = ("mic_to_mediaplayer", "announce", data)
+        else:
+            data = {"entity_id": satellite, "message": text}
+            if url:
+                from homeassistant.helpers.network import get_url  # noqa: PLC0415
+
+                data["media_id"] = f"{get_url(hass)}{url}" if url.startswith("/") else url
+            call = ("assist_satellite", "announce", data)
+        await hass.services.async_call(*call, blocking=False)
+        return text
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("AI Plugin: announcement on %s failed", device_id)
+        return None
 
 
 def _log_play_failure(task: asyncio.Task) -> None:

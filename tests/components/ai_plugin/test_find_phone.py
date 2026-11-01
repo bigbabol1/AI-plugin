@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.ai_plugin import shortcuts
-from custom_components.ai_plugin.const import CONF_FIND_PHONE
 from custom_components.ai_plugin.orchestrator import Orchestrator
 from custom_components.ai_plugin.shortcuts import phone as phone_mod
 from custom_components.ai_plugin.shortcuts.phone import (
@@ -300,11 +299,12 @@ async def test_a_person_without_a_phone_gets_none():
 # ── orchestrator wiring ───────────────────────────────────────────────────────
 
 
-def _orch(enabled=True, speaker=None):
+def _orch(speaker=None):
     orch = Orchestrator.__new__(Orchestrator)
     orch._hass = _Hass()
     orch._entry = MagicMock()
-    orch._entry.options = {CONF_FIND_PHONE: enabled}
+    # A saved value from when this was an option no longer means anything.
+    orch._entry.options = {"find_phone": False}
     orch._voice_id = SimpleNamespace(find_person=_finder)
     orch._turn_speakers = {"sat": speaker} if speaker is not None else {}
     return orch
@@ -362,22 +362,20 @@ async def test_tool_asks_whose_phone_when_nobody_is_known():
     assert orch._hass.calls == []
 
 
-def test_tool_schema_is_offered_only_with_the_option_on():
-    def names(orch):
-        orch._mcp = orch._web_search = orch._browse_url = orch._memory = orch._ha_local = None
-        orch._prune_schemas = False
-        return [s["function"]["name"] for s in orch._tool_schemas_for("hi", False, None)]
-
-    assert RING_PHONE_SCHEMA["function"]["name"] in names(_orch(enabled=True))
-    assert names(_orch(enabled=False)) == []
+def test_the_ring_tool_is_always_offered():
+    orch = _orch()
+    orch._mcp = orch._web_search = orch._browse_url = orch._memory = orch._ha_local = None
+    orch._prune_schemas = False
+    names = [s["function"]["name"] for s in orch._tool_schemas_for("hi", False, None)]
+    assert names == [RING_PHONE_SCHEMA["function"]["name"]]
 
 
 @pytest.mark.asyncio
-async def test_option_off_leaves_the_turn_to_the_llm():
-    """With the option off a find-my-phone turn rings nothing and reaches the LLM."""
+async def test_a_find_my_phone_turn_rings_without_reaching_the_llm():
+    """Also for a setup that saved the old option as off."""
     from custom_components.ai_plugin.context_manager import ContextManager
 
-    orch = _orch(enabled=False)
+    orch = _orch()
     orch._voice_id = None
     orch._context_mgr = ContextManager(max_tokens=8192)
     orch._summarization_enabled = False
@@ -395,6 +393,7 @@ async def test_option_off_leaves_the_turn_to_the_llm():
          patch(f"{core}.async_try_media_shortcut", AsyncMock(return_value=None)), \
          patch(f"{core}.async_try_domain_sweep_shortcut", AsyncMock(return_value=None)), \
          patch(f"{core}.async_try_action_shortcut", AsyncMock(return_value=None)):
-        reply = await orch.async_process("Where is my phone?", "c1", "en")
-    assert reply == "No idea."
-    assert orch._hass.calls == []
+        reply = await orch.async_process("Where is my phone?", "c1", "en", user_id="u-lena")
+    assert reply == "Ringing your phone."
+    assert orch._hass.calls[0][0] == "mobile_app_lenas_iphone"
+    orch._provider.async_complete.assert_not_awaited()

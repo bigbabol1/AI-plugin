@@ -98,6 +98,13 @@ def hass_light_set_args(arguments: dict) -> dict:
     return out
 
 
+def _on_off_only(attrs) -> bool:
+    """True for a light that has no brightness at all (colour mode onoff).
+    A light that does not list its modes is given the benefit of the doubt."""
+    modes = set(attrs.get("supported_color_modes") or ())
+    return bool(modes) and modes <= {"onoff"}
+
+
 def _colour_data(colour: tuple[str, object, str], attrs) -> dict | None:
     """Service data showing ``colour`` on one light, or None if it cannot."""
     modes = set(attrs.get("supported_color_modes") or ())
@@ -506,6 +513,10 @@ class LightToolsMixin:
         skipped_off: list[str] = []
         unavailable: list[str] = []
         no_colour: list[str] = []
+        no_dimming: list[str] = []
+        changes_brightness = command in ("brighter", "dimmer") or (
+            command == "set" and level is not None
+        )
         for eid in ids:
             st = hass.states.get(eid)
             if st is None or st.state in ("unavailable", "unknown"):
@@ -517,6 +528,12 @@ class LightToolsMixin:
                 if extra is None:
                     no_colour.append(eid)
                     continue
+            if changes_brightness and _on_off_only(st.attributes):
+                # HA drops brightness for such a light, so "dimmed to 80%"
+                # would report a change that never happened (a night
+                # light, 2026-10-31).
+                no_dimming.append(eid)
+                continue
             is_on = st.state == "on"
             raw = st.attributes.get("brightness")
             cur_pct = 0
@@ -553,6 +570,12 @@ class LightToolsMixin:
                     f"{colour[2]}: {', '.join(no_colour)} cannot change "
                     "colour. Tell the user."
                 )
+            if no_dimming:
+                return (
+                    f"None of the lights in {scope_label} can be dimmed: "
+                    f"{', '.join(no_dimming)} can only be switched on or "
+                    "off. Tell the user."
+                )
             if skipped_off:
                 return (
                     f"No lights on in {scope_label} to dim "
@@ -586,6 +609,11 @@ class LightToolsMixin:
             note += f", colour {colour[2]}"
         if no_colour:
             note += f", {len(no_colour)} cannot change colour ({', '.join(no_colour)})"
+        if no_dimming:
+            note += (
+                f", {len(no_dimming)} on/off only, not changed "
+                f"({', '.join(no_dimming)})"
+            )
         if skipped_off:
             note += f", {len(skipped_off)} already off"
         if unavailable:

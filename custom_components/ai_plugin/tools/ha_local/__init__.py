@@ -8,6 +8,7 @@ model asks it.
     core         the registry object and the call_tool dispatch
     entities     list_areas / list_entities / get_entity / search_entities
     lights       set_area_state / set_brightness
+    climate      set_climate_mode
     media        play_music / media_command / media_status
     timers       start / cancel / pause / resume / extend / status
     formatting   registry objects into capped, readable text

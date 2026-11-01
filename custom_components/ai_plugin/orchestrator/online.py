@@ -92,9 +92,10 @@ _PERSONAL_RE = re.compile(
     r"\b(?:"
     r"should\s+(?:i|we)|do\s+you\s+think|what\s+do\s+you\s+think|"
     r"schedul\w*|calendar|agenda|appointments?|reminders?|to-?do|"
+    r"remind\s+me|alarms?|wake\s+me|"
     # German
     r"soll(?:te)?\s+(?:ich|wir)|meinst\s+du|denkst\s+du|"
-    r"termine?n?|kalender|erinnerung(?:en)?"
+    r"termine?n?|kalender|erinnerung(?:en)?|erinner\w*\s+mich|wecker|weck\w*\s+mich"
     r")\b",
     re.IGNORECASE,
 )

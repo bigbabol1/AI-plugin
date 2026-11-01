@@ -20,6 +20,7 @@ it gracefully and the conversation continues.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import date as _date
@@ -139,9 +140,13 @@ class WebSearchTool:
             language=language,
         )
         scoped_query = _maybe_inject_date(scoped_query)
+        # Decided on the model's own query, before today's date may be
+        # appended: a question about one particular day.
+        dated = bool(_SPECIFIC_DATE_RE.search(query or ""))
         _LOGGER.debug(
-            "WebSearchTool: backend=%s query=%r scoped=%r near_user=%s strip_urls=%s",
-            self._backend, query, scoped_query, near_user, strip_urls,
+            "WebSearchTool: backend=%s query=%r scoped=%r near_user=%s "
+            "strip_urls=%s dated=%s",
+            self._backend, query, scoped_query, near_user, strip_urls, dated,
         )
         try:
             if self._backend == BACKEND_BRAVE:
@@ -149,7 +154,7 @@ class WebSearchTool:
             elif self._backend == BACKEND_SEARXNG:
                 result = await self._search_searxng(scoped_query)
             elif self._backend == BACKEND_TAVILY:
-                result = await self._search_tavily(scoped_query)
+                result = await self._search_tavily(scoped_query, advanced=dated)
             else:
                 result = await self._search_duckduckgo(scoped_query)
         except Exception as exc:  # noqa: BLE001
@@ -230,6 +235,7 @@ class WebSearchTool:
             "Accept-Encoding": "gzip",
             "X-Subscription-Token": self._brave_key,
         }
+        query = _spell_out_digit_dates(query)
         params = {"q": query, "count": self._max_results, "result_filter": "web"}
         session = self._get_session()
         async with session.get(
@@ -247,7 +253,11 @@ class WebSearchTool:
 
         items = data.get("web", {}).get("results", [])
         results = [
-            {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("description", "")}
+            {
+                "title": _clean_markup(r.get("title", "")),
+                "url": r.get("url", ""),
+                "snippet": _clean_markup(r.get("description", "")),
+            }
             for r in items[: self._max_results]
         ]
         return _format_results(query, results) if results else _FALLBACK_MSG
@@ -284,7 +294,12 @@ class WebSearchTool:
 
     # ── Tavily ─────────────────────────────────────────────────────────────────
 
-    async def _search_tavily(self, query: str) -> str:
+    async def _search_tavily(self, query: str, advanced: bool = False) -> str:
+        """``advanced`` asks for Tavily's deeper search, which costs two
+        credits instead of one. Used for questions about one particular
+        day: basic search ranks the current season's pages first, so "who
+        did <club> play on 17 May 2025" found that match in 0 of 6 phrasings,
+        advanced in 5 of 6 (measured 2026-10-31, three results each)."""
         if not self._tavily_key:
             return "Tavily API key not configured — add it in AI Plugin settings."
         url = "https://api.tavily.com/search"
@@ -293,6 +308,8 @@ class WebSearchTool:
             "query": query,
             "max_results": self._max_results,
         }
+        if advanced:
+            payload["search_depth"] = "advanced"
         session = self._get_session()
         async with session.post(
             url,
@@ -484,7 +501,22 @@ _TEMPORAL_QUERY_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_MONTHS = (
+    r"jan(?:uary|uar)?|feb(?:ruary|ruar)?|mar(?:ch)?|märz|maerz|apr(?:il)?|"
+    r"ma[iy]|june?|juni|july?|juli|aug(?:ust)?|sep(?:t(?:ember)?)?|"
+    r"o[ck]t(?:ober)?|nov(?:ember)?|de[cz](?:ember)?"
+)
+# A query that names one day: 2025-05-17, 17.05.2025, 17.05.25, 5/17/25,
+# "17 May", "17. Mai", "May 17th". A month name counts only next to a day
+# number, so the verb "may" does not.
+_SPECIFIC_DATE_RE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{1,2}[./]\d{1,2}[./](?:\d{4}|\d{2})\b"
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th|\.)?\s+(?:of\s+)?(?:{_MONTHS})\b"
+    rf"|\b(?:{_MONTHS})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?\b",
+    re.IGNORECASE,
+)
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 
 
 def _maybe_inject_date(query: str) -> str:
@@ -493,15 +525,78 @@ def _maybe_inject_date(query: str) -> str:
     Search engines return evergreen pages for vague event queries
     ("what happened in Berlin today"). Adding the explicit date forces
     them to surface articles dated to the actual day.
-    Idempotent: skips when a date is already present.
+    Skips a query that already names a day or a year: "football matches
+    happening on May 17, 2025" came back as matches on today's date once
+    today was appended (measured 2026-10-31).
     """
     if not query:
         return query
-    if _DATE_RE.search(query):
+    if _SPECIFIC_DATE_RE.search(query) or _YEAR_RE.search(query):
         return query
     if not _TEMPORAL_QUERY_RE.search(query):
         return query
     return f"{query} {_date.today().isoformat()}"
+
+
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+_DIGIT_DATE_RE = re.compile(r"\b(\d{1,2})([./])(\d{1,2})\2(\d{4}|\d{2})\b")
+
+
+def _spell_out_digit_dates(query: str) -> str:
+    """Write a digit date the way Brave understands it: "17.05.25" becomes
+    "May 17, 2025".
+
+    Brave matches digit dates poorly. Measured 2026-10-31: "<club> match
+    17.05.25" found no trace of that day's match, and "<club> football game
+    17.05.2025" ranked the club's reserve team first, so the model named the
+    wrong opponent in 2 of 4 replays. Spelled out, every one of those
+    phrasings put the match first. The English month name works inside
+    German and French queries too ("<club> Gegner May 17, 2025" found it,
+    "<club> Spiel 17. Mai 2025" did not).
+
+    Dots are read day first (17.05.2025). Slashes are read whichever way
+    is unambiguous (17/5/2025, 5/17/2025); a slash date that could be
+    either way round is left alone. A two-digit year with dots needs a
+    two-digit day and month (dd.mm.yy), so a version number such as
+    "3.12.11" stays as it is. Two-digit years 00-68 are 20xx, 69-99 19xx
+    (the POSIX rule).
+    """
+
+    def _spell(m: re.Match[str]) -> str:
+        first, sep, second, year = m.group(1), m.group(2), m.group(3), m.group(4)
+        a, b = int(first), int(second)
+        if sep == ".":
+            if len(year) == 2 and (len(first) != 2 or len(second) != 2):
+                return m.group(0)
+            day, month = a, b
+        elif a > 12 >= b:
+            day, month = a, b
+        elif b > 12 >= a:
+            day, month = b, a
+        else:
+            return m.group(0)
+        y = int(year)
+        if len(year) == 2:
+            y += 2000 if y <= 68 else 1900
+        try:
+            _date(y, month, day)
+        except ValueError:
+            return m.group(0)
+        return f"{_MONTH_NAMES[month - 1]} {day}, {y}"
+
+    return _DIGIT_DATE_RE.sub(_spell, query or "")
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_markup(text: str) -> str:
+    """Plain text from a snippet that carries HTML: Brave marks the matched
+    words with <strong> and escapes quotes as &#x27;."""
+    return html.unescape(_TAG_RE.sub("", text or ""))
 
 
 def _maybe_inject_location(

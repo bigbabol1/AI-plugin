@@ -49,6 +49,17 @@ templates:
   phone_seen_away:     "Home Assistant zag hem het laatst buiten de deur."
   phone_ring_text:     "Hier ben ik!"
   phone_failed:        "Ik kon de telefoon niet bereiken."
+  alarm_ring:          "Je alarm gaat af."
+  alarm_wake:          "Tijd om wakker te worden."
+  alarm_stopped:       "Alarm uit."
+  alarm_snoozed:       "Het alarm gaat over {val} minuten weer af."
+  reminder_due:        "Herinnering: {label}."
+  reminder_title:      "Herinnering"
+  scheduled_say:       "{label}"
+  scheduled_failed:    "Dit lukte niet: {label}."
+  message_title:       "Bericht"
+  message_title_from:  "Bericht van {name}"
+  phrase_routine_refused: "Ik kan daar nog geen zin voor opslaan, dus er is niets ingesteld. Op een vast tijdstip kan het wel, als je zegt wanneer."
 keywords:
   time_now:      ["hoe laat is het", "wat is de tijd", "zeg me de tijd", "hoe laat"]
   sun_set:       ["zonsondergang", "wanneer gaat de zon onder", "hoe laat gaat de zon onder", "wanneer is zonsondergang", "wanneer wordt het donker"]
@@ -75,7 +86,7 @@ patterns:
     - '^(?:sluit|sluiten)\s+(?:de\s+|het\s+)?(?P<name>.+?)$'
     - '^(?:doe|zet|trek)\s+(?:de\s+|het\s+)?(?P<name>.+?)\s+(?:dicht|toe)$'
     - '^(?P<name>.+?)\s+(?:sluiten|dicht|omlaag)$'
-  # "Where is my phone": rings it (Find my phone option). An optional
+  # "Where is my phone": rings it. An optional
   # (?P<owner>...) captures someone else's name; without it the phone is the speaker's.
   find_phone:
     - '^waar\s+(?:is|ligt|heb\s+ik)\s+mijn\s+(?:telefoon|mobiel|gsm|iphone|smartphone)(?:\s+(?:gelaten|gelegd))?$'
@@ -84,3 +95,27 @@ patterns:
     - '^ik\s+kan\s+mijn\s+(?:telefoon|mobiel|gsm|iphone|smartphone)\s+niet\s+vinden$'
     - '^(?:waar\s+is|zoek)\s+de\s+(?:telefoon|mobiel|gsm|iphone|smartphone)\s+van\s+(?P<owner>[\w\-]+)$'
     - '^(?:waar\s+is|zoek)\s+(?P<owner>[\w\-]+?)(?:[\x27’]s|[\x27’])?\s+(?:telefoon|mobiel|gsm|iphone|smartphone)$'
+  # While an alarm rings: the words that stop it.
+  alarm_stop:
+    - '^(?:stop|genoeg|uit|ik\s+ben\s+wakker|(?:stop|zet)\s+(?:de\s+)?(?:wekker|alarm)(?:\s+uit)?|wekker\s+uit)$'
+  # While an alarm rings: snooze, with an optional (?P<minutes>).
+  alarm_snooze:
+    - '^(?:snooze|sluimer\w*)(?:\s+(?P<minutes>\d+)\s*min\w*)?$'
+    - '^nog\s+(?P<minutes>\d+)\s+minuten?$'
+  # A time in the future inside a command: such a command is scheduled, never run at once, and these are cut from it.
+  later_time:
+    - '\bover\s+(?:\d+|een|twee|drie|vijf|tien|vijftien|twintig|dertig|een\s+half|anderhalf)\s*(?:seconden?|minuten?|uur|uren)\b'
+    - '\bom\s+\d{1,2}(?:[:.]\d{2})?(?!\s*%|\d)(?:\s*uur)?'
+    - '(?<!goede\s)\bmorgen\b'
+    - '\bvanavond\b'
+    - '\blater\b'
+    - '\b(?:elke|iedere)\s+dag\b'
+  # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
+  alarm_wake_request:
+    - '\bmaak\s+(?:me|mij|ons)\b.*\bwakker\b'
+  # A calendar entry that repeats every year unless asked otherwise. A party is one day.
+  yearly_event:
+    - '\bverjaardag\b'
+  # "When I say ...": a routine by phrase, which cannot be saved yet.
+  phrase_routine:
+    - '^(?:als|wanneer)\s+(?:ik|we)\s+.*\bzeg(?:gen)?\b'

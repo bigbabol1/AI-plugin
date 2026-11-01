@@ -4,6 +4,120 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v1.0.0 — alarms, reminders and music that makes room
+
+### Heads-up when updating
+
+- **Find my phone is now always on.** The switch is gone and a saved "off" is
+  ignored. Anyone within reach of a satellite can ring a household member's
+  phone at full volume, even on silent. It reaches only phones that run the
+  Companion app and belong to a person.
+- **Music in the room goes down to 20% while a satellite listens.** There is
+  no switch for this.
+- **The prompt grew by about 2,200 tokens** for the new tools and rules: the
+  system prompt and tools went from about 10,600 to about 12,900 of 16,384 on
+  my setup, which leaves about 3,500 for history and the reply. Below a context
+  window of 16384 there is little room left for them.
+
+### Added
+
+- **Alarms, reminders and things to do later.** *"Wake me up at 7"*, *"Remind
+  me to take out the trash tomorrow at 6"*, *"Turn off the lights in 30
+  minutes"*. They are stored, so a restart does not lose them. Before, the
+  last of these started a timer and said it would turn the lights off, while
+  they stayed on.
+  - An alarm speaks every 10 seconds for up to 3 minutes, until *"stop"* or
+    *"snooze"*. It says "Your alarm is ringing." unless the request said what
+    it is for ("Time to wake up", "The pasta is ready").
+  - A reminder is spoken once and sent to the person's phone. *"Remind Anna to
+    buy milk at 5"* goes to Anna's phone, or is spoken here if she has none.
+  - A later command runs as if just said, in the same room. It is never
+    carried out straight away.
+  - After downtime, alarms and commands still run if less than 10 minutes
+    late and reminders if less than 24 hours late. The rest are dropped and
+    logged, so a light never switches off hours later.
+  - Replayed against the voice model: 19 scheduling requests in English and
+    German called the right tool with the right arguments in every run.
+- **Calendar entries by voice.** *"Put the dentist on my calendar for Friday at
+  10"* writes to a calendar that is exposed to Assist and accepts new events. A
+  birthday repeats every year on its own, *"every week"* and *"every month"*
+  work too, and a one-off date gone by is refused instead of being added where
+  nobody would see it again.
+- **Messages.** *"Tell Anna dinner is ready"* is a notification on Anna's phone,
+  with your name if the assistant knows who you are. *"Tell the kitchen…"* is
+  spoken on the satellite in that room.
+- **Moving music.** *"Move the music to the bedroom"* uses Music Assistant's
+  queue transfer. *"Wake me up at 7 with music"* schedules the music, as an
+  alarm only speaks.
+- **Music goes down while a satellite listens**, because a satellite cannot
+  cancel a speaker that is not its own, so the music reads as someone still
+  talking. A short command kept the microphone open for 4.7 to 7.1 s with music
+  playing, and 1.2 to 2.1 s with this. It follows the satellite's state
+  in Home Assistant, so it works with or without Mic to MediaPlayer. A TV and
+  group players are left alone.
+- **"Play some music" plays from your saved taste.** *"Remember that I like
+  jazz and soul"* once, then a random genre from it, a different playlist each
+  time, shuffled. With nothing saved it asks what you would like to hear.
+- **A conversation lasts 15 minutes on a satellite.** *"And the bedroom?"* still
+  knows what it follows after a few minutes of quiet. The Assist panel still
+  starts over when reopened.
+- **A switch for the long-term memory**, under Advanced, for setups with their
+  own memory, for example through an MCP server. Off removes `remember`,
+  `recall`, `forget`, the `[USER FACTS]` block and the memory rules from the
+  prompt, and a tool of the same name from an MCP server then gets the call.
+  Saved facts stay on disk. On by default, and when on the prompts do not change
+  by a byte. Off has been replayed, not used on a satellite.
+- **`set_climate_mode`.** Home Assistant 2026.7's MCP offers no way to change a
+  thermostat's mode. *"Put the heating back to auto"* was answered as done while
+  the model sent a temperature of 0 or turned the heating on, and in replay 4 of
+  8 such turns switched it off. With the tool, 24 of 24 were right.
+
+### Changed
+
+- *"Turn it down"* moves the volume by 10 points, from the real volume even while
+  the music is lowered. It used to move 3.
+- *"When I say good night, turn off the lights"* is refused by a fixed sentence
+  until routines by phrase exist. The model used to answer that it had scheduled
+  it, and nothing ever ran.
+
+### Fixed
+
+- **A repeated command was not carried out.** After a silent confirmation the
+  assistant's turn was stored empty, so a second *"Dim the light."* got a
+  confirmation or a stall and only the retry acted. Replaying four in a row, the
+  first reply acted on 0 of 24 repeats before and 24 of 24 now, with turns of 1.8
+  to 2.6 s instead of 2.7 to 9.8 s.
+- **A long silence on an action command.** The first reply could loop in hidden
+  reasoning up to the token limit: 18.9 s in one case. It is capped at 128 tokens,
+  so such a stall ends after 5 to 6 s and the retry acts.
+- **Music started in another room.** *"Continue playing."* with no room named sent
+  play to every idle speaker in the home. A media command now means the room it
+  was said in, and reaches further only if nothing there qualifies.
+- **Music woke the satellite and got an answer.** With voice recognition on, a turn
+  is ignored if it has at least 6 seconds of audio at no more than 0.3 words per
+  second, is not a command or an answer, music is playing in the room, and the voice
+  matches nobody. Against 98 logged voice turns this fires on the one known false
+  wake and nothing else. Lyrics that come out as a full sentence still get an
+  answer, and the music still dips while the microphone is open. The option
+  *Ignore the satellite hearing its own reply* turns this off too.
+- **A thermostat change got no spoken confirmation**, although it can be neither seen
+  nor heard.
+- **Timers were announced in the wrong language**: in the default voice of the first
+  speech engine rather than the satellite's Assist voice.
+- **Web search on past dates.** A query that already names a day or year no longer
+  gets today's date added, and a Tavily query naming one day uses the deeper search
+  (2 credits instead of 1). Together they found one past match in 9 of 9 phrasings,
+  not 1 of 9.
+  Brave gets digit dates spelled out (*"May 17, 2025"*), which took a replayed
+  conversation from 2 of 4 wrong answers to 4 of 4 right, and its snippets lose their
+  HTML tags and entities.
+- **On/off-only lights were reported as dimmed.** They are now left out of brightness
+  changes and the reply says so.
+- **Slow follow-ups after status questions.** *"Are any timers running?"* and *"What
+  alarms are on?"* no longer get a retry after their own tool answered. That retry
+  made the model read its whole prompt again, 6 to 8 s. *"Set a timer"* no longer
+  gets the action retry either.
+
 ## v0.10.1 — light colours
 
 ### Fixed

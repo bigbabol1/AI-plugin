@@ -387,6 +387,33 @@ async def _capture_ollama_payload(provider: OpenAICompatProvider) -> dict:
     return captured["json"]
 
 
+async def _capture_capped(max_tokens_option: int, cap: int | None) -> dict:
+    provider = OpenAICompatProvider(
+        base_url="http://localhost:11434/v1", model="qwen3:8b", api_key=None,
+        timeout=30, max_tokens=max_tokens_option,
+    )
+    provider._is_ollama = True
+    mock_resp = _mock_response(200, {"message": {"content": "ok"}})
+    captured: dict = {}
+
+    def capturing_post(url, **kwargs):
+        captured.update(kwargs)
+        return mock_resp
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.post = capturing_post
+        await provider.async_chat([{"role": "user", "content": "hi"}], max_tokens=cap)
+    return captured["json"].get("options", {})
+
+
+async def test_a_per_call_cap_lowers_the_limit_but_never_raises_it() -> None:
+    assert (await _capture_capped(512, 128))["num_predict"] == 128
+    assert (await _capture_capped(64, 128))["num_predict"] == 64
+    assert (await _capture_capped(0, 128))["num_predict"] == 128
+    assert (await _capture_capped(512, None))["num_predict"] == 512
+    assert "num_predict" not in await _capture_capped(0, None)
+
+
 async def test_ollama_payload_includes_keep_alive_duration() -> None:
     payload = await _capture_ollama_payload(_make_ollama_provider("30m"))
     assert payload["keep_alive"] == "30m"

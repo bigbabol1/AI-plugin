@@ -17,7 +17,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..const import (
     CONF_VOICE_ID_ENABLED,
@@ -28,8 +28,11 @@ from ..const import (
     DEFAULT_VOICE_ID_VOICE_ENROLL,
     VOICE_ID_WAIT_SECONDS,
 )
-from .buffer import AudioBufferStore
+from .buffer import BYTES_PER_SECOND, AudioBufferStore
 from .enrollment import EnrollmentSessions, is_stop, prompts_for
+
+if TYPE_CHECKING:
+    from .matching import Decision
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +49,11 @@ _ENROLL_REASKS = 2
 _ANSWER_WAIT_CAP_S = 30.0
 _MIC_START_GRACE_S = 3.0
 _TURN_ARRIVAL_S = 2.0
+# A false wake from music, against 98 logged voice turns (2026-10-29 to
+# 2026-11-01): the one known case was 9.7 s of audio for one word, 0.10 words
+# per second. No other turn of 6 s or more was below 0.5.
+FALSE_WAKE_MIN_AUDIO_S = 6.0
+FALSE_WAKE_MAX_WORDS_PER_S = 0.3
 
 VOICE_ENROLL_TOOL = "start_voice_enrollment"
 VOICE_ENROLL_SCHEMA = {
@@ -348,12 +356,63 @@ class VoiceIDManager:
 
     async def async_identify(self, text: str, device_id: str) -> Identity | None:
         """Fingerprint this turn's audio and match it. None = unknown."""
-        from .matching import Sample, decide  # noqa: PLC0415
-
         clip = self.buffers.take_clip(text)
         if clip is None:
             _LOGGER.debug("AI Plugin voice ID: no audio for this turn")
             return None
+        decision = await self._async_decide(clip, device_id)
+        if decision is None or decision.person_id is None:
+            return None
+        info = self.persons().get(decision.person_id)
+        if info is None:  # person deleted since enrollment
+            return None
+        return Identity(
+            decision.person_id,
+            str(info["name"]),
+            self.memory_key(decision.person_id),
+            decision.score,
+        )
+
+    def too_few_words_for_the_audio(
+        self, text: str, device_id: str | None, user_id: str | None
+    ) -> bool:
+        """The microphone stayed open for seconds and heard almost no words.
+
+        What a false wake from music looks like: the music never goes quiet,
+        so voice activity detection runs on, and speech-to-text makes a word
+        or two of it. Only the audio stored for this turn counts; the entry
+        stays for whoever identifies the speaker next.
+        """
+        if not self.should_identify(text, device_id, user_id):
+            return False
+        clip = self.buffers.peek_clip(text)
+        if clip is None:
+            return False
+        seconds = len(clip[0]) / BYTES_PER_SECOND
+        return (
+            seconds >= FALSE_WAKE_MIN_AUDIO_S
+            and len(text.split()) / seconds <= FALSE_WAKE_MAX_WORDS_PER_S
+        )
+
+    async def async_voice_is_unknown(self, text: str, device_id: str) -> bool:
+        """True only if a fingerprint was measured and matches nobody.
+
+        A missing clip, a model still loading or a failed fingerprint is not
+        evidence about the voice, so they answer False. Two people too close
+        to tell apart are still somebody.
+        """
+        clip = self.buffers.peek_clip(text)
+        if clip is None:
+            return False
+        decision = await self._async_decide(clip, device_id)
+        return decision is not None and decision.reason == "below_threshold"
+
+    async def _async_decide(
+        self, clip: tuple[bytes, asyncio.Future | None], device_id: str
+    ) -> Decision | None:
+        """Fingerprint a clip and score it, or None if that was not possible."""
+        from .matching import Sample, decide  # noqa: PLC0415
+
         if self._embedder is None:
             # Never download or load inside a user's turn; setup starts that
             # in the background. Until it is ready, every turn is unknown.
@@ -399,17 +458,7 @@ class VoiceIDManager:
             decision.person_id or "unknown", decision.reason,
             decision.score, decision.margin, seconds, ms,
         )
-        if decision.person_id is None:
-            return None
-        info = self.persons().get(decision.person_id)
-        if info is None:  # person deleted since enrollment
-            return None
-        return Identity(
-            decision.person_id,
-            str(info["name"]),
-            self.memory_key(decision.person_id),
-            decision.score,
-        )
+        return decision
 
     # ── enrollment ──────────────────────────────────────────────────────────
 

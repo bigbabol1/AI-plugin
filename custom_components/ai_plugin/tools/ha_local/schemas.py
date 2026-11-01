@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .climate import _HVAC_MODES
 from .lights import _ACTION_DOMAINS, _BRIGHTNESS_FLOOR_PCT, _BRIGHTNESS_STEP_PP
 from .timers import _TIMER_INTENTS
 
@@ -194,7 +195,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": (
                             "What to play — track, album, artist, playlist, "
                             "or genre. Free text. Examples: 'Enya', 'Hotel "
-                            "California', 'jazz', 'workout playlist'."
+                            "California', 'jazz', 'workout playlist'. Never just "
+                            "'music': for 'play some music' give the genres of "
+                            "their taste in [USER FACTS], comma separated, with "
+                            "from_taste, or ask what they would like to hear."
                         ),
                     },
                     "area": {
@@ -205,6 +209,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "'wohnzimmer'). OMIT when the user did not "
                             "specify a room — the plugin defaults to "
                             "the calling satellite's own area."
+                        ),
+                    },
+                    "from_taste": {
+                        "type": "boolean",
+                        "description": (
+                            "True only when the user named no music and query is "
+                            "their taste: 'jazz, soul'. It picks a different "
+                            "playlist each time and shuffles it."
                         ),
                     },
                     "media_type": {
@@ -397,6 +409,7 @@ TOOL_SCHEMAS.extend(
                 "name": "start_timer",
                 "description": (
                     "Start a voice timer on the calling assist_satellite device. "
+                    "It only rings when it ends and does nothing else. "
                     "Use for 'set a 5 minute timer', 'timer for 10 minutes called pasta', "
                     "'wecker auf 3 minuten'. Provide at least one of hours / minutes / "
                     "seconds. The optional name lets the user reference this specific "
@@ -542,6 +555,72 @@ TOOL_SCHEMAS.extend(
 )
 
 
+# Last on purpose: placed next to set_area_state it shifted the voice
+# model's tool choice on unrelated turns (a repeated "turn off the
+# kitchen light" was answered from history without a call, 12 of 12
+# replays); appended after the timers it did not.
+TOOL_SCHEMAS.append(
+    {
+        "type": "function",
+        "function": {
+            "name": "set_climate_mode",
+            "description": (
+                "Switch the heating, a thermostat or an air conditioner to "
+                "an operating mode. 'auto' means it follows its own "
+                "schedule: 'heating back to auto', 'back on schedule', "
+                "'Heizung auf Automatik'. 'heat' is manual heating, 'off' "
+                "switches it off. For a target temperature use "
+                "HassClimateSetTemperature instead; never send a "
+                "temperature to change the mode."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": list(_HVAC_MODES),
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Thermostat name or entity_id, when the user "
+                            "named one."
+                        ),
+                    },
+                    "area": {
+                        "type": "string",
+                        "description": (
+                            "Room name, when the user named one. OMIT both "
+                            "name and area for 'the heating'."
+                        ),
+                    },
+                    **_EXPOSED_ONLY_PROP,
+                },
+                "required": ["mode"],
+            },
+        },
+    }
+)
+
+
+
+# Sent last, after everything else: see Orchestrator._tool_schemas_for.
+MOVE_MUSIC_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "move_music",
+        "description": (
+            "Move what is already playing to another room: 'move the music to the "
+            "bedroom', 'take this to the kitchen'. To start something new use play_music."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"area": {"type": "string", "description": "The room to move it to."}},
+            "required": ["area"],
+        },
+    },
+}
+
 
 TOOL_NAMES = {
     "list_areas",
@@ -550,6 +629,7 @@ TOOL_NAMES = {
     "search_entities",
     "set_area_state",
     "set_brightness",
+    "set_climate_mode",
     "play_music",
     "media_command",
     *_TIMER_INTENTS.keys(),

@@ -49,7 +49,15 @@ def _any_tool_call(tool_msgs: list[dict], tool_name: str) -> bool:
                 return True
     return False
 
-_MEDIA_TOOL_NAMES = ("play_music", "media_command")
+_MEDIA_TOOL_NAMES = ("play_music", "media_command", "move_music")
+
+# Alarms, reminders, scheduled actions and calendar entries: they change
+# something, so a retry must not offer them and a turn that made one did act.
+# Nothing shows that they worked, so their confirmation is always spoken.
+_SCHEDULE_WRITE_TOOL_NAMES = (
+    "set_alarm", "set_reminder", "schedule_action", "cancel_scheduled",
+    "add_calendar_event", "tell",
+)
 
 def _any_media_status_call(tool_msgs: list[dict]) -> bool:
     """True if the tool-loop queried playback via media_command('status')."""
@@ -121,12 +129,41 @@ def _any_actuator_success(tool_msgs: list[dict]) -> bool:
         return True
     if any(
         r.lstrip().startswith("OK")
-        for r in _tool_results(tool_msgs, ("set_area_state", "set_brightness"))
+        for r in _tool_results(
+            tool_msgs, ("set_area_state", "set_brightness", "set_climate_mode")
+        )
     ):
         return True
     return any(
         r.strip() and not r.lstrip().startswith("[")
         for r in _tool_results(tool_msgs, _INTENT_ACTUATOR_NAMES)
+    )
+
+# Actuators whose change the user can neither see nor hear: a new
+# thermostat set-point moves nothing in the room, so silence reads as
+# "nothing happened" and the user repeats the command. Like list writes,
+# their confirmation is spoken, also when the same turn switched a light
+# ("lights off and heating to 21" must not confirm only by the light).
+_UNOBSERVABLE_ACTUATOR_NAMES = (
+    "HassClimateSetTemperature", "HassClimateSetMode", "set_climate_mode",
+)
+
+def _any_unobservable_action(tool_msgs: list[dict]) -> bool:
+    """True if this turn did something that cannot be seen or heard: changed
+    a thermostat, or set something for later."""
+    if any(
+        _any_tool_call(tool_msgs, t)
+        for t in (*_UNOBSERVABLE_ACTUATOR_NAMES, *_SCHEDULE_WRITE_TOOL_NAMES)
+    ):
+        return True
+    # The generic switches reach a thermostat too ("turn the heating off"):
+    # HA's intent results name each target entity, set_area_state names
+    # the domain it switched.
+    return any(
+        '"climate.' in r or " climate(s) " in r
+        for r in _tool_results(
+            tool_msgs, ("HassTurnOn", "HassTurnOff", "set_area_state")
+        )
     )
 
 # Action-command grounding verifier.
@@ -157,11 +194,11 @@ _QUESTION_INTENT_RE = re.compile(
 
 # Tool names whose invocation = action taken.
 _ACTUATOR_TOOL_NAMES = (
-    "set_area_state", "set_brightness", "HassTurnOn", "HassTurnOff",
-    "HassLightSet", "HassClimateSetTemperature",
+    "set_area_state", "set_brightness", "set_climate_mode", "HassTurnOn",
+    "HassTurnOff", "HassLightSet", "HassClimateSetTemperature",
     "HassClimateSetMode", "HassMediaPause", "HassMediaUnpause",
     "HassMediaNext", "HassMediaPrevious",
-    "play_music", "media_command",
+    "play_music", "media_command", "move_music",
 )
 
 # Replies that CLAIM an action is being taken. When no actuator ran this
@@ -217,11 +254,24 @@ _LIST_WRITE_TOOL_NAMES = (
     "HassListAddItem", "HassListCompleteItem", "HassListRemoveItem",
 )
 
+# Voice-timer changes, for the same reasons: "set a timer for 13 minutes"
+# reads as an action command, and once start_timer had answered, the
+# action-command retry still asked the model again (0.7 s), with an
+# instruction about lights that could start a second timer or switch a
+# lamp. Their confirmation is spoken too. timer_status only reads.
+_TIMER_WRITE_TOOL_NAMES = (
+    "start_timer", "cancel_timer", "pause_timer", "unpause_timer",
+    "increase_timer", "decrease_timer",
+)
+
 def _any_actuator_call(tool_msgs: list[dict]) -> bool:
-    """True if any actuator or list-write tool was invoked in this turn."""
+    """True if any actuator, list, timer or schedule write ran in this turn."""
     return any(
         _any_tool_call(tool_msgs, t)
-        for t in (*_ACTUATOR_TOOL_NAMES, *_LIST_WRITE_TOOL_NAMES)
+        for t in (
+            *_ACTUATOR_TOOL_NAMES, *_LIST_WRITE_TOOL_NAMES,
+            *_TIMER_WRITE_TOOL_NAMES, *_SCHEDULE_WRITE_TOOL_NAMES,
+        )
     )
 
 # Phrases get_entity / search_entities return when an entity can't be

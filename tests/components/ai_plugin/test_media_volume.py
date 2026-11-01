@@ -20,7 +20,7 @@ def _make_hass(state="playing"):
         )
     }
     dev_reg = MagicMock()
-    hass.states.get.return_value = SimpleNamespace(state=state)
+    hass.states.get.return_value = SimpleNamespace(state=state, attributes={})
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
     return hass, ent_reg, dev_reg
@@ -46,7 +46,7 @@ async def test_volume_up(patched) -> None:
     assert await async_try_media_shortcut(hass, "volume up", lang="en") == (True, "")
     service, data, target = _call(hass)
     assert service == "volume_up" and data is None
-    assert target == {"entity_id": ["media_player.kitchen"]}
+    assert target == {"entity_id": "media_player.kitchen"}
 
 
 async def test_volume_set_percent(patched) -> None:

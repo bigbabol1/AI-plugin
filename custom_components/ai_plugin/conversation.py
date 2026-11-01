@@ -41,7 +41,9 @@ from .const import (
 )
 from .exceptions import OrchestratorError
 from .i18n import L
+from .music_ducking import room_players
 from .orchestrator import Orchestrator
+from .satellite_speech import satellite_entity
 from .shortcuts import looks_like_command
 
 _LOGGER = logging.getLogger(__name__)
@@ -104,6 +106,7 @@ _REOPEN_SETTLE_S = 1.0
 # A delayed follow-up arrives as a NEW HA conversation, so the history key is
 # remapped back to the conversation it continues for this long.
 _FOLLOW_UP_CONTINUITY_S = 120.0
+_SATELLITE_MEMORY_S = 15 * 60.0
 
 
 # Playback-overlap echo. Satellites that mirror their TTS to other speakers
@@ -671,6 +674,27 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         if task is not None and not task.done():
             task.cancel()
 
+    def _satellite_history_id(
+        self, device_id: str | None, conversation_id: str
+    ) -> str:
+        """Keep a satellite's conversation for 15 minutes between turns.
+
+        HA mints a new conversation after a few minutes of quiet, which took
+        "and the bedroom?" away from what it followed. Only for satellites: an
+        Assist panel that is reopened starts over on purpose.
+        """
+        if not self._orchestrator.is_voice_device(device_id):
+            return conversation_id
+        store = self.__dict__.setdefault("_satellite_conversations", {})
+        now = time.monotonic()
+        last = store.get(device_id)
+        history_id = (
+            last[1] if last is not None and now - last[0] <= _SATELLITE_MEMORY_S
+            else conversation_id
+        )
+        store[device_id] = (now, history_id)
+        return history_id
+
     def _continued_conversation_id(
         self, device_id: str | None, conversation_id: str
     ) -> str:
@@ -694,6 +718,36 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 "AI Plugin: delayed follow-up continues conversation %s", prior
             )
         return prior
+
+    async def _is_music_false_wake(
+        self, user_input: ConversationInput, user_id: str | None
+    ) -> bool:
+        """True when music, not a person, woke the satellite and got transcribed.
+
+        A reply here stops the music to answer nobody (2026-11-01: "Nothing."
+        from 9.7 s of music). The voice alone cannot decide it: a stranger
+        scores as low as music does, so a guest's question over music has to
+        survive, and it does because it is several words in a few seconds.
+        All of it has to hold: almost no words for the audio, not a command or
+        an answer, music playing in the room, and a voice measured as nobody
+        known. Without voice recognition there is no audio to measure, so
+        nothing is ever dropped here.
+        """
+        voice_id = getattr(self._orchestrator, "_voice_id", None)
+        text = user_input.text or ""
+        device_id = user_input.device_id
+        if (
+            voice_id is None
+            or voice_id.too_few_words_for_the_audio(text, device_id, user_id) is not True
+        ):
+            return False
+        lang = (user_input.language or "en").split("-")[0].lower()
+        if looks_like_command(text, lang):
+            return False
+        satellite = satellite_entity(self.hass, device_id)
+        if satellite is None or not room_players(self.hass, satellite):
+            return False
+        return await voice_id.async_voice_is_unknown(text, device_id)
 
     def _is_playback_overlap_echo(self, user_input: ConversationInput) -> bool:
         """True when a short, meaningless turn was recorded over our own TTS.
@@ -765,8 +819,9 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         self._cancel_follow_up(user_input.device_id)
         # A delayed follow-up arrives as a brand-new HA conversation; keep
         # writing history under the conversation it continues.
-        history_id = self._continued_conversation_id(
-            user_input.device_id, conversation_id
+        history_id = self._satellite_history_id(
+            user_input.device_id,
+            self._continued_conversation_id(user_input.device_id, conversation_id),
         )
         _LOGGER.info(
             "AI Plugin: conv_id=%s user_id=%s input=%r",
@@ -808,6 +863,16 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 "AI Plugin: dropped self-echo turn on device %s: %r",
                 user_input.device_id, user_input.text[:80],
             )
+        elif (
+            echo_filter
+            and not self._enrollment_active(user_input.device_id)
+            and await self._is_music_false_wake(user_input, user_id)
+        ):
+            _LOGGER.info(
+                "AI Plugin: ignored a false wake from music on device %s: %r",
+                user_input.device_id, user_input.text[:80],
+            )
+            is_echo = True
         chain_len = self._count_chain_turn(user_input.device_id)
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()

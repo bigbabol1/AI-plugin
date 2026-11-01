@@ -182,11 +182,19 @@ class OpenAICompatProvider(AbstractProvider):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         """Dispatch to Ollama native or OpenAI-spec path based on server."""
         if await self._detect_ollama():
-            return await self._chat_ollama(messages, tools)
-        return await self._chat_openai(messages, tools)
+            return await self._chat_ollama(messages, tools, num_predict=max_tokens)
+        return await self._chat_openai(messages, tools, max_tokens=max_tokens)
+
+    def _reply_limit(self, cap: int | None) -> int | None:
+        """The token limit for one reply: the configured one, lowered (never
+        raised) by a per-call ``cap``."""
+        if cap is None:
+            return self._max_tokens or None
+        return min(cap, self._max_tokens) if self._max_tokens else cap
 
     async def async_warm(
         self,
@@ -209,6 +217,7 @@ class OpenAICompatProvider(AbstractProvider):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         session = self._get_session()
         url = f"{self._base_url}/chat/completions"
@@ -223,8 +232,8 @@ class OpenAICompatProvider(AbstractProvider):
             payload["temperature"] = self._temperature
         if self._top_p is not None:
             payload["top_p"] = self._top_p
-        if self._max_tokens:
-            payload["max_tokens"] = self._max_tokens
+        if limit := self._reply_limit(max_tokens):
+            payload["max_tokens"] = limit
 
         try:
             async with session.post(
@@ -296,6 +305,7 @@ class OpenAICompatProvider(AbstractProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         on_delta: Any = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         """Like async_chat, but invokes on_delta(text) for each content chunk.
 
@@ -305,8 +315,10 @@ class OpenAICompatProvider(AbstractProvider):
         replies; the deltas are a side channel for early TTS.
         """
         if on_delta is None or not await self._detect_ollama():
-            return await self.async_chat(messages, tools)
-        return await self._chat_ollama(messages, tools, on_delta=on_delta)
+            return await self.async_chat(messages, tools, max_tokens=max_tokens)
+        return await self._chat_ollama(
+            messages, tools, on_delta=on_delta, num_predict=max_tokens
+        )
 
     async def _chat_ollama(
         self,
@@ -324,10 +336,8 @@ class OpenAICompatProvider(AbstractProvider):
             options["temperature"] = self._temperature
         if self._top_p is not None:
             options["top_p"] = self._top_p
-        if self._max_tokens:
-            options["num_predict"] = self._max_tokens
-        if num_predict is not None:
-            options["num_predict"] = num_predict
+        if limit := self._reply_limit(num_predict):
+            options["num_predict"] = limit
         if self._context_window:
             options["num_ctx"] = self._context_window
         payload: dict[str, Any] = {

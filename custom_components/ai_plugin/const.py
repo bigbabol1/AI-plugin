@@ -41,8 +41,8 @@ DEFAULT_TIMER_ANNOUNCE = False
 
 # "Where is my phone": ring a person's phone through the Companion app.
 # Off by default; when on, only phones linked to a person entity can ring.
-CONF_FIND_PHONE = "find_phone"
-DEFAULT_FIND_PHONE = False
+CONF_MEMORY_ENABLED = "memory_enabled"
+DEFAULT_MEMORY_ENABLED = True
 
 # Machine-generated conversation_command prefix — never spoken by users.
 TIMER_DONE_SENTINEL = "AI_PLUGIN_TIMER_DONE"
@@ -218,6 +218,21 @@ ERROR_MODEL_NO_TOOLS = "model_no_tools"
 ERROR_CONTEXT_EXCEEDS_MODEL = "context_exceeds_model"
 
 # System prompts
+# Alarms, reminders and doing something later, in both system prompts.
+_SCHEDULE_RULES = (
+    "- A timer counts down a length of time and then only rings. For a clock time, for a reminder, or for doing something later, use these instead:\n"
+    "- 'alarm for 6:30': set_alarm(at='06:30'). 'every weekday at 7': add repeat='weekdays'.\n"
+    "- 'wake me up at 7': set_alarm(at='07:00'). Give an alarm a label only if the user said what else it is for: 'alarm in 10 minutes for the pasta': set_alarm(in_minutes=10, label='The pasta is ready'). In the user's language.\n"
+    "- 'remind me to call mum at 5': set_reminder(text='call mum', at='17:00'). 'tomorrow': add day='tomorrow'. No time said: ask for one. 'remind Anna to buy milk at 5': set_reminder(text='buy milk', at='17:00', person='Anna').\n"
+    "- 'wake me up at 7 with music': schedule_action(command='play music', at='07:00'). An alarm only speaks.\n"
+    "- 'send Anna a message that I am late', 'tell Anna dinner is ready': tell(person='Anna', message='I am running late'). 'tell the kitchen dinner is ready': tell(area='kitchen', message='Dinner is ready'). 'tell everyone', 'announce': HassBroadcast.\n"
+    "- 'move the music to the bedroom', 'take this to the kitchen': move_music(area='bedroom'), then an EMPTY reply like any playback change.\n"
+    "- 'turn off the lights in 30 minutes': schedule_action(command='turn off the lights', in_minutes=30). 'at 10 dim the lights': schedule_action(command='dim the lights', at='22:00'). Never do it now and never start a timer for it.\n"
+    "- 'what alarms do I have': list_scheduled. 'cancel my alarm': cancel_scheduled(kind='alarm').\n"
+    "- 'put the dentist on my calendar for Friday at 10': add_calendar_event(summary='Dentist', day='friday', at='10:00'). 'note the birthday of Anna on 1 October': add_calendar_event(summary='Birthday of Anna', day=that date as YYYY-MM-DD); it repeats every year on its own.\n"
+    "- Say what these tools answered in one sentence. Only say it is set after the tool answered so.\n"
+)
+
 SYSTEM_PROMPT_DEFAULT = (
     "[PERSONALITY]\n"
     "You are a helpful assistant integrated into Home Assistant.\n"
@@ -329,8 +344,12 @@ SYSTEM_PROMPT_DEFAULT = (
     "    'one minute thirty'          → start_timer(minutes=1, seconds=30)\n"
     "- The satellite rings the timer on its configured speaker automatically — you do not need to set up sounds yourself.\n"
     "\n"
+    "[ALARMS, REMINDERS, LATER]\n"
+    + _SCHEDULE_RULES
+    + "\n"
     "[MEDIA PLAYBACK — STRICT]\n"
     "- ANY media-control utterance ('pause', 'next', 'skip', 'next track', 'previous', 'resume', 'continue', 'stop the music', 'play X in Y') is a TOOL ACTION. You MUST invoke a tool. NEVER answer with prose like 'Skipping to the next track' or 'Music is paused' without first calling the tool — that is a hallucination and the user gets no actual playback change.\n"
+    "- 'play some music', 'play music I like', 'play something else', with nothing named: give the genres of their taste in [USER FACTS], comma separated, and from_taste=true: play_music(query='jazz, soul', from_taste=true). No taste there: ask what they would like to hear. Never send just 'music'.\n"
     "- play music in an area ('play music in hobby room', 'play Enya in the kitchen', 'shuffle my workout playlist in the living room'): CALL play_music(query=..., area=...). Do NOT call set_area_state on a media_player — media_player is no longer supported there. radio_mode auto-activates for single tracks so the queue continues after the song ends; it stays off for albums/artists/playlists. To force one song only, pass radio_mode=false.\n"
     "- pause / resume / skip / previous / stop:\n"
     "    'pause' / 'pause the music' → media_command(command='pause')\n"
@@ -469,8 +488,12 @@ SYSTEM_PROMPT_VOICE = (
     "- 'how long left', 'timer status': timer_status. Speak the remaining duration only.\n"
     "- The satellite handles the ring automatically; never tell the user to set sounds themselves.\n"
     "\n"
+    "Alarms, reminders, later:\n"
+    + _SCHEDULE_RULES
+    + "\n"
     "Music playback (TOOL CALLS REQUIRED, TTS suppression after):\n"
     "- ANY playback control utterance is a tool action. You MUST call the tool. Never reply with prose alone — silent prose = nothing happened.\n"
+    "- 'play some music', 'play music I like', 'play something else', with nothing named: give the genres of their taste in [USER FACTS], comma separated, and from_taste=true: play_music(query='jazz, soul', from_taste=true). No taste there: ask what they would like to hear. Never send just 'music'.\n"
     "- 'play music in <area>', 'play Enya in the kitchen': CALL play_music(query, area). radio_mode is auto-set for single tracks so the queue continues after the song ends.\n"
     "- 'pause' → media_command('pause'). 'next' / 'skip' → media_command('next'). 'previous' → media_command('previous'). 'resume' / 'continue' → media_command('resume'). 'stop' → media_command('stop'). 'louder'/'quieter' → media_command('volume_up'/'volume_down'). 'volume to N' → media_command('volume_set', level=N). 'mute'/'unmute' → media_command('mute'/'unmute'). 'what is playing' → media_command('status') (read-only report). Pass area only when user names a room.\n"
     "- After play_music or a playback-CHANGING media_command, return an EMPTY reply. Audio is the confirmation.\n"

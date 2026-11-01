@@ -22,6 +22,7 @@ web?), toolcalls (which schemas, and malformed calls back), textproc
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 from datetime import date as _date
@@ -36,7 +37,6 @@ from homeassistant.helpers import (
 from ..const import (
     CONF_CONTEXT_WINDOW,
     CONF_ENABLE_THINKING,
-    CONF_FIND_PHONE,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_SUMMARIZATION_ENABLED,
@@ -44,7 +44,6 @@ from ..const import (
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_ENABLE_THINKING,
-    DEFAULT_FIND_PHONE,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_SUMMARIZATION_ENABLED,
@@ -70,6 +69,22 @@ from ..shortcuts.phone import (
 )
 from ..tools.ha_local import HALocalToolRegistry
 from ..tools.ha_local.lights import hass_light_set_args
+from ..scheduler import (
+    asks_for_phrase_routine,
+    TOOL_NAMES as SCHEDULER_TOOL_NAMES,
+    TOOL_SCHEMAS as SCHEDULER_TOOL_SCHEMAS,
+    WRITE_TOOL_NAMES as SCHEDULER_WRITE_TOOL_NAMES,
+    Job,
+    async_call_tool as async_call_scheduler_tool,
+    names_later_time,
+)
+from ..tools.calendar_events import (
+    TOOL_NAME as CALENDAR_TOOL,
+    TOOL_SCHEMA as CALENDAR_SCHEMA,
+    async_add_event,
+)
+from ..tools.ha_local.schemas import MOVE_MUSIC_SCHEMA
+from ..tools.tell import TOOL_NAME as TELL_TOOL, TOOL_SCHEMA as TELL_SCHEMA, async_tell
 from ..tools.memory import (
     TOOL_NAMES as MEMORY_TOOL_NAMES,
     TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS,
@@ -87,6 +102,7 @@ if TYPE_CHECKING:
 
 from .delta_gate import _DeltaGate
 from .grounding import (
+    _TIMER_WRITE_TOOL_NAMES,
     _ACTUATOR_TOOL_NAMES,
     _MISS_RESULT_PATTERNS,
     _any_actuator_call,
@@ -95,6 +111,7 @@ from .grounding import (
     _any_media_status_call,
     _any_media_success,
     _any_tool_call,
+    _any_unobservable_action,
     _get_entity_missed,
     _is_action_command,
     _is_action_promise,
@@ -124,6 +141,14 @@ _LOGGER = logging.getLogger(__name__)
 # heard, so only look-ups still running at 2 s get it.
 TOOL_WAIT_LINE_DELAY_S = 2.0
 
+# Token limit on the model's first reply to an action command ("dim the
+# lights"). The right reply there is a tool call of 10-40 tokens; the longest
+# of 750 replies to HA from 2026-10-23 to 2026-10-31 was 116 tokens. On
+# 2026-10-31 a "Dim the light." reply instead looped in hidden reasoning up
+# to the configured 512 tokens, 18.9 s of silence before the action-command
+# retry could step in. Capped, such a reply ends after ~4 s.
+ACTION_FIRST_REPLY_MAX_TOKENS = 128
+
 # Returned instead of running a look-up the model already ran, with the same
 # arguments, earlier in the same turn. A DHL drop-off question on 2026-10-27
 # ran one web search four times over (six searches, ~7 s more) because the
@@ -143,6 +168,13 @@ class _WaitLine:
     def __init__(self) -> None:
         self.timer: asyncio.TimerHandle | None = None
         self.task: asyncio.Task | None = None
+
+
+# True while a scheduled command runs. It runs in its own task, so a context
+# variable cannot leak into a turn someone is speaking at the same moment.
+_IN_SCHEDULED_RUN: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "ai_plugin_in_scheduled_run", default=False
+)
 
 
 class Orchestrator(
@@ -176,6 +208,9 @@ class Orchestrator(
         self._memory: MemoryTool | None = entry_data.get("memory")
         self._ha_local: HALocalToolRegistry | None = entry_data.get("ha_local")
         self._voice_id = entry_data.get("voice_id")
+        self._scheduler = entry_data.get("scheduler")
+        if self._scheduler is not None:
+            self._scheduler.set_command_runner(self._run_scheduled_command)
 
         opts = entry.options
         # Use real schema token budget if MCPToolRegistry is available.
@@ -272,7 +307,7 @@ class Orchestrator(
             and self._voice_id.voice_enroll_allowed
         ):
             tool_schemas = [VOICE_ENROLL_SCHEMA, *tool_schemas]
-        if self._find_phone_enabled():
+        if self._can_ring_phones():
             tool_schemas = [RING_PHONE_SCHEMA, *tool_schemas]
         if self._ha_local is not None:
             ha_schemas = self._ha_local.get_schemas()
@@ -281,6 +316,14 @@ class Orchestrator(
                 # message, which busts the runtime's prompt prefix cache.
                 ha_schemas = _prune_ha_local_schemas(message, ha_schemas)
             tool_schemas = [*ha_schemas, *tool_schemas]
+        # Last on purpose: this model reacts to its neighbours in the list. A
+        # tool placed next to set_area_state left a repeated light command
+        # uncalled (12 of 12 replays, 2026-10-29).
+        if getattr(self, "_scheduler", None) is not None:
+            tool_schemas = [
+                *tool_schemas, *SCHEDULER_TOOL_SCHEMAS, CALENDAR_SCHEMA, TELL_SCHEMA,
+                MOVE_MUSIC_SCHEMA,
+            ]
         return tool_schemas
 
     async def async_process(
@@ -336,6 +379,13 @@ class Orchestrator(
             enroll_reply = await self._voice_id.async_enrollment_turn(message, device_id)
             if enroll_reply is not None:
                 return enroll_reply
+
+        # "Stop" or "snooze" while an alarm rings: before everything else, or
+        # the media shortcut takes "stop" and the alarm rings on.
+        if getattr(self, "_scheduler", None) is not None:
+            alarm_reply = await self._scheduler.async_handle_spoken(message, device_id, lang)
+            if alarm_reply is not None:
+                return alarm_reply
 
         # Streaming gate: forward sentence-complete deltas to the voice
         # pipeline for early TTS — but only on turns where no verifier can
@@ -397,8 +447,24 @@ class Orchestrator(
             # confirmations without invoking media_command; this bypass
             # dispatches the service call deterministically and returns an
             # empty reply for TTS suppression.
+            # A command for later must not be carried out now: the shortcuts
+            # below all act at once and none of them reads a time.
+            later = names_later_time(message, lang)
+
+            # "When I say good night, ...": nothing can keep that yet. Left to
+            # the model it answered "I have scheduled that" with no tool at all.
+            if asks_for_phrase_routine(message, lang):
+                refused = L.template("phrase_routine_refused", lang)
+                await self._context_mgr.add_turn(conversation_id, "assistant", refused)
+                return refused
+
             try:
-                media_result = await async_try_media_shortcut(self._hass, message, lang=lang)
+                media_result = (
+                    None if later
+                    else await async_try_media_shortcut(
+                        self._hass, message, lang=lang, device_id=device_id
+                    )
+                )
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("AI Plugin: media shortcut raised", exc_info=True)
                 media_result = None
@@ -421,7 +487,7 @@ class Orchestrator(
             # or omit the area (= "this room only"), leaving the rest of the
             # home untouched; this dispatches the sweep deterministically.
             try:
-                sweep_result = await async_try_domain_sweep_shortcut(
+                sweep_result = None if later else await async_try_domain_sweep_shortcut(
                     self._hass, message, lang=lang, device_id=device_id
                 )
             except Exception:  # noqa: BLE001
@@ -446,7 +512,7 @@ class Orchestrator(
             # service directly, returning an empty reply for TTS
             # suppression. Misses / ambiguous devices fall through to the LLM.
             try:
-                action_result = await async_try_action_shortcut(
+                action_result = None if later else await async_try_action_shortcut(
                     self._hass, message, lang=lang, device_id=device_id
                 )
             except Exception:  # noqa: BLE001
@@ -464,13 +530,13 @@ class Orchestrator(
                     )
                     return action_reply
 
-            # 1d2. "Where is my phone": ring it (Find my phone option). Whose
+            # 1d2. "Where is my phone": ring it (Find my phone). Whose
             # phone it is needs the speaker, so this is the one shortcut that
             # starts voice ID; if the turn still goes to the LLM (nobody
             # recognised), step 3 reuses the same task.
             speaker_task: asyncio.Task | None = None
             owner = (
-                match_find_phone(message, lang) if self._find_phone_enabled() else None
+                match_find_phone(message, lang) if self._can_ring_phones() else None
             )
             if owner is not None:
                 if (
@@ -632,6 +698,11 @@ class Orchestrator(
                 # ("what's playing?") deterministically — a list_entities
                 # retry would only add tool-loop latency.
                 and not _any_media_status_call(tool_msgs)
+                # "Are any timers running?" and "What alarms are on?" have tools
+                # of their own. The retry made the model read its whole prompt
+                # in again (6-8 s), to answer from the wrong tool.
+                and not _any_tool_call(tool_msgs, "timer_status")
+                and not _any_tool_call(tool_msgs, "list_scheduled")
             ):
                 _LOGGER.info(
                     "AI Plugin: grounding retry — state-set query had no list_entities call"
@@ -777,9 +848,25 @@ class Orchestrator(
                     "AI Plugin: action-command grounding retry — %r had no actuator call",
                     message[:80],
                 )
+                # "Execute now" would be exactly wrong for "in 30 minutes", so
+                # that retry can only schedule; the actuators are not offered.
+                retry_schemas = tool_schemas
+                if later:
+                    retry_schemas = [
+                        *_readonly_schemas(tool_schemas),
+                        *[
+                            t for t in SCHEDULER_TOOL_SCHEMAS
+                            if t["function"]["name"] == "schedule_action"
+                        ],
+                    ]
                 messages.append({
                     "role": "system",
                     "content": (
+                        "CRITICAL: The user wants this done LATER "
+                        f"({message!r}). CALL schedule_action with the command "
+                        "and in_minutes or at. Do not do it now and do not "
+                        "start a timer."
+                    ) if later else (
                         "CRITICAL: The user issued an ACTION command "
                         f"({message!r}). You must CALL a tool to execute it — "
                         "do NOT just say 'I'll turn it on'. For whole-home "
@@ -796,7 +883,7 @@ class Orchestrator(
                 })
                 try:
                     reply5, tool_msgs5 = await self._tool_loop(
-                        messages, tool_schemas, user_id, voice_mode, message,
+                        messages, retry_schemas, user_id, voice_mode, message,
                         device_id=device_id, language=language,
                     )
                     if _any_actuator_call(tool_msgs5):
@@ -853,10 +940,25 @@ class Orchestrator(
             # All actuators are result-gated: a FAILED call performed no
             # visible change, so the model's explanation (or the empty-reply
             # fallback below) must reach the user instead of silence that
-            # reads as success.
+            # reads as success. A thermostat change is neither visible nor
+            # audible, so a turn that touched one keeps its spoken reply.
+            #
+            # Suppression silences the reply only: history keeps what the
+            # model said. With an empty assistant turn after the tool result,
+            # the voice model treated the previous turn as unfinished, and a
+            # repeated "Dim the light." got the missing confirmation ("I have
+            # dimmed the lights for you.") or a stalled reply instead of a
+            # tool call: 0 of 10 replays acted, the action-command retry had
+            # to. With the confirmation kept, 10 of 10 acted on the first
+            # reply. "Done." in its place did not help (0 of 10, all stalls).
             media_acted = _any_media_success(tool_msgs)
             actuator_acted = _any_actuator_success(tool_msgs)
-            if actuator_acted and voice_mode:
+            history_reply = stored_reply
+            if (
+                actuator_acted
+                and voice_mode
+                and not _any_unobservable_action(tool_msgs)
+            ):
                 stored_reply = ""
                 reply = ""
             elif media_acted:
@@ -875,6 +977,7 @@ class Orchestrator(
                 )
                 reply = L.template("err_no_answer", lang)
                 stored_reply = reply
+                history_reply = reply
 
             # Streaming epilogue: send whatever part of the processed reply
             # was not yet forwarded (or the whole reply when nothing was).
@@ -882,7 +985,7 @@ class Orchestrator(
             # flush_final sends nothing for those.
             gate.flush_final(stored_reply)
 
-            await self._context_mgr.add_turn(conversation_id, "assistant", stored_reply)
+            await self._context_mgr.add_turn(conversation_id, "assistant", history_reply)
 
             # Track last-controlled entities for explicit context injection.
             # Defensive: registry quirks (e.g. ComputedNameType) must never
@@ -945,7 +1048,11 @@ class Orchestrator(
             return False
         if self._mcp is not None and self._mcp.is_home_assistant_tool(name):
             return False
-        return name not in MEMORY_TOOL_NAMES and name != VOICE_ENROLL_TOOL
+        return (
+            name not in MEMORY_TOOL_NAMES
+            and name not in SCHEDULER_TOOL_NAMES
+            and name not in (VOICE_ENROLL_TOOL, CALENDAR_TOOL, TELL_TOOL, "move_music")
+        )
 
     def _lookup_key(self, name: str, arguments: object) -> str | None:
         """Identity of a look-up call within one turn, or None for tools that
@@ -1053,16 +1160,23 @@ class Orchestrator(
             if s.get("function", {}).get("name")
         }
 
+        action_command = _is_action_command(user_message)
         for iteration in range(self._max_tool_iterations):
+            # Only the first reply to an action command is capped: later
+            # ones answer from tool results and may need to say more.
+            cap = (
+                {"max_tokens": ACTION_FIRST_REPLY_MAX_TOKENS}
+                if action_command and iteration == 0 else {}
+            )
             if gate is not None and gate.active:
                 # Drop any unemitted tail from the previous iteration —
                 # prose preceding a tool call is narration, never speech.
                 gate.new_response()
                 response = await self._provider.async_chat_stream(
-                    messages, tool_schemas, on_delta=gate.feed
+                    messages, tool_schemas, on_delta=gate.feed, **cap
                 )
             else:
-                response = await self._provider.async_chat(messages, tool_schemas)
+                response = await self._provider.async_chat(messages, tool_schemas, **cap)
             last_response = response
 
             if not response.has_tool_calls:
@@ -1203,8 +1317,45 @@ class Orchestrator(
             )
         if name == VOICE_ENROLL_TOOL and self._voice_id is not None:
             return self._start_voice_enrollment(arguments, device_id, language)
-        if name == RING_PHONE_TOOL and self._find_phone_enabled():
+        if name == RING_PHONE_TOOL and self._can_ring_phones():
             return await self._ring_phone_tool(arguments, user_id, device_id, language)
+        # A command that has come due is carried out now; putting it off again
+        # could go on forever. The tool list stays the same: a different one
+        # would make the next voice turn read the whole prompt in again (7-8 s).
+        if _IN_SCHEDULED_RUN.get() and (
+            name in SCHEDULER_WRITE_TOOL_NAMES or name in _TIMER_WRITE_TOOL_NAMES
+        ):
+            return "[This is due now. Carry out the command now with the device tools.]"
+        if name in SCHEDULER_TOOL_NAMES and getattr(self, "_scheduler", None) is not None:
+            return await async_call_scheduler_tool(
+                self._scheduler,
+                self._hass,
+                name,
+                arguments,
+                device_id=device_id,
+                user_id=user_id,
+                person_id=self._speaking_person(device_id, user_id),
+                language=language,
+                user_message=user_message,
+                resolve_person=self._resolve_person,
+            )
+        if name == TELL_TOOL and getattr(self, "_scheduler", None) is not None:
+            speaker = self._speaking_person(device_id, user_id)
+            state = self._hass.states.get(speaker) if speaker else None
+            return await async_tell(
+                self._hass,
+                arguments,
+                language=language,
+                resolve_person=self._resolve_person,
+                sender_name=state.attributes.get("friendly_name") if state else None,
+            )
+        if name == "move_music" and self._ha_local is not None:
+            return await self._ha_local.move_music(arguments.get("area") or "", device_id)
+        if name == CALENDAR_TOOL and getattr(self, "_scheduler", None) is not None:
+            return await async_add_event(
+                self._hass, arguments, self._scheduler.now(),
+                user_message=user_message, language=language,
+            )
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             if name in MEMORY_WRITE_TOOLS and self._speaker_unrecognised(device_id):
                 return (
@@ -1239,13 +1390,33 @@ class Orchestrator(
         return f"[Tool {name!r} unavailable — no handler configured]"
 
 
-    def _find_phone_enabled(self) -> bool:
-        entry = getattr(self, "_entry", None)
-        return bool(
-            getattr(self, "_hass", None) is not None
-            and entry is not None
-            and entry.options.get(CONF_FIND_PHONE, DEFAULT_FIND_PHONE) is True
-        )
+    def _resolve_person(self, name: str) -> str | None:
+        """The person entity meant by a spoken name, also "Anna's"."""
+        return resolve_owner(
+            self._hass, name, speaker_person=None, find_person=self._find_person
+        ) if name else None
+
+    def _speaking_person(self, device_id: str | None, user_id: str | None) -> str | None:
+        """The person entity of who is speaking: by voice, else by HA login."""
+        speaker = (self._turn_speakers or {}).get(device_id) if device_id else None
+        return speaker or person_for_user(self._hass, user_id)
+
+    async def _run_scheduled_command(self, job: Job) -> str:
+        """Carry out a command that has come due, as if said right now."""
+        token = _IN_SCHEDULED_RUN.set(True)
+        try:
+            return await self.async_process(
+                job.text,
+                f"scheduled-{job.id}-{int(time.time())}",
+                job.language,
+                device_id=job.device_id,
+                user_id=job.user_id,
+            )
+        finally:
+            _IN_SCHEDULED_RUN.reset(token)
+
+    def _can_ring_phones(self) -> bool:
+        return getattr(self, "_hass", None) is not None
 
     def _find_person(self, name: str) -> str | None:
         return self._voice_id.find_person(name) if self._voice_id is not None else None

@@ -38,6 +38,7 @@ class AbstractProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         on_delta: Any = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         """Streaming variant of async_chat: invoke on_delta(text) per chunk.
 
@@ -45,7 +46,7 @@ class AbstractProvider(ABC):
         buffered async_chat — providers without streaming support keep
         working; only the early-TTS benefit is lost.
         """
-        return await self.async_chat(messages, tools)
+        return await self.async_chat(messages, tools, max_tokens=max_tokens)
 
     async def async_warm(
         self,
@@ -62,8 +63,12 @@ class AbstractProvider(ABC):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         """Send messages with optional tool schemas, return a ChatResponse.
+
+        ``max_tokens`` caps this one reply below the configured limit
+        (never above it); providers that cannot cap a reply ignore it.
 
         Default implementation delegates to async_complete() and wraps the
         result in a ChatResponse with no tool calls.  Override in providers

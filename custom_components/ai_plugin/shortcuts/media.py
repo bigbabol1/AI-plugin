@@ -14,7 +14,14 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from . import registry
-from .registry import _extract_area_from_media_message, dr, er
+from .volume import async_step_volume
+from .registry import (
+    _caller_area_id,
+    _entry_area_id,
+    _extract_area_from_media_message,
+    dr,
+    er,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -148,8 +155,41 @@ def _detect_media_command(message: str) -> tuple[str, "re.Match[str]"] | None:
             return cmd, m
     return None
 
+def narrow_media_targets(
+    hass: HomeAssistant, target_ids: list[str], device_id: str | None, command: str
+) -> list[str]:
+    """Which speakers a command with no room named means: the ones in this room.
+
+    Speakers elsewhere only count if none here qualifies. "Continue playing."
+    sent media_play to every idle speaker in the home (2026-11-01): the bathroom,
+    with a song left in its queue, started playing, and a speaker with nothing to
+    play failed the call, so the model tried again and said there was no music.
+    So a resume wants what is paused, here first and then anywhere; an idle
+    speaker only counts in this room, and only with something to go back to.
+    """
+    caller = _caller_area_id(hass, device_id)
+    in_room: list[str] = []
+    if caller:
+        ent_reg = er.async_get(hass)
+        dev_reg = dr.async_get(hass)
+        for eid in target_ids:
+            entry = ent_reg.entities.get(eid)
+            if entry is not None and _entry_area_id(hass, entry, dev_reg) == caller:
+                in_room.append(eid)
+    if command != "resume":
+        return in_room or target_ids
+
+    def _paused(ids: list[str]) -> list[str]:
+        return [e for e in ids if (st := hass.states.get(e)) and st.state == "paused"]
+
+    return _paused(in_room) or _paused(target_ids) or [
+        e for e in in_room
+        if (st := hass.states.get(e)) and st.attributes.get("media_title")
+    ]
+
+
 async def async_try_media_shortcut(
-    hass: HomeAssistant, message: str, *, lang: str = "en"
+    hass: HomeAssistant, message: str, *, lang: str = "en", device_id: str | None = None
 ) -> tuple[bool, str] | None:
     """Pre-LLM shortcut for media playback commands.
 
@@ -215,6 +255,8 @@ async def async_try_media_shortcut(
         if st and st.state in relevant_states:
             target_ids.append(eid)
 
+    if area is None:
+        target_ids = narrow_media_targets(hass, target_ids, device_id, cmd)
     if not target_ids:
         # Nothing matching — fall through so the LLM can produce a
         # useful "nothing is playing" reply rather than a silent no-op.
@@ -231,13 +273,16 @@ async def async_try_media_shortcut(
             return None
         data["volume_level"] = pct / 100
     try:
-        await hass.services.async_call(
-            "media_player",
-            service,
-            data or None,
-            target={"entity_id": target_ids},
-            blocking=True,
-        )
+        if cmd in ("volume_up", "volume_down"):
+            await async_step_volume(hass, target_ids, cmd)
+        else:
+            await hass.services.async_call(
+                "media_player",
+                service,
+                data or None,
+                target={"entity_id": target_ids},
+                blocking=True,
+            )
     except Exception:  # noqa: BLE001
         _LOGGER.exception(
             "AI Plugin media shortcut: %s on %s failed", cmd, target_ids

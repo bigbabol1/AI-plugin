@@ -18,9 +18,11 @@ from dataclasses import dataclass
 
 TTL_SECONDS = 30.0
 MAX_ENTRIES = 8
-# 15 s of 16 kHz 16-bit mono. Speech beyond 4 s is never analysed, but the
-# raw clip includes the silence before end-of-speech fires.
-MAX_PCM_BYTES = 15 * 16000 * 2
+# 16 kHz 16-bit mono.
+BYTES_PER_SECOND = 16000 * 2
+# 15 s. Speech beyond 4 s is never analysed, but the raw clip includes the
+# silence before end-of-speech fires.
+MAX_PCM_BYTES = 15 * BYTES_PER_SECOND
 
 _NON_WORD = re.compile(r"[^\w]+", re.UNICODE)
 
@@ -68,6 +70,14 @@ class AudioBufferStore:
         """Remove and return (audio, early fingerprint or None), or None if unusable."""
         self._expire()
         entry = self._entries.pop(normalize_transcript(transcript), None)
+        if entry is None or entry.ambiguous:
+            return None
+        return entry.pcm, entry.fingerprint
+
+    def peek_clip(self, transcript: str) -> tuple[bytes, asyncio.Future | None] | None:
+        """Like take_clip, but the entry stays for whoever takes it next."""
+        self._expire()
+        entry = self._entries.get(normalize_transcript(transcript))
         if entry is None or entry.ambiguous:
             return None
         return entry.pcm, entry.fingerprint

@@ -58,3 +58,28 @@ def test_list_writes_count_as_acting_and_stay_out_of_retries() -> None:
         {"function": {"name": "HassListAddItem", "arguments": "{}"}}
     ]}]
     assert _any_actuator_call(msgs) is True
+
+
+def test_timer_writes_count_as_acting_and_stay_out_of_retries() -> None:
+    """'Set a timer for 13 minutes' reads as an action command; once
+    start_timer answered, the turn acted and must not be retried."""
+    from custom_components.ai_plugin.orchestrator.grounding import (
+        _TIMER_WRITE_TOOL_NAMES,
+        _any_actuator_call,
+    )
+    from custom_components.ai_plugin.orchestrator.toolcalls import _readonly_schemas
+    from custom_components.ai_plugin.tools.ha_local.timers import _TIMER_INTENTS
+
+    # Every timer tool that changes a timer, and only those.
+    assert set(_TIMER_WRITE_TOOL_NAMES) == set(_TIMER_INTENTS) - {"timer_status"}
+    schemas = [
+        {"type": "function", "function": {"name": n}}
+        for n in ("start_timer", "timer_status", "search_entities")
+    ]
+    assert [s["function"]["name"] for s in _readonly_schemas(schemas)] == [
+        "timer_status", "search_entities",
+    ]
+    msgs = [{"role": "assistant", "tool_calls": [
+        {"function": {"name": "start_timer", "arguments": "{}"}}
+    ]}]
+    assert _any_actuator_call(msgs) is True

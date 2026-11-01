@@ -154,3 +154,112 @@ async def test_german_article_area_scopes_command(patched) -> None:
     assert result == (True, "")
     args, kwargs = hass.services.async_call.await_args
     assert kwargs.get("target") == {"entity_id": ["media_player.kitchen"]}
+
+
+# ── a command with no room named means this room ─────────────────────────────
+
+SAT = "sat-hobby"
+HOBBY, BATH, CAST = "media_player.hobby", "media_player.bath", "media_player.cast"
+
+
+def _home(monkeypatch, states: dict[str, tuple[str, str | None]]):
+    """``states``: entity_id → (player state, media title). The hobby speaker is
+    in the satellite's room; the others are not."""
+    hass = MagicMock()
+    areas = {HOBBY: "hobby", BATH: "bath", CAST: "flat"}
+    ent_reg = MagicMock()
+    ent_reg.entities = {
+        eid: SimpleNamespace(entity_id=eid, area_id=areas[eid], device_id=None) for eid in states
+    }
+    dev_reg = MagicMock()
+    dev_reg.async_get.side_effect = lambda device: (
+        SimpleNamespace(area_id="hobby") if device == SAT else None
+    )
+    hass.states.get.side_effect = lambda eid: SimpleNamespace(
+        state=states[eid][0], attributes={"media_title": states[eid][1]}
+    )
+    hass.services = MagicMock()
+    hass.services.async_call = AsyncMock()
+    monkeypatch.setattr(shortcuts.registry.er, "async_get", lambda h: ent_reg)
+    monkeypatch.setattr(shortcuts.registry.dr, "async_get", lambda h: dev_reg)
+    monkeypatch.setattr(shortcuts.registry.ar, "async_get", lambda h: MagicMock())
+    monkeypatch.setattr(shortcuts.registry, "is_exposed", lambda *_: True)
+    return hass
+
+
+def _targets(hass) -> list[str]:
+    return hass.services.async_call.await_args.kwargs["target"]["entity_id"]
+
+
+async def test_continue_does_not_start_the_bathroom(monkeypatch) -> None:
+    """Live 2026-11-01: "Continue playing." played a song left in the bathroom's
+    queue, and a speaker with nothing to play failed the whole call."""
+    hass = _home(monkeypatch, {
+        HOBBY: ("paused", "Song A"), BATH: ("idle", "Song B"), CAST: ("idle", None),
+    })
+    result = await async_try_media_shortcut(hass, "Continue playing.", device_id=SAT)
+    assert result == (True, "")
+    assert _targets(hass) == [HOBBY]
+
+
+async def test_continue_finds_what_is_paused_in_another_room(monkeypatch) -> None:
+    hass = _home(monkeypatch, {HOBBY: ("idle", None), BATH: ("paused", "Song B")})
+    assert await async_try_media_shortcut(hass, "Continue playing.", device_id=SAT) == (True, "")
+    assert _targets(hass) == [BATH]
+
+
+async def test_continue_picks_up_an_idle_queue_only_in_this_room(monkeypatch) -> None:
+    hass = _home(monkeypatch, {HOBBY: ("idle", "Song A"), BATH: ("idle", "Song B")})
+    assert await async_try_media_shortcut(hass, "Continue playing.", device_id=SAT) == (True, "")
+    assert _targets(hass) == [HOBBY]
+
+
+async def test_nothing_to_continue_goes_to_the_model(monkeypatch) -> None:
+    hass = _home(monkeypatch, {HOBBY: ("idle", None), BATH: ("idle", "Song B")})
+    assert await async_try_media_shortcut(hass, "Continue playing.", device_id=SAT) is None
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_without_a_satellite_only_what_is_paused_continues(monkeypatch) -> None:
+    hass = _home(monkeypatch, {HOBBY: ("idle", "Song A"), BATH: ("paused", "Song B")})
+    assert await async_try_media_shortcut(hass, "Continue playing.") == (True, "")
+    assert _targets(hass) == [BATH]
+
+
+@pytest.mark.parametrize(("words", "service"), [("Pause.", "media_pause"), ("Next song.", "media_next_track")])
+async def test_other_commands_stay_in_this_room_too(monkeypatch, words, service) -> None:
+    hass = _home(monkeypatch, {HOBBY: ("playing", "A"), BATH: ("playing", "B")})
+    assert await async_try_media_shortcut(hass, words, device_id=SAT) == (True, "")
+    assert hass.services.async_call.await_args.args[1] == service
+    assert _targets(hass) == [HOBBY]
+
+
+async def test_a_command_reaches_another_room_if_nothing_plays_here(monkeypatch) -> None:
+    hass = _home(monkeypatch, {HOBBY: ("idle", None), BATH: ("playing", "B")})
+    assert await async_try_media_shortcut(hass, "Pause.", device_id=SAT) == (True, "")
+    assert _targets(hass) == [BATH]
+
+
+async def test_the_tool_stays_in_this_room_as_well(monkeypatch) -> None:
+    from custom_components.ai_plugin.tools.ha_local import HALocalToolRegistry, media
+
+    hass = _home(monkeypatch, {HOBBY: ("paused", "A"), BATH: ("idle", "B")})
+    ent_reg = shortcuts.registry.er.async_get(hass)
+    monkeypatch.setattr(media.er, "async_get", lambda h: ent_reg)
+    registry = HALocalToolRegistry(hass)
+    registry._is_exposed = lambda _: True
+    assert (await registry._media_command("resume", None, device_id=SAT)).startswith("OK")
+    assert _targets(hass) == [HOBBY]
+
+
+async def test_the_tool_says_when_there_is_nothing_to_continue(monkeypatch) -> None:
+    from custom_components.ai_plugin.tools.ha_local import HALocalToolRegistry, media
+
+    hass = _home(monkeypatch, {HOBBY: ("idle", None), BATH: ("idle", "B")})
+    ent_reg = shortcuts.registry.er.async_get(hass)
+    monkeypatch.setattr(media.er, "async_get", lambda h: ent_reg)
+    registry = HALocalToolRegistry(hass)
+    registry._is_exposed = lambda _: True
+    result = await registry._media_command("resume", None, device_id=SAT)
+    assert result.startswith("[Nothing is paused")
+    hass.services.async_call.assert_not_awaited()

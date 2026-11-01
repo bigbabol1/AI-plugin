@@ -13,7 +13,6 @@ import logging
 from homeassistant.helpers import entity_registry as er
 
 from ..const import CONF_TIMER_ANNOUNCE, DEFAULT_TIMER_ANNOUNCE, DOMAIN
-from ..i18n import L
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,56 +56,32 @@ class TimerAnnounceMixin:
           3. At expiry, HA calls this agent back with the sentinel text and
              the original device_id. ``async_process`` routes it here —
              before shortcuts and history, since it's not a user utterance.
-          4. This method resolves the device's assist_satellite entity and
-             plays a localized announcement via ``mic_to_mediaplayer.announce``
-             (TTS routed to a separate speaker), falling back to HA's native
-             ``assist_satellite.announce`` for satellites with their own audio.
+          4. This method speaks a localized announcement in the voice of the
+             satellite's Assist pipeline, like every reply there: through
+             ``mic_to_mediaplayer.announce`` where that routes the satellite
+             to another speaker, else HA's native ``assist_satellite.announce``.
 
         Returns "" — the announcement IS the reply; nothing is spoken twice.
         """
+        from .. import satellite_speech  # noqa: PLC0415
         from ..const import TIMER_DONE_SENTINEL  # noqa: PLC0415
 
         timer_name = message[len(TIMER_DONE_SENTINEL):].strip()
-        if timer_name:
-            text = L.template("timer_done_named", lang, label=timer_name)
-        else:
-            text = L.template("timer_done", lang)
-
-        satellite = None
-        if device_id and self._hass is not None:
-            try:
-                ent_reg = er.async_get(self._hass)
-                for entry in er.async_entries_for_device(ent_reg, device_id):
-                    if entry.entity_id.startswith("assist_satellite."):
-                        satellite = entry.entity_id
-                        break
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("AI Plugin: satellite lookup failed", exc_info=True)
-        if satellite is None or self._hass is None:
-            _LOGGER.warning(
-                "AI Plugin: timer expired but no satellite found for device %s — "
-                "announcement dropped", device_id,
-            )
-            return ""
-
-        try:
-            if self._hass.services.has_service("mic_to_mediaplayer", "announce"):
-                await self._hass.services.async_call(
-                    "mic_to_mediaplayer",
-                    "announce",
-                    {"satellite_entity_id": satellite, "message": text},
-                    blocking=False,
+        text = None
+        if self._hass is not None and device_id:
+            if timer_name:
+                text = await satellite_speech.async_announce(
+                    self._hass, device_id, "timer_done_named", lang, label=timer_name
                 )
             else:
-                await self._hass.services.async_call(
-                    "assist_satellite",
-                    "announce",
-                    {"entity_id": satellite, "message": text},
-                    blocking=False,
+                text = await satellite_speech.async_announce(
+                    self._hass, device_id, "timer_done", lang
                 )
-            _LOGGER.info(
-                "AI Plugin: timer announcement %r → %s", text, satellite
+        if text is None:
+            _LOGGER.warning(
+                "AI Plugin: timer expired but could not be announced on device "
+                "%s", device_id,
             )
-        except Exception:  # noqa: BLE001
-            _LOGGER.exception("AI Plugin: timer announcement failed")
+        else:
+            _LOGGER.info("AI Plugin: timer announcement %r on %s", text, device_id)
         return ""

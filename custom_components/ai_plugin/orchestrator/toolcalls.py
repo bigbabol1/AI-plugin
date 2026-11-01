@@ -14,6 +14,8 @@ import re
 from .grounding import (
     _ACTUATOR_TOOL_NAMES,
     _LIST_WRITE_TOOL_NAMES,
+    _SCHEDULE_WRITE_TOOL_NAMES,
+    _TIMER_WRITE_TOOL_NAMES,
     _is_state_set_query,
 )
 
@@ -24,7 +26,10 @@ def _readonly_schemas(schemas: list[dict]) -> list[dict]:
     return [
         s for s in schemas
         if s.get("function", {}).get("name")
-        not in (*_ACTUATOR_TOOL_NAMES, *_LIST_WRITE_TOOL_NAMES)
+        not in (
+            *_ACTUATOR_TOOL_NAMES, *_LIST_WRITE_TOOL_NAMES,
+            *_TIMER_WRITE_TOOL_NAMES, *_SCHEDULE_WRITE_TOOL_NAMES,
+        )
     ]
 
 # Detect when a model emits a tool call as plain text ("content") instead of

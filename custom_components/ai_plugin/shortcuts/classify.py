@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+from ..i18n import L
 from .actions import _match_action_intent
 from .media import _detect_media_command
 from .sensors import _detect_attribute  # noqa: F401 — kept for callers
@@ -43,6 +44,9 @@ def looks_like_command(message: str, lang: str = "en") -> bool:
         return False
     if _ANSWER_WORDS_RE.match(msg):
         return True
+    for key in ("alarm_stop", "alarm_snooze"):
+        if any(rx.match(msg) for rx in L.pattern_list(key, lang)):
+            return True
     if _match_action_intent(msg, lang) is not None:
         return True
     if _detect_media_command(msg) is not None:

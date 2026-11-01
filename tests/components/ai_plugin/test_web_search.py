@@ -20,10 +20,13 @@ from custom_components.ai_plugin.const import (
 from custom_components.ai_plugin.tools.web_search import (
     WebSearchTool,
     _best_place_label,
+    _clean_markup,
     _format_results,
     _has_place_token,
+    _maybe_inject_date,
     _maybe_inject_location,
     _parse_ddg_lite,
+    _spell_out_digit_dates,
     _strip_url_lines,
 )
 
@@ -205,6 +208,66 @@ async def test_brave_429_returns_quota_message() -> None:
     assert "quota" in result.lower() or "tomorrow" in result.lower()
 
 
+async def _brave_call(query: str, items: list[dict] | None = None) -> tuple[dict, str]:
+    """The params Brave was sent, and the formatted result."""
+    data = {"web": {"results": items or [{"title": "T", "url": "u", "description": "d"}]}}
+    sess = _mock_session(_mock_resp(200, json_data=data))
+    tool = _make_tool(BACKEND_BRAVE, **{CONF_BRAVE_API_KEY: "key"})
+    with patch("aiohttp.ClientSession", return_value=sess):
+        result = await tool.async_search(query)
+    return sess.get.call_args.kwargs["params"], result
+
+
+async def test_brave_is_sent_the_date_spelled_out() -> None:
+    """Live 2026-10-31: "Club football game 17.05.2025" ranked Club's reserve
+    team first and the model named the wrong opponent; spelled out, the
+    match came first."""
+    params, result = await _brave_call("Club football game 17.05.2025")
+    assert params["q"] == "Club football game May 17, 2025"
+    assert 'results for "Club football game May 17, 2025"' in result
+
+
+async def test_brave_snippets_lose_their_markup() -> None:
+    items = [{
+        "title": "Club&#x27;s schedule",
+        "url": "https://example.com",
+        "description": "The last match against <strong>Rival Town</strong> on 17 May",
+    }]
+    _, result = await _brave_call("Club schedule", items)
+    assert "Club's schedule" in result
+    assert "against Rival Town on 17 May" in result
+    assert "<strong>" not in result and "&#x27;" not in result
+
+
+def test_spell_out_digit_dates() -> None:
+    cases = {
+        "Club match 17.05.25": "Club match May 17, 2025",
+        "Club Spiel 17.05.2025": "Club Spiel May 17, 2025",
+        "match on 3.12.2011": "match on December 3, 2011",
+        "game 17/5/2025": "game May 17, 2025",
+        "game 5/17/25": "game May 17, 2025",
+        "moon landing 20.07.69": "moon landing July 20, 1969",
+    }
+    for query, expected in cases.items():
+        assert _spell_out_digit_dates(query) == expected, query
+
+
+def test_spell_out_digit_dates_leaves_what_is_not_clearly_a_date() -> None:
+    for query in (
+        "what is new in Python 3.12.11",   # version number, not dd.mm.yy
+        "concert 5/6/2025",                # May 6 or June 5
+        "match 31.02.2025",                # no such day
+        "results 2026-10-31",              # ISO already works
+        "Bundesliga table",
+    ):
+        assert _spell_out_digit_dates(query) == query, query
+
+
+def test_clean_markup() -> None:
+    assert _clean_markup("a <b>b</b> &amp; c&#x27;s") == "a b & c's"
+    assert _clean_markup("") == ""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SearXNG backend
 # ══════════════════════════════════════════════════════════════════════════════
@@ -278,6 +341,54 @@ async def test_tavily_429_returns_quota_message() -> None:
     with patch("aiohttp.ClientSession", return_value=_mock_session(resp)):
         result = await tool.async_search("query")
     assert "quota" in result.lower() or "exceeded" in result.lower()
+
+
+async def _tavily_payload(query: str) -> dict:
+    resp = _mock_resp(200, json_data={"results": [{"title": "T", "url": "u", "content": "c"}]})
+    sess = _mock_session(resp)
+    tool = _make_tool(BACKEND_TAVILY, **{CONF_TAVILY_API_KEY: "key"})
+    with patch("aiohttp.ClientSession", return_value=sess):
+        await tool.async_search(query)
+    return sess.post.call_args.kwargs["json"]
+
+
+async def test_tavily_searches_deeper_for_one_particular_day() -> None:
+    """Basic search ranked this season's fixtures first, so "Club game
+    17.05.2025" never found the match; advanced did."""
+    for query in ("Club football game 17.05.2025", "Club match May 17, 2025",
+                  "Club Spiel am 17. Mai"):
+        assert (await _tavily_payload(query))["search_depth"] == "advanced", query
+
+
+async def test_tavily_keeps_basic_search_otherwise() -> None:
+    """Today's appended date must not make every 'today' query cost double."""
+    for query in ("latest news Germany", "what happened in Berlin today",
+                  "Bundesliga table 2025"):
+        assert "search_depth" not in await _tavily_payload(query), query
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# _maybe_inject_date
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_inject_date_leaves_a_query_about_another_day_alone() -> None:
+    """Live 2026-10-31: "football matches happening on May 17, 2025" got
+    today's date appended and came back with matches on October 31, 2026."""
+    for query in (
+        "football matches happening on May 17, 2025",
+        "football matches happening on 17.05.25",
+        "was ist am 17. Mai passiert",
+        "what happened in Berlin on 2025-05-17",
+        "what happened in 2019",
+    ):
+        assert _maybe_inject_date(query) == query, query
+
+
+def test_inject_date_still_pins_a_vague_query_to_today() -> None:
+    for query in ("what happened in Berlin today", "what may happen today"):
+        assert _maybe_inject_date(query) != query, query
+        assert _maybe_inject_date(query).startswith(query + " 20"), query
 
 
 # ══════════════════════════════════════════════════════════════════════════════

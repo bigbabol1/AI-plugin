@@ -42,6 +42,17 @@ templates:
   phone_seen_away:     "Home Assistant l'a vu en dernier hors de la maison."
   phone_ring_text:     "Je suis là !"
   phone_failed:        "Je n'ai pas pu joindre le téléphone."
+  alarm_ring:          "Ton alarme sonne."
+  alarm_wake:          "C'est l'heure de te réveiller."
+  alarm_stopped:       "Alarme éteinte."
+  alarm_snoozed:       "L'alarme sonnera dans {val} minutes."
+  reminder_due:        "Rappel : {label}."
+  reminder_title:      "Rappel"
+  scheduled_say:       "{label}"
+  scheduled_failed:    "Je n'ai pas pu exécuter : {label}."
+  message_title:       "Message"
+  message_title_from:  "Message de {name}"
+  phrase_routine_refused: "Je ne peux pas encore enregistrer une phrase pour ça, donc rien n'est réglé. Je peux le faire à une heure précise si tu me dis quand."
 keywords:
   time_now:      ["quelle heure est-il", "quelle heure il est", "l'heure actuelle"]
   sun_set:       ["coucher du soleil", "se couche le soleil", "à quelle heure se couche le soleil"]
@@ -60,7 +71,7 @@ patterns:
     - '^(?:ouvre|ouvrir)\s+(?:le\s+|la\s+|les\s+|l[\x27’]\s*)?(?P<name>.+?)$'
   action_close:
     - '^(?:ferme|fermer)\s+(?:le\s+|la\s+|les\s+|l[\x27’]\s*)?(?P<name>.+?)$'
-  # "Where is my phone": rings it (Find my phone option). An optional
+  # "Where is my phone": rings it. An optional
   # (?P<owner>...) captures someone else's name; without it the phone is the speaker's.
   find_phone:
     - '^(?:où|ou)\s+(?:est|se\s+trouve)\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
@@ -69,3 +80,27 @@ patterns:
     - '^(?:trouve|retrouve|localise)\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
     - '^je\s+(?:ne\s+)?trouve\s+(?:pas|plus)\s+mon\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)$'
     - '^(?:(?:où|ou)\s+est|fais\s+sonner|trouve)\s+le\s+(?:téléphone|telephone|portable|mobile|iphone|smartphone)\s+(?:de\s+|d[\x27’]\s*)(?P<owner>[\w\-]+)$'
+  # While an alarm rings: the words that stop it.
+  alarm_stop:
+    - '^(?:stop|arrête|arrete|assez|éteins|je\s+suis\s+réveillée?|(?:arrête|arrete|éteins|coupe)\s+(?:le\s+réveil|l[\x27’]alarme))$'
+  # While an alarm rings: snooze, with an optional (?P<minutes>).
+  alarm_snooze:
+    - '^snooze(?:\s+(?P<minutes>\d+)\s*min\w*)?$'
+    - '^encore\s+(?P<minutes>\d+)\s+minutes?$'
+  # A time in the future inside a command: such a command is scheduled, never run at once, and these are cut from it.
+  later_time:
+    - '\bdans\s+(?:\d+|une?|deux|trois|cinq|dix|quinze|vingt|trente|une\s+demi[\s-])\s*(?:secondes?|minutes?|heures?)\b'
+    - '\bà\s+\d{1,2}\s*h(?:eures?)?(?:\s*\d{2})?'
+    - '\bdemain\b'
+    - '\bce\s+soir\b'
+    - '\bplus\s+tard\b'
+    - '\btous\s+les\s+(?:jours|matins|soirs)\b'
+  # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
+  alarm_wake_request:
+    - '\bréveille[sz]?[\s-]*(?:moi|nous)\b'
+  # A calendar entry that repeats every year unless asked otherwise. A party is one day.
+  yearly_event:
+    - '(?<!fête\sd\x27)(?<!fete\sd\x27)\banniversaire\b'
+  # "When I say ...": a routine by phrase, which cannot be saved yet.
+  phrase_routine:
+    - '^(?:quand|si)\s+(?:je\s+dis|on\s+dit)\b'

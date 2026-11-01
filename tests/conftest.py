@@ -32,6 +32,7 @@ class _HomeAssistant:
 
 _core = _make_module(
     "homeassistant.core",
+    callback=lambda func: func,
     HomeAssistant=_HomeAssistant,
     Context=_Context,
 )
@@ -399,6 +400,11 @@ class _Store:
 
 
 _storage_mod = _make_module("homeassistant.helpers.storage", Store=_Store)
+_event_mod = _make_module(
+    "homeassistant.helpers.event",
+    async_track_point_in_utc_time=MagicMock(),
+    async_call_later=MagicMock(),
+)
 _aiohttp_client_mod = _make_module(
     "homeassistant.helpers.aiohttp_client", async_get_clientsession=MagicMock()
 )
@@ -412,6 +418,7 @@ _helpers = _make_module(
     entity_registry=_ent_reg_mod,
     device_registry=_dev_reg_mod,
     storage=_storage_mod,
+    event=_event_mod,
     aiohttp_client=_aiohttp_client_mod,
 )
 

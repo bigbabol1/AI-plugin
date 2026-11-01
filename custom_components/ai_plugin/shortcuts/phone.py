@@ -4,8 +4,7 @@ The phone is found through Home Assistant's own links, never through
 exposure: a person entity lists its device trackers, a tracker made by the
 Companion app belongs to a mobile_app config entry, and that entry names
 the phone (its notify service is ``notify.mobile_app_<device name>``) and
-its operating system. Only phones linked to a person can ring, and only
-with the "Find my phone" option on.
+its operating system. Only phones linked to a person can ring.
 
 Android speaks a short line on the alarm stream at full volume, which
 sounds on silent and restores the volume afterwards. iOS offers only a
@@ -164,6 +163,24 @@ def resolve_owner(
         return speaker_person
     candidates = people_with_phones(hass)
     return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+async def async_notify_person(hass: HomeAssistant, person_id: str, title: str, text: str) -> bool:
+    """Send a plain notification to a person's phones; True if one took it."""
+    sent = False
+    for phone in phones_of(hass, person_id):
+        try:
+            await hass.services.async_call(
+                "notify",
+                phone.service,
+                {"title": title, "message": text},
+                blocking=True,
+                context=Context(),
+            )
+            sent = True
+        except Exception:  # noqa: BLE001 — one phone must not stop the others
+            _LOGGER.warning("AI Plugin: notifying %s failed", phone.name, exc_info=True)
+    return sent
 
 
 def _payload(phone: Phone, lang: str) -> dict[str, Any]:
