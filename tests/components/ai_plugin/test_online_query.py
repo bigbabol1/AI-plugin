@@ -42,6 +42,83 @@ def test_current_events_still_are(text) -> None:
     assert _is_online_query(text)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What's the weather today?",
+        "Is it raining right now?",
+        "Wie ist heute das Wetter?",
+        "Regnet es heute?",
+    ],
+)
+def test_weather_with_no_place_stays_at_home(text) -> None:
+    """2026-11-03: asked twice, the model answered from its earlier reading and
+    the forced search replaced that with another place's weather."""
+    assert not _is_online_query(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What's the weather in Tokyo today?",
+        "Wie ist heute das Wetter in Hamburg?",
+        "Is it raining in London right now?",
+        "What is the market forecast today?",
+    ],
+)
+def test_weather_elsewhere_and_other_forecasts_still_search(text) -> None:
+    assert _is_online_query(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What day is today?",
+        "What day is it today?",
+        "Which day is today?",
+        "What's the date today?",
+        "What is today's date?",
+        "What time is it right now?",
+        "Welcher Tag ist heute?",
+        "Was für ein Tag ist heute?",
+        "Der wievielte ist heute?",
+        "Welches Datum haben wir heute?",
+    ],
+)
+def test_the_day_or_date_needs_no_search(text) -> None:
+    assert not _is_online_query(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What day is the match today?",
+        "What time is the game tonight?",
+        "What time does the store close today?",
+        "Welcher Tag ist heute in Berlin ein Feiertag?",
+    ],
+)
+def test_a_question_about_something_else_today_still_searches(text) -> None:
+    assert _is_online_query(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Enough for today.", "Genug für heute.", "It's cold today.", "That's it for this week."],
+)
+def test_a_time_word_alone_asks_for_nothing(text) -> None:
+    assert not _is_online_query(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Any news today", "Top headlines today", "Sag mir die Nachrichten von heute",
+     "Is the Berlin marathon today?", "Wann spielt der BVB heute?"],
+)
+def test_a_request_with_a_time_word_still_searches(text) -> None:
+    assert _is_online_query(text)
+
+
 def _orch_answering(tool_rounds):
     """Orchestrator whose model makes ``tool_rounds`` and then answers."""
     orch = _baseline_orch()
@@ -85,3 +162,43 @@ async def test_forced_search_when_the_model_used_no_tool() -> None:
     orch = _orch_answering([])
     await orch.async_process("What is going on right now?", "c2", "en")
     orch._web_search.async_search.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("message", "lang"),
+    [
+        ("Wake me.", "en"),
+        ("Wake me up.", "en"),
+        ("Please set an alarm", "en"),
+        ("Weck mich.", "de"),
+        ("Stell einen Wecker.", "de"),
+        ("Réveille-moi.", "fr"),
+        ("Despiértame.", "es"),
+        ("Maak me wakker.", "nl"),
+        ("Obudź mnie.", "pl"),
+        ("Acorda-me.", "pt"),
+    ],
+)
+def test_an_alarm_request_with_no_time(message, lang) -> None:
+    from custom_components.ai_plugin.scheduler.tools import _names_no_alarm_time
+
+    assert _names_no_alarm_time(message, lang)
+
+
+@pytest.mark.parametrize(
+    ("message", "lang"),
+    [
+        ("Wake me up at 7.", "en"),
+        ("Wake me at seven.", "en"),
+        ("Wake me in 10 minutes.", "en"),
+        ("Set an alarm for half past six.", "en"),
+        ("7.", "en"),
+        ("Seven.", "en"),
+        ("Weck mich um 7.", "de"),
+        ("Weck mich morgen früh.", "de"),
+    ],
+)
+def test_an_alarm_request_that_names_a_time_passes(message, lang) -> None:
+    from custom_components.ai_plugin.scheduler.tools import _names_no_alarm_time
+
+    assert not _names_no_alarm_time(message, lang)

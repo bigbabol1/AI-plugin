@@ -53,6 +53,8 @@ templates:
   message_title:       "Wiadomość"
   message_title_from:  "Wiadomość od {name}"
   phrase_routine_refused: "Nie mogę jeszcze zapisać do tego zdania, więc nic nie ustawiłem. Mogę to zrobić o wybranej godzinie, jeśli powiesz kiedy."
+  remember_not_saved: "Nie zapisałem tego. Jeśli mam to zapamiętać, powiedz zapamiętaj, a potem co."
+  remember_not_saved_short: "Nie zapisałem tego."
 keywords:
   time_now:      ["która jest godzina", "ktora jest godzina", "podaj godzinę"]
   sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]
@@ -94,6 +96,26 @@ patterns:
     - '\bdziś\s+wieczorem\b'
     - '\bpóźniej\b'
     - '\bcodziennie\b'
+  # A reply saying a fact was saved; said with nothing saved, it is replaced by remember_not_saved.
+  saved_claim:
+    - '(?<!nie\s)\b(?:zapami[ęe]ta[łl]|zapisa[łl]|zanotowa[łl])(?:em|am)\b'
+    - '(?<!nie\s)\bzapami[ęe]tam\b'
+  # A command for the room the satellite is in.
+  this_room:
+    - '\b(?:tutaj|tu|tym\s+pokoju)\b'
+  # Words that exclude it: "everywhere except here".
+  this_room_except:
+    - '\b(?:opr[óo]cz|poza|nie)\b'
+  # Asking for an alarm and naming no time: ask when, never guess.
+  alarm_no_time:
+    - '^(?:obud[źz]\s+mnie|ustaw\s+(?:budzik|alarm))(?:\s+prosz[ęe])?[\s.!?]*$'
+  # An explicit request to remember something; only this stores a fact.
+  remember_request:
+    - '\bzapami[ęe]taj\b'
+    - '\bnie\s+zapomnij\b'
+    - '\bzapisz\b'
+    - '\bpami[ęe]taj\b'
+    - '\bzanotuj\b'
   # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
   alarm_wake_request:
     - '\bobud[zź]\s+(?:mnie|nas)\b'

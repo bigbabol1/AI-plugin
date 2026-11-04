@@ -56,6 +56,7 @@ def _strip_narration(text: str, lang: str = "en") -> str:
 _EMOJI_RE = re.compile(
     "["
     "\U0001F300-\U0001FAFF"   # symbols & pictographs, emoticons, transport, extended-A/B
+    "\U00002300-\U000023FF"   # misc technical: alarm clock, hourglass, watch
     "\U00002600-\U000027BF"   # misc symbols, dingbats
     "\U0001F000-\U0001F2FF"   # mahjong, domino, playing cards, enclosed alphanumerics
     "\U0000FE00-\U0000FE0F"   # variation selectors
@@ -86,6 +87,11 @@ _KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏᐀-ᙿ]+|[ಠಥ]\s*_\s*[ಠಥ]
 # "(^o^)"). Maths such as "(5^2)" has no caret pair and survives.
 _KAOMOJI_FACE_RE = re.compile(r"[(（][^\s\w()（）]?[^\s()（）]_[^\s()（）][^\s\w()（）]?[)）]|[(（]\^.?\^[)）]")
 
+# Arms of a face such as "٩(◕‿◕)۶", left standing once the face between them is
+# gone. These are digits in Arabic text, so a reply in Arabic keeps them.
+_KAOMOJI_ARMS_RE = re.compile(r"(?:(?<=\s)|^)[٩۶٥༼༽₍₎]{2,4}(?=\s|$)")
+_ARABIC_LETTER_RE = re.compile(r"[\u0621-\u064A]")
+
 def _strip_emoji(text: str) -> str:
     """Remove emoji/pictographs/kaomoji. Safe for TTS and voice output."""
     if not text:
@@ -94,6 +100,8 @@ def _strip_emoji(text: str) -> str:
     cleaned = _KAOMOJI_GROUP_RE.sub("", cleaned)
     cleaned = _KAOMOJI_CHAR_RE.sub("", cleaned)
     cleaned = _KAOMOJI_FACE_RE.sub("", cleaned)
+    if not _ARABIC_LETTER_RE.search(cleaned):
+        cleaned = _KAOMOJI_ARMS_RE.sub("", cleaned)
     # Collapse residual double-spaces introduced by stripped glyphs.
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()

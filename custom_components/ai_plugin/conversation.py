@@ -89,7 +89,7 @@ _MAX_FOLLOW_UP_CHAIN = 4
 # with assist_satellite.start_conversation (empty message, no preannounce =
 # silent listen). Requires the satellite to advertise START_CONVERSATION.
 _SATELLITE_START_CONVERSATION_FEATURE = 2
-_PLAYBACK_POLL_S = 0.5
+_PLAYBACK_POLL_S = 0.25
 _PLAYBACK_WAIT_CAP_S = 90.0
 # How long to wait for our reply to START playing before trusting the
 # spoken-length estimate instead. TTS routed to a Cast speaker began 5.2 s after
@@ -102,7 +102,11 @@ _PLAYBACK_START_WAIT_S = 8.0
 # 2 s gap (2026-09-12). The grace still applies where it belongs — classifying a
 # turn that ARRIVES shortly after playback — but the reopen only needs a short
 # settle; anything longer is the "Quiet gap before listening again" setting.
-_REOPEN_SETTLE_S = 1.0
+# A 1 s settle still left the microphone shut for 2.45 s after the question
+# ended, with a 0.5 s gap (2026-11-03): "How long?" was answered with "one minute"
+# and only "1." arrived. Nothing sounds when the microphone opens, so people answer
+# at once, and every part of this wait can cost them their first words.
+_REOPEN_SETTLE_S = 0.3
 # A delayed follow-up arrives as a NEW HA conversation, so the history key is
 # remapped back to the conversation it continues for this long.
 _FOLLOW_UP_CONTINUITY_S = 120.0
@@ -675,24 +679,37 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             task.cancel()
 
     def _satellite_history_id(
-        self, device_id: str | None, conversation_id: str
+        self,
+        device_id: str | None,
+        conversation_id: str,
+        language: str | None = None,
     ) -> str:
         """Keep a satellite's conversation for 15 minutes between turns.
 
         HA mints a new conversation after a few minutes of quiet, which took
         "and the bedroom?" away from what it followed. Only for satellites: an
         Assist panel that is reopened starts over on purpose.
+
+        A change of pipeline language starts over too. The model only sees the
+        text, so after German turns it kept answering an English pipeline in
+        German, spoken by the English voice, and the user's natural German
+        answer then reached English speech-to-text: "Eine Minute" became "I live
+        in Utah" (2026-11-03). HA can reuse its conversation id across the
+        switch, so the new history needs an id of its own.
         """
         if not self._orchestrator.is_voice_device(device_id):
             return conversation_id
         store = self.__dict__.setdefault("_satellite_conversations", {})
         now = time.monotonic()
+        lang = (language or "en").split("-")[0].lower()
         last = store.get(device_id)
-        history_id = (
-            last[1] if last is not None and now - last[0] <= _SATELLITE_MEMORY_S
-            else conversation_id
-        )
-        store[device_id] = (now, history_id)
+        if last is None or now - last[0] > _SATELLITE_MEMORY_S:
+            history_id = conversation_id
+        elif last[2] == lang:
+            history_id = last[1]
+        else:
+            history_id = f"{conversation_id}:{lang}"
+        store[device_id] = (now, history_id, lang)
         return history_id
 
     def _continued_conversation_id(
@@ -822,6 +839,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         history_id = self._satellite_history_id(
             user_input.device_id,
             self._continued_conversation_id(user_input.device_id, conversation_id),
+            user_input.language,
         )
         _LOGGER.info(
             "AI Plugin: conv_id=%s user_id=%s input=%r",
@@ -863,9 +881,11 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 "AI Plugin: dropped self-echo turn on device %s: %r",
                 user_input.device_id, user_input.text[:80],
             )
+        # Not behind the echo filter: music waking a satellite has nothing to
+        # do with a reply being heard again, so turning that off must not bring
+        # this back. Voice recognition is what it depends on.
         elif (
-            echo_filter
-            and not self._enrollment_active(user_input.device_id)
+            not self._enrollment_active(user_input.device_id)
             and await self._is_music_false_wake(user_input, user_id)
         ):
             _LOGGER.info(

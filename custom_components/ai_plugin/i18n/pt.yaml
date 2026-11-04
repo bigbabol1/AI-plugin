@@ -53,6 +53,8 @@ templates:
   message_title:       "Mensagem"
   message_title_from:  "Mensagem de {name}"
   phrase_routine_refused: "Ainda não consigo guardar uma frase para isso, por isso não ficou nada definido. Posso fazê-lo a uma hora certa se me disseres quando."
+  remember_not_saved: "Não guardei isso. Se quiseres que me lembre, diz lembra e depois o quê."
+  remember_not_saved_short: "Não guardei isso."
 keywords:
   time_now:      ["que horas são", "que horas sao", "diga as horas"]
   sun_set:       ["pôr do sol", "quando se põe o sol", "a que horas se põe o sol"]
@@ -93,6 +95,29 @@ patterns:
     - '\besta\s+noite\b'
     - '\bmais\s+tarde\b'
     - '\btodos\s+os\s+dias\b'
+  # A reply saying a fact was saved; said with nothing saved, it is replaced by remember_not_saved.
+  saved_claim:
+    - '(?<!não\s)\b(?:anotei|guardei|memorizei)\b'
+    - '\bvou\s+lembrar\b'
+    - '\blembrar[- ]me[- ]ei\b'
+  # A command for the room the satellite is in.
+  this_room:
+    - '\b(?:aqui|nesta\s+sala|neste\s+quarto)\b'
+  # Words that exclude it: "everywhere except here".
+  this_room_except:
+    - '\b(?:exceto|menos|n[ãa]o)\b'
+  # Asking for an alarm and naming no time: ask when, never guess.
+  alarm_no_time:
+    - '^(?:acorda[\s-]me|acorde[\s-]me|p[õo]e\s+(?:um|o|meu)\s+alarme|coloca\s+(?:um|o|meu)\s+alarme)(?:\s+por\s+favor)?[\s.!?]*$'
+  # An explicit request to remember something; only this stores a fact.
+  remember_request:
+    - '\blembra\b'
+    - '\blembre\b'
+    - '\bn[ãa]o\s+esque[çc]as\b'
+    - '\bn[ãa]o\s+se\s+esque[çc]a\b'
+    - '\bmemoriza\b'
+    - '\bguarda\b'
+    - '\banota\b'
   # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
   alarm_wake_request:
     - '\bacorda[\s-]*(?:me|nos)\b'

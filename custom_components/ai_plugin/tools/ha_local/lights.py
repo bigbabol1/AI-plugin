@@ -209,6 +209,24 @@ _DEVICE_NOUN_RE = re.compile(
 # Empty string is intentionally NOT here: omitting area means "default
 # to caller's area" (when device_id resolves), with sweep-all only as
 # the explicit-keyword path.
+# Nothing but the lights and how to ask: "Turn off the lights.", "Lights off
+# please.", "Kannst du das Licht ausmachen?". A name in the message ("turn off
+# Bertha") is not this, so its failed look-up cannot become a room-wide switch.
+_GENERIC_LIGHTS_WORDS = frozenset({
+    "please", "can", "could", "would", "will", "you", "turn", "switch", "put",
+    "the", "my", "lights", "light", "lamps", "lamp", "off", "on", "out",
+    "bitte", "kannst", "könntest", "du", "mach", "mache", "machst", "schalte",
+    "schalt", "das", "die", "licht", "lichter", "lampen", "lampe", "aus", "an",
+    "ein", "ausmachen", "anmachen", "ausschalten", "einschalten",
+})
+
+
+def is_generic_lights_command(message: str) -> bool:
+    """True when the message asks for the lights and names nothing else."""
+    words = re.findall(r"\w+", (message or "").lower())
+    return bool(words) and all(word in _GENERIC_LIGHTS_WORDS for word in words)
+
+
 _SWEEP_ALL_KEYWORDS = {
     "*",
     "all",
@@ -468,7 +486,7 @@ class LightToolsMixin:
             # chat with no room named — refuse rather than sweep the home.
             if not needle and not allow_sweep:
                 return (
-                    "set_brightness: name a room (area='living room'), or "
+                    "set_brightness: name a room (area: 'living room'), or "
                     "say 'all' for the whole home."
                 )
             sweep_all = needle in _SWEEP_ALL_KEYWORDS or needle == ""

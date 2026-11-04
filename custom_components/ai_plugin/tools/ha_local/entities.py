@@ -162,7 +162,7 @@ class EntityToolsMixin:
             if shadowed_id is not None:
                 return (
                     f"Entity {shadowed_id!r} exists but is not exposed to the "
-                    "conversation assistant. Use exposed_only=false if you "
+                    "conversation assistant. Use exposed_only: false if you "
                     "need to inspect it."
                 )
             return f"No entity matches {name_or_id!r}. Try search_entities."
@@ -171,7 +171,7 @@ class EntityToolsMixin:
         if exposed_only and not self._is_exposed(entity_id):
             return (
                 f"Entity {entity_id!r} exists but is not exposed to the conversation assistant. "
-                f"Use exposed_only=false if you need to inspect it."
+                f"Use exposed_only: false if you need to inspect it."
             )
 
         state = hass.states.get(entity_id)
@@ -258,7 +258,7 @@ class EntityToolsMixin:
         exposed_only: bool = True,
         has_hass_actuators: bool = True,
     ) -> str:
-        """When set_area_state(area='all') is rejected, run a search using
+        """When set_area_state(area: 'all') is rejected, run a search using
         keywords from the user message and bias toward the caller's area.
 
         Returns a formatted hit list ready to feed back to the model.

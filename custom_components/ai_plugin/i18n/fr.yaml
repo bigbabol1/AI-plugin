@@ -53,6 +53,8 @@ templates:
   message_title:       "Message"
   message_title_from:  "Message de {name}"
   phrase_routine_refused: "Je ne peux pas encore enregistrer une phrase pour ça, donc rien n'est réglé. Je peux le faire à une heure précise si tu me dis quand."
+  remember_not_saved: "Je ne l'ai pas enregistré. Si je dois le garder, dis retiens puis ce qu'il faut retenir."
+  remember_not_saved_short: "Je ne l'ai pas enregistré."
 keywords:
   time_now:      ["quelle heure est-il", "quelle heure il est", "l'heure actuelle"]
   sun_set:       ["coucher du soleil", "se couche le soleil", "à quelle heure se couche le soleil"]
@@ -95,6 +97,29 @@ patterns:
     - '\bce\s+soir\b'
     - '\bplus\s+tard\b'
     - '\btous\s+les\s+(?:jours|matins|soirs)\b'
+  # A reply saying a fact was saved; said with nothing saved, it is replaced by remember_not_saved.
+  saved_claim:
+    - '\bc[\x27’]est\s+not[ée]\b'
+    - '\bj[\x27’]ai\s+(?:not[ée]|enregistr[ée]|m[ée]moris[ée]|retenu)\b'
+    - '\bje\s+me\s+souviendrai\b'
+    - '\bje\s+retiens\b'
+  # A command for the room the satellite is in.
+  this_room:
+    - '\b(?:ici|cette\s+pi[èe]ce)\b'
+  # Words that exclude it: "everywhere except here".
+  this_room_except:
+    - '\b(?:sauf|pas)\b'
+  # Asking for an alarm and naming no time: ask when, never guess.
+  alarm_no_time:
+    - '^(?:s[\x27’]il\s+te\s+pla[iî]t\s+)?(?:r[ée]veille[\s-]moi|mets?\s+(?:une|l[\x27’]|mon)\s*(?:alarme|r[ée]veil))(?:\s+s[\x27’]il\s+te\s+pla[iî]t)?[\s.!?]*$'
+  # An explicit request to remember something; only this stores a fact.
+  remember_request:
+    - '\bretiens\b'
+    - '\bsouviens[\s-]toi\b'
+    - '\bn[\x27’]oublie\s+pas\b'
+    - '\bm[ée]morise\b'
+    - '\bnote\b'
+    - '\benregistre\b'
   # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
   alarm_wake_request:
     - '\bréveille[sz]?[\s-]*(?:moi|nous)\b'

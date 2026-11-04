@@ -538,11 +538,17 @@ def test_strip_emoji_removes_kaomoji() -> None:
     assert _strip_emoji("It could crush a small car. ᕦ(ò_ó)ᕤ") == "It could crush a small car."
     for face in ("(T_T)", "(-_-)", "(>_<)", "(^^)", "(^o^)", "(^_^)"):
         assert _strip_emoji(f"Okay {face}") == "Okay", face
+    assert _strip_emoji("Der Wecker ist gestellt. ⏰") == "Der Wecker ist gestellt."
+    # The face goes first; its arms must not stay behind to be read out.
+    assert _strip_emoji("Looking fabulous! ٩(◕‿◕)۶") == "Looking fabulous!"
+    assert _strip_emoji("Looking fabulous! ٩۶") == "Looking fabulous!"
 
 
 def test_strip_emoji_preserves_degrees_and_parens() -> None:
     from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
 
+    # In Arabic these are digits.
+    assert _strip_emoji("الساعة ٩٥") == "الساعة ٩٥"
     assert _strip_emoji("It is 21°C outside.") == "It is 21°C outside."
     assert _strip_emoji("Timer (eval) is running.") == "Timer (eval) is running."
     assert _strip_emoji("Five squared (5^2) is 25.") == "Five squared (5^2) is 25."
@@ -704,6 +710,35 @@ async def test_started_timer_is_not_retried_as_an_unexecuted_command() -> None:
     assert orch._provider.async_chat.await_count == 2
 
 
+async def test_reasoning_lifts_the_cap_on_an_action_command() -> None:
+    """Reasoning counts against the limit: with the cap, "Turn on the light."
+    ran out before its tool call (4 of 4 in replay on 2026-11-03)."""
+    orch = _voice_orch_with_intent("HassLightSet", "")
+    orch._entry.options = {**orch._entry.options, "enable_thinking": True}
+    orch._provider.thinking_refused = False
+    await orch.async_process(
+        message="Dim the light.", conversation_id="conv-think", language="en",
+    )
+    first = orch._provider.async_chat.await_args_list[0]
+    assert "max_tokens" not in first.kwargs
+
+
+async def test_a_model_that_refused_reasoning_keeps_the_cap() -> None:
+    from custom_components.ai_plugin.orchestrator.core import (
+        ACTION_FIRST_REPLY_MAX_TOKENS,
+    )
+
+    orch = _voice_orch_with_intent("HassLightSet", "")
+    orch._entry.options = {**orch._entry.options, "enable_thinking": True}
+    orch._provider.thinking_refused = True
+    orch._hass = None
+    await orch.async_process(
+        message="Dim the light.", conversation_id="conv-refused", language="en",
+    )
+    first = orch._provider.async_chat.await_args_list[0]
+    assert first.kwargs.get("max_tokens") == ACTION_FIRST_REPLY_MAX_TOKENS
+
+
 async def test_first_reply_to_an_action_command_is_capped() -> None:
     """Live 2026-10-31: "Dim the light." looped in hidden reasoning up to
     512 tokens, 18.9 s of silence before the retry. Only the first reply is
@@ -829,11 +864,13 @@ def _satellite_entity(voice: bool = True):
     return entity
 
 
-def _at(entity, seconds: float, device: str | None, conversation: str) -> str:
+def _at(
+    entity, seconds: float, device: str | None, conversation: str, language: str = "en-US"
+) -> str:
     from custom_components.ai_plugin import conversation as module
 
     with patch.object(module.time, "monotonic", return_value=1000.0 + seconds):
-        return entity._satellite_history_id(device, conversation)
+        return entity._satellite_history_id(device, conversation, language)
 
 
 def test_a_new_ha_conversation_within_15_minutes_continues_the_old_one() -> None:
@@ -850,6 +887,17 @@ def test_after_15_quiet_minutes_a_satellite_starts_over() -> None:
     assert _at(entity, 902, "sat", "C") == "B"
 
 
+def test_switching_the_pipeline_language_starts_a_new_history() -> None:
+    """HA can keep its conversation id across the switch, as it did on
+    2026-11-03 when English turns were answered in German."""
+    entity = _satellite_entity()
+    assert _at(entity, 0, "sat", "A", "de-DE") == "A"
+    assert _at(entity, 30, "sat", "A", "de-DE") == "A"
+    english = _at(entity, 60, "sat", "A", "en-US")
+    assert english != "A"
+    assert _at(entity, 90, "sat", "B", "en-GB") == english
+
+
 def test_each_satellite_has_its_own_conversation() -> None:
     entity = _satellite_entity()
     _at(entity, 0, "bedroom", "A")
@@ -862,3 +910,228 @@ def test_the_assist_panel_still_starts_over_when_reopened(device) -> None:
     entity = _satellite_entity(voice=False)
     assert _at(entity, 0, device, "A") == "A"
     assert _at(entity, 1, device, "B") == "B"
+
+
+@pytest.mark.parametrize("text", ["Enough for today.", "Genug für heute."])
+def test_enough_for_today_ends_the_conversation(text) -> None:
+    from custom_components.ai_plugin.conversation import _match_close_phrase
+
+    assert _match_close_phrase(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Can you recommend me a show on Netflix?",
+        "Can you recommend me a show on Netflix? I wanna watch something new.",
+        "Recommend a movie on Disney Plus.",
+        "I watched a show on Netflix.",
+        "Tell me a story about a man on the moon.",
+    ],
+)
+def test_on_as_a_preposition_is_not_a_command(text) -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _is_action_command
+
+    assert not _is_action_command(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Lights on.",
+        "Lights on",
+        "Bedroom off please",
+        "Kitchen light on now",
+        "Lights on in the kitchen",
+        "Can you turn on the lights?",
+        "Could you turn off the TV?",
+        "Please switch the fan on.",
+        "Turn on the light.",
+        "Licht an",
+        "Licht aus im Bad",
+        "Schalte das Licht aus",
+        "Mach das Licht aus.",
+        "Set a timer for 5 minutes.",
+    ],
+)
+def test_real_commands_still_count(text) -> None:
+    from custom_components.ai_plugin.orchestrator.grounding import _is_action_command
+
+    assert _is_action_command(text)
+
+
+def test_only_a_colour_for_a_whole_room_has_a_room_scope() -> None:
+    from custom_components.ai_plugin.orchestrator.core import _room_colour_scope
+
+    assert _room_colour_scope("set_brightness", {"color": "Red", "area": "Kitchen"}) == ("kitchen", "red")
+    assert _room_colour_scope("set_brightness", {"color": "red"}) == ("", "red")
+    assert _room_colour_scope("set_brightness", {"color": "red", "name": "Lamp"}) is None
+    assert _room_colour_scope("set_brightness", {"command": "dimmer"}) is None
+    assert _room_colour_scope("set_area_state", {"color": "red"}) is None
+
+
+async def test_a_second_room_colour_in_one_turn_is_not_run() -> None:
+    from types import SimpleNamespace
+
+    from custom_components.ai_plugin.orchestrator.core import ROOM_COLOUR_REPLACED_RESULT
+
+    def call(args):
+        return SimpleNamespace(
+            name="set_brightness", arguments=args,
+            to_assistant_message=lambda: {
+                "role": "assistant", "content": None,
+                "tool_calls": [{"function": {"name": "set_brightness", "arguments": "{}"}}],
+            },
+            to_tool_result_message=lambda r: {"role": "tool", "content": r},
+        )
+
+    def reply_with(*calls):
+        return SimpleNamespace(has_tool_calls=True, tool_calls=list(calls), reply_text=lambda: "")
+
+    orch = _baseline_orch()
+    orch._hass = MagicMock()
+    orch._provider = MagicMock()
+    orch._provider.async_chat = AsyncMock(side_effect=[
+        reply_with(call({"command": "set", "color": "red"})),
+        reply_with(call({"command": "set", "color": "green"})),
+        reply_with(call({"command": "set", "color": "green", "name": "Lamp A"})),
+        SimpleNamespace(has_tool_calls=False, tool_calls=[], reply_text=lambda: "Done."),
+    ])
+    orch._dispatch_tool = AsyncMock(return_value="OK — colour in room: 1 light(s)")
+    orch._tool_schemas_for = lambda *a: [
+        {"type": "function", "function": {"name": "set_brightness", "parameters": {}}},
+    ]
+    await orch.async_process("Give each lamp a colour.", "c-colour", "en-US")
+    ran = [c.args[1] for c in orch._dispatch_tool.await_args_list]
+    assert {"command": "set", "color": "green"} not in ran
+    assert {"command": "set", "color": "red"} in ran
+    assert {"command": "set", "color": "green", "name": "Lamp A"} in ran
+    tool_texts = [
+        m["content"] for m in orch._provider.async_chat.await_args_list[-1].args[0]
+        if m.get("role") == "tool"
+    ]
+    assert ROOM_COLOUR_REPLACED_RESULT in tool_texts
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Switch every lamp in here to a different color.",
+        "Turn off the lights in here.",
+        "Turn the lights off here.",
+        "Dim this room.",
+        "Mach das Licht hier aus.",
+        "Mach alle Lampen in diesem Raum blau.",
+        "Allume la lumière ici.",
+    ],
+)
+def test_says_this_room(text) -> None:
+    from custom_components.ai_plugin.orchestrator.core import says_this_room
+
+    assert says_this_room(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Turn off all the lights except in here.",
+        "Turn off every light but not here.",
+        "Mach alle Lampen aus, außer hier.",
+        "Turn off the lights.",
+        "Turn off the lights in the kitchen.",
+        "Where is Anna?",
+    ],
+)
+def test_does_not_say_this_room(text) -> None:
+    from custom_components.ai_plugin.orchestrator.core import says_this_room
+
+    assert not says_this_room(text)
+
+
+def _confining_orch(room="Living Room", elsewhere=False):
+    orch = _baseline_orch()
+    orch._this_room = lambda device_id, message: room
+    orch._named_device_elsewhere = lambda device, where: elsewhere
+    return orch
+
+
+def test_in_here_replaces_the_area_the_model_sent() -> None:
+    orch = _confining_orch()
+    args, refused = orch._confine_to_this_room(
+        "set_brightness", {"command": "set", "color": "red", "area": "Kitchen"},
+        "Switch every lamp in here to a different color.", "sat",
+    )
+    assert args["area"] == "Living Room" and refused is None
+
+
+def test_in_here_sets_the_area_the_model_left_out() -> None:
+    """Otherwise "all the lights in here" reads as the whole home further on."""
+    orch = _confining_orch()
+    args, _ = orch._confine_to_this_room(
+        "set_area_state", {"domain": "light", "action": "turn_off"},
+        "Turn off all the lights in here.", "sat",
+    )
+    assert args["area"] == "Living Room"
+
+
+def test_in_here_refuses_a_device_in_another_room() -> None:
+    orch = _confining_orch(elsewhere=True)
+    args, refused = orch._confine_to_this_room(
+        "set_brightness", {"command": "set", "color": "red", "name": "Kitchen Light"},
+        "Make every lamp in here red.", "sat",
+    )
+    assert refused.startswith("[Not changed")
+    assert "Kitchen Light" in refused
+
+
+def test_in_here_lets_a_device_in_this_room_through() -> None:
+    orch = _confining_orch()
+    call = {"command": "set", "color": "red", "name": "Floor Lamp"}
+    args, refused = orch._confine_to_this_room(
+        "set_brightness", call, "Make the lamp in here red.", "sat",
+    )
+    assert args == call and refused is None
+
+
+@pytest.mark.parametrize(
+    ("tool", "message", "room"),
+    [
+        ("list_entities", "Which lights are on in here?", "Living Room"),
+        ("set_brightness", "Make the kitchen red.", "Living Room"),
+        # No satellite room, or the message names another room.
+        ("set_brightness", "Turn off the lights in here.", None),
+    ],
+)
+def test_nothing_changes_otherwise(tool, message, room) -> None:
+    orch = _confining_orch(room=room)
+    call = {"area": "Kitchen"}
+    args, refused = orch._confine_to_this_room(tool, call, message, "sat")
+    assert args == call and refused is None
+
+
+def test_a_plain_lights_command_stays_in_this_room() -> None:
+    orch = _confining_orch()
+    args, refused = orch._confine_to_this_room(
+        "set_area_state", {"area": "all", "domain": "light", "action": "turn_off"},
+        "Turn off the lights.", "sat",
+    )
+    assert args["area"] == "Living Room" and refused is None
+
+
+def test_a_plain_lights_command_refuses_a_lamp_in_another_room() -> None:
+    orch = _confining_orch(elsewhere=True)
+    _, refused = orch._confine_to_this_room(
+        "HassTurnOff", {"name": "light.kitchen"}, "Lights off please.", "sat",
+    )
+    assert refused.startswith("[Not changed")
+
+
+@pytest.mark.parametrize(
+    "message", ["Turn off all the lights.", "Turn off the kitchen lights.", "Turn off Bertha."]
+)
+def test_a_wider_or_named_request_is_left_alone(message) -> None:
+    orch = _confining_orch()
+    call = {"area": "all", "domain": "light", "action": "turn_off"}
+    args, refused = orch._confine_to_this_room("set_area_state", call, message, "sat")
+    assert args == call and refused is None
+

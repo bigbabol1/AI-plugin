@@ -30,6 +30,9 @@ from .base import AbstractProvider
 
 _LOGGER = logging.getLogger(__name__)
 
+# Ollama's HTTP 400 text for think: true on a model without the capability.
+_NO_THINKING = "does not support thinking"
+
 _MODEL_FETCH_TIMEOUT = 10
 _PROBE_TIMEOUT = 3
 
@@ -76,6 +79,8 @@ class OpenAICompatProvider(AbstractProvider):
         self._max_tokens = max_tokens
         self._context_window = context_window
         self._enable_thinking = enable_thinking
+        # The server refused reasoning for this model; read by the orchestrator.
+        self.thinking_refused = False
         self._keep_alive = (keep_alive or "").strip() or None
         self._session: aiohttp.ClientSession | None = None
         self._is_ollama: bool | None = None
@@ -330,7 +335,6 @@ class OpenAICompatProvider(AbstractProvider):
         """Call Ollama's native /api/chat so options.num_ctx actually takes effect."""
         session = self._get_session()
         url = f"{self._server_root}/api/chat"
-        messages = self._messages_for_ollama(messages)
         options: dict[str, Any] = {}
         if self._temperature is not None:
             options["temperature"] = self._temperature
@@ -342,15 +346,15 @@ class OpenAICompatProvider(AbstractProvider):
             options["num_ctx"] = self._context_window
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": messages,
+            "messages": self._messages_for_ollama(messages),
             "stream": on_delta is not None,
             # Toggle qwen3-style chain-of-thought via the integration option.
             # Reasoning models (qwen3, deepseek-r1) emit CoT into a separate
             # `thinking` field and may also wrap it in <think>...</think>
             # blocks inside `content`. We always strip the latter via
             # _strip_think regardless of this flag — "in any configuration the
-            # thinking blocks should always be hidden". Ollama silently
-            # ignores the flag for models that don't support it.
+            # thinking blocks should always be hidden". Ollama answers true
+            # with HTTP 400 for a model that cannot reason, handled below.
             "think": self._enable_thinking,
         }
         if tools:
@@ -365,6 +369,7 @@ class OpenAICompatProvider(AbstractProvider):
                 int(ka) if ka.lstrip("-").isdigit() else ka
             )
 
+        retry_without_thinking = False
         try:
             async with session.post(
                 url,
@@ -375,19 +380,38 @@ class OpenAICompatProvider(AbstractProvider):
                     raise OrchestratorError(
                         f"Invalid API key (HTTP {resp.status})"
                     ) from None
-                resp.raise_for_status()
-                if on_delta is not None:
-                    return await self._read_ollama_stream(resp, on_delta)
-                data = await resp.json(content_type=None)
-                message = data.get("message")
-                if not isinstance(message, dict):
-                    raise OrchestratorError(
-                        f"Unexpected Ollama response: missing 'message' ({list(data.keys())})"
+                if resp.status == 400:
+                    detail = await resp.text()
+                    if self._enable_thinking and _NO_THINKING in detail:
+                        # One checkbox must not break every turn: 2026-11-03,
+                        # each voice turn spoke the HTTP error instead.
+                        _LOGGER.warning(
+                            "AI Plugin: model %s cannot reason, so 'Enable model "
+                            "reasoning' has no effect on it. Turn the option off "
+                            "or choose a model that can.",
+                            self._model,
+                        )
+                        self._enable_thinking = False
+                        self.thinking_refused = True
+                        retry_without_thinking = True
+                    else:
+                        _LOGGER.warning(
+                            "AI Plugin: Ollama refused the request: %s", detail[:300]
+                        )
+                if not retry_without_thinking:
+                    resp.raise_for_status()
+                    if on_delta is not None:
+                        return await self._read_ollama_stream(resp, on_delta)
+                    data = await resp.json(content_type=None)
+                    message = data.get("message")
+                    if not isinstance(message, dict):
+                        raise OrchestratorError(
+                            f"Unexpected Ollama response: missing 'message' ({list(data.keys())})"
+                        )
+                    return ChatResponse(
+                        content=self._strip_think(message.get("content")),
+                        tool_calls=normalize_tool_calls(message),
                     )
-                return ChatResponse(
-                    content=self._strip_think(message.get("content")),
-                    tool_calls=normalize_tool_calls(message),
-                )
         except OrchestratorError:
             raise
         except aiohttp.ClientConnectorError as exc:
@@ -400,6 +424,7 @@ class OpenAICompatProvider(AbstractProvider):
             ) from exc
         except aiohttp.ClientError as exc:
             raise OrchestratorError(f"HTTP error: {exc}") from exc
+        return await self._chat_ollama(messages, tools, on_delta, num_predict)
 
     async def _read_ollama_stream(self, resp: Any, on_delta: Any) -> ChatResponse:
         """Consume an Ollama NDJSON stream, forwarding content chunks.
@@ -537,6 +562,33 @@ def model_capabilities(show: dict[str, Any] | None) -> list[str] | None:
         return None
     caps = show.get("capabilities")
     return caps if isinstance(caps, list) else None
+
+
+def model_limit_errors(
+    user_input: dict[str, Any],
+    capabilities: list[str] | None,
+    context_limit: int | None,
+) -> dict[str, str]:
+    """Form errors for what the model itself rules out. Unknown limits pass:
+    only Ollama reports them, and "unknown" must never read as "not supported"."""
+    from ..const import (  # noqa: PLC0415 — avoid import cycle at module load
+        CONF_CONTEXT_WINDOW,
+        CONF_ENABLE_THINKING,
+        ERROR_CONTEXT_EXCEEDS_MODEL,
+        ERROR_MODEL_NO_THINKING,
+    )
+
+    errors: dict[str, str] = {}
+    window = user_input.get(CONF_CONTEXT_WINDOW)
+    if window and context_limit and int(window) > context_limit:
+        errors[CONF_CONTEXT_WINDOW] = ERROR_CONTEXT_EXCEEDS_MODEL
+    if (
+        user_input.get(CONF_ENABLE_THINKING)
+        and capabilities is not None
+        and "thinking" not in capabilities
+    ):
+        errors[CONF_ENABLE_THINKING] = ERROR_MODEL_NO_THINKING
+    return errors
 
 
 def model_context_length(show: dict[str, Any] | None) -> int | None:

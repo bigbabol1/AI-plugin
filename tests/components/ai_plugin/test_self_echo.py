@@ -727,7 +727,7 @@ def _clocked_reopen(monkeypatch, started_at, playing_until):
 
 async def test_reopen_waits_for_late_bridged_playback(monkeypatch) -> None:
     """The 2026-09-12 echo: playback starts 5 s after the reply."""
-    # Playing 5.0-9.0 s, plus the 1 s settle -> quiet from 10.0 s.
+    # Playing 5.0-9.0 s, plus the settle -> quiet from 10.0 s at the latest.
     ent, hass, log = _clocked_reopen(monkeypatch, started_at=5.0, playing_until=10.0)
 
     await ent._reopen_after_quiet("d1", "assist_satellite.sat", ECHO_REPLY_0912, 2.0)
@@ -741,7 +741,7 @@ async def test_reopen_waits_for_late_bridged_playback(monkeypatch) -> None:
         "microphone reopened before playback + settle + gap"
     )
     assert reopen_at[0] < 10.0 + 2.0 + 1.0, (
-        "a hidden wait beyond the 1 s settle and the user's gap is back"
+        "a hidden wait beyond the settle and the user's gap is back"
     )
 
 
@@ -782,7 +782,7 @@ async def test_estimate_is_not_a_floor_once_playback_was_seen(monkeypatch) -> No
     assert reopen_at and 14.0 + 2.0 <= reopen_at[0] < 19.0 + 2.0, reopen_at
 
 
-# ── v0.9.49: answer end -> reopen = 1 s settle + the user's quiet gap ─────────
+# ── v0.9.49: answer end -> reopen = settle + the user's quiet gap ─────────
 
 
 def test_reply_audio_active_while_our_reply_plays(monkeypatch) -> None:
@@ -792,17 +792,18 @@ def test_reply_audio_active_while_our_reply_plays(monkeypatch) -> None:
     assert conv._reply_audio_active(ent.hass, "dev_sat", 5.0)
 
 
-def test_reply_audio_active_settles_for_one_second(monkeypatch) -> None:
+def test_reply_audio_active_settles_briefly(monkeypatch) -> None:
     from custom_components.ai_plugin import conversation as conv
 
-    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=0.5))
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=0.2))
     assert conv._reply_audio_active(ent.hass, "dev_sat", 5.0)
 
 
 def test_reply_audio_active_is_quiet_after_the_settle(monkeypatch) -> None:
+    """2026-11-03: a 1 s settle cost "one minute" its last word."""
     from custom_components.ai_plugin import conversation as conv
 
-    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=2.0))
+    ent = _entity_with_hass(monkeypatch, *_hass_with_speaker(state="idle", seconds_ago=0.5))
     assert not conv._reply_audio_active(ent.hass, "dev_sat", 5.0)
 
 

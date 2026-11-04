@@ -31,6 +31,7 @@ class FakeTimer:
     start_hours: int | None = None
     start_minutes: int | None = None
     start_seconds: int | None = None
+    area_id: str | None = None
 
 
 class FakeManager:
@@ -150,6 +151,124 @@ async def test_ambiguous_cancel_changes_nothing() -> None:
     out = await _call(_reg(mgr), "cancel_timer")
     assert mgr.calls == []
     assert "several timers match" in out
+
+
+def _rooms(reg: HALocalToolRegistry, spoken: str | None) -> HALocalToolRegistry:
+    reg._area_named_in_message = lambda message: spoken
+    reg._resolve_area = lambda name: SimpleNamespace(id=name.lower(), name=name)
+    return reg
+
+
+async def test_cancel_all_reaches_the_timers_ha_cannot_see() -> None:
+    """HA's own cancel-all skips every timer with a conversation command, which
+    announce mode puts on each one: it would cancel none and report success."""
+    mgr = FakeManager(
+        FakeTimer("t1", "pasta", "dev1", 300, conversation_command=_announce("pasta")),
+        FakeTimer("t2", None, "dev2", 60, conversation_command=_announce()),
+    )
+    out = await _call(_rooms(_reg(mgr), None), "cancel_timer", msg="Cancel all my timers.")
+    assert out == "Cancelled 2 timers."
+    assert mgr.timers == {}
+
+
+@pytest.mark.parametrize(
+    "words",
+    ["Cancel all timers.", "Cancel every timer.", "Alle Timer abbrechen.",
+     "Sämtliche Timer stoppen.", "Annule tous les minuteurs."],
+)
+async def test_cancel_all_in_the_words_people_use(words) -> None:
+    mgr = FakeManager(
+        FakeTimer("t1", None, "dev2", 300),
+        FakeTimer("t2", None, "dev3", 60),
+    )
+    assert await _call(_rooms(_reg(mgr), None), "cancel_timer", msg=words) == "Cancelled 2 timers."
+
+
+async def test_cancel_all_when_the_model_passes_all_as_the_name() -> None:
+    mgr = FakeManager(
+        FakeTimer("t1", None, "dev2", 300),
+        FakeTimer("t2", None, "dev3", 60),
+    )
+    out = await _call(
+        _rooms(_reg(mgr), None), "cancel_timer", {"name": "all timers"},
+        msg="Cancel all my timers.",
+    )
+    assert out == "Cancelled 2 timers."
+
+
+@pytest.mark.parametrize(
+    "words", ["Cancel the timer.", "Stop the timer.", "Den Timer komplett abbrechen."]
+)
+async def test_without_all_in_the_words_it_still_asks_which(words) -> None:
+    """The replay that took a tool argument cancelled everything on these."""
+    mgr = FakeManager(
+        FakeTimer("t1", None, "dev2", 300),
+        FakeTimer("t2", None, "dev3", 60),
+    )
+    out = await _call(_reg(mgr), "cancel_timer", msg=words)
+    assert mgr.calls == []
+    assert "several timers match" in out
+
+
+async def test_a_real_name_beats_the_word_all() -> None:
+    mgr = FakeManager(
+        FakeTimer("t1", "pasta", "dev2", 300),
+        FakeTimer("t2", "tea", "dev3", 60),
+    )
+    reg = _reg(mgr)
+    reg._resolve_area = lambda name: None
+    await _call(reg, "cancel_timer", {"name": "pasta"}, msg="Cancel all of the pasta timer.")
+    assert list(mgr.timers) == ["t2"]
+
+
+async def test_cancel_all_leaves_other_integrations_delayed_commands() -> None:
+    mgr = FakeManager(
+        FakeTimer("t1", None, "dev1", 300, conversation_command=_announce()),
+        FakeTimer("t2", None, "dev1", 60, conversation_command="turn off the lights"),
+    )
+    out = await _call(_rooms(_reg(mgr), None), "cancel_timer", msg="Cancel all timers.")
+    assert out == "Cancelled 1 timer."
+    assert list(mgr.timers) == ["t2"]
+
+
+async def test_cancel_all_stays_in_the_room_that_was_named() -> None:
+    mgr = FakeManager(
+        FakeTimer("t1", None, "dev1", 300, area_id="kitchen"),
+        FakeTimer("t2", None, "dev2", 60, area_id="bedroom"),
+    )
+    out = await _call(
+        _rooms(_reg(mgr), "Kitchen"), "cancel_timer", msg="Cancel all timers in the kitchen.",
+    )
+    assert out == "Cancelled 1 timer in Kitchen."
+    assert list(mgr.timers) == ["t2"]
+
+
+async def test_a_room_passed_as_the_name_is_a_room() -> None:
+    mgr = FakeManager(
+        FakeTimer("t1", None, "dev1", 300, area_id="kitchen"),
+        FakeTimer("t2", None, "dev1", 200, area_id="kitchen"),
+        FakeTimer("t3", None, "dev2", 60, area_id="bedroom"),
+    )
+    out = await _call(
+        _rooms(_reg(mgr), "Kitchen"), "cancel_timer", {"name": "kitchen"},
+        msg="Cancel all timers in the kitchen.",
+    )
+    assert out == "Cancelled 2 timers in Kitchen."
+    assert list(mgr.timers) == ["t3"]
+
+
+async def test_cancel_all_says_when_the_named_room_has_none() -> None:
+    mgr = FakeManager(FakeTimer("t1", None, "dev2", 60, area_id="bedroom"))
+    out = await _call(
+        _rooms(_reg(mgr), "Kitchen"), "cancel_timer", msg="Cancel all timers in the kitchen.",
+    )
+    assert out == "No timers are running in Kitchen."
+    assert mgr.calls == []
+
+
+async def test_cancel_all_with_no_timers() -> None:
+    out = await _call(_rooms(_reg(FakeManager()), None), "cancel_timer", msg="Cancel all timers.")
+    assert out == "No timers are running."
 
 
 async def test_calling_satellite_timer_wins_when_unnamed() -> None:

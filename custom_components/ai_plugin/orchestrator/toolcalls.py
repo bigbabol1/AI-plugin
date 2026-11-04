@@ -21,6 +21,19 @@ from .grounding import (
 
 _LOGGER = logging.getLogger(__name__)
 
+def name_without_room(arguments: dict) -> dict:
+    """{"name": "TV @ Living Room"} becomes {"name": "TV"}.
+
+    search_entities answers "switch.tv — TV @ Living Room", and the model may
+    pass that on as the name, which Home Assistant then cannot find.
+    """
+    name = arguments.get("name")
+    if not isinstance(name, str) or " @ " not in name:
+        return arguments
+    plain = name.split(" @ ")[0].split(" — ")[-1].strip()
+    return {**arguments, "name": plain} if plain else arguments
+
+
 def _readonly_schemas(schemas: list[dict]) -> list[dict]:
     """Schemas minus actuators — for grounding retries that must not act."""
     return [

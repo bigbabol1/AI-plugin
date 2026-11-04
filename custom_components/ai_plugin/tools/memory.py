@@ -20,6 +20,8 @@ import logging
 import os
 from typing import Any
 
+from ..i18n import L, SUPPORTED_LANGS
+
 _LOGGER = logging.getLogger(__name__)
 _FILE_PREFIX = ".ai_plugin_memory_"
 
@@ -93,8 +95,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "remember",
             "description": (
                 "Save a fact to persistent memory so it can be recalled in future "
-                "conversations. Use this when the user tells you something they want "
-                "you to remember (e.g. preferences, names, routines)."
+                "conversations. Use this only when the user explicitly asks you to "
+                "remember something (e.g. preferences, names, routines)."
             ),
             "parameters": {
                 "type": "object",
@@ -158,6 +160,34 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
 ]
+
+def asks_to_remember(message: str, lang: str) -> bool:
+    """True unless the message is clearly no request to remember anything.
+
+    A fact is stored only on an explicit request: a misheard "I live in Utah"
+    must not become a fact. The request can be in any language we have patterns
+    for, since the words need not match the pipeline's. A language without
+    patterns cannot be judged, so the model decides there.
+    """
+    if lang not in SUPPORTED_LANGS:
+        return True
+    text = message.lower()
+    return any(
+        rx.search(text)
+        for code in SUPPORTED_LANGS
+        for rx in L.pattern_list("remember_request", code)
+    )
+
+
+def claims_saved(reply: str) -> bool:
+    """True when a reply says a fact was saved, in any language we have."""
+    text = (reply or "").strip().lower()
+    return any(
+        rx.search(text)
+        for code in SUPPORTED_LANGS
+        for rx in L.pattern_list("saved_claim", code)
+    )
+
 
 TOOL_NAMES = {"remember", "recall", "forget"}
 # The ones that change what is stored.
@@ -258,13 +288,16 @@ class MemoryTool:
         # message asking to forget coffee) and the index points to the
         # correct stored fact even when stored in another language.
         if user_message and fact and not _fuzzy_overlap(fact, user_message):
+            # "Tell the user it is not stored" made "Bitte lösche diese Info
+            # wieder." answer that a stored fact was not there (2026-11-03).
             _LOGGER.info(
                 "AI Plugin memory forget refused: fact %r not in user message %r",
                 fact, user_message,
             )
             return (
-                f"Refusing to forget '{fact}' — that keyword did not appear "
-                "in the user's request. Tell the user that fact is not stored."
+                f"[Not removed: the request did not name '{fact}', so nothing "
+                "was changed. Do not say whether it is stored. Ask the user to "
+                "say which fact to forget.]"
             )
 
         if index is not None:
@@ -288,7 +321,7 @@ class MemoryTool:
                 )
                 return (
                     "Refusing to forget without a 'fact' keyword. Pass "
-                    "fact='<keyword copied verbatim from the user's message>' "
+                    "fact: '<keyword copied verbatim from the user's message>' "
                     "alongside index so the call can be validated."
                 )
             # When user msg and stored fact are in the same detected language,

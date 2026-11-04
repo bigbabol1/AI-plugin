@@ -12,10 +12,17 @@ from datetime import date, datetime, time, timedelta
 import re
 
 REPEATS = ("daily", "weekdays", "weekends", "weekly", "biweekly")
+# The model sometimes repeats the repeat as the day ("every weekday" gave
+# day='weekdays', repeat='weekdays'), and refused, it tried the same again.
+_REPEAT_WORDS_AS_DAY = {*REPEATS, "weekday", "weekend", "every day", "everyday"}
 
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _WEEKDAYS_DE = ("montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag")
 _DAY_OFFSETS = {"today": 0, "heute": 0, "tomorrow": 1, "morgen": 1}
+# Before this hour "tomorrow" still means after the night's sleep, so it is the
+# next time that clock comes. The model also adds it unasked: at 01:12 "wake me
+# up at 7" with day='tomorrow' would ring a day late, and sound right when said.
+_SMALL_HOURS_END = 5
 _CLOCK_RE = re.compile(r"^(\d{1,2})(?:[:.h](\d{2}))?\s*([ap])?\.?(?:m\.?)?$", re.IGNORECASE)
 _MAX_MINUTES = 366 * 24 * 60
 
@@ -83,6 +90,11 @@ def resolve(
     and local; so is the result."""
     if repeat is not None and repeat not in REPEATS:
         raise WhenError(f"'repeat' must be one of {', '.join(REPEATS)}.")
+    spoken_day = str(day or "").strip().lower()
+    if repeat and spoken_day in _REPEAT_WORDS_AS_DAY:
+        day = None
+    if now.hour < _SMALL_HOURS_END and _DAY_OFFSETS.get(spoken_day) == 1:
+        day = None
     if in_minutes not in (None, ""):
         if repeat:
             raise WhenError("A repeat needs a clock time: use 'at', not 'in_minutes'.")

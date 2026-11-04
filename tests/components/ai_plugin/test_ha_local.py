@@ -1020,4 +1020,39 @@ def test_prompts_route_people_questions_to_the_person_list() -> None:
 
     for prompt in (SYSTEM_PROMPT_VOICE, SYSTEM_PROMPT_DEFAULT):
         assert "person entity" in prompt
-        assert "list_entities(domain=" in prompt and "person" in prompt
+        assert "list_entities(domain:" in prompt and "person" in prompt
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Turn off the lights.",
+        "Lights off please.",
+        "Can you turn the lights off?",
+        "Switch the lights off.",
+        "Mach das Licht aus.",
+        "Kannst du bitte die Lichter ausschalten?",
+    ],
+)
+def test_generic_lights_command(text) -> None:
+    from custom_components.ai_plugin.tools.ha_local.lights import is_generic_lights_command
+
+    assert is_generic_lights_command(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Turn off Bertha.",
+        "Turn off the Bertha light.",
+        "Turn off the air purifier.",
+        "Turn off the kitchen lights.",
+        "What about the lights?",
+        "",
+    ],
+)
+def test_not_a_generic_lights_command(text) -> None:
+    from custom_components.ai_plugin.tools.ha_local.lights import is_generic_lights_command
+
+    assert not is_generic_lights_command(text)
+

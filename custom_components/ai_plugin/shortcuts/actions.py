@@ -8,6 +8,7 @@ single exposed entity and calls the service.
 from __future__ import annotations
 
 import logging
+import re
 
 from homeassistant.core import Context, HomeAssistant
 
@@ -32,7 +33,7 @@ def _resolve_named_entity(
     """Resolve a spoken device name to ONE exposed, actuatable entity_id.
 
     Matches name / original_name / aliases / friendly_name (exact first,
-    then substring), restricted to exposed entities in ``domains``.
+    then whole words), restricted to exposed entities in ``domains``.
     When the match is ambiguous, the caller's area breaks the tie; if it
     still can't, returns None so the LLM can disambiguate rather than the
     shortcut actuating the wrong device.
@@ -44,8 +45,14 @@ def _resolve_named_entity(
     dev_reg = dr.async_get(hass)
     caller = _caller_area_id(hass, device_id)
 
+    # A partial match must be on whole words: speech-to-text's "Turn the back on."
+    # reached a lamp named "Backup Lamp" in another room (2026-11-03). Fragments still
+    # count towards ambiguity, so "Lampe" stays a question for the model rather than
+    # meaning the one lamp with that as a separate word.
+    word_match = re.compile(rf"\b{re.escape(needle)}\b")
     exact: list[tuple[str, str | None]] = []
     substr: list[tuple[str, str | None]] = []
+    whole_word: set[str] = set()
     for eid, entry in ent_reg.entities.items():
         if eid.split(".", 1)[0] not in domains:
             continue
@@ -65,17 +72,22 @@ def _resolve_named_entity(
             exact.append((eid, area))
         elif any(needle in c for c in cands):
             substr.append((eid, area))
+            if any(word_match.search(c) for c in cands):
+                whole_word.add(eid)
 
-    for pool in (exact, substr):
+    for pool, allowed in ((exact, None), (substr, whole_word)):
         if not pool:
             continue
+        winner = None
         if len(pool) == 1:
-            return pool[0][0]
-        if caller:
+            winner = pool[0][0]
+        elif caller:
             same = [eid for eid, area in pool if area == caller]
             if len(same) == 1:
-                return same[0]
-        return None  # ambiguous, no clean winner → fall through to the LLM
+                winner = same[0]
+        if winner is not None and (allowed is None or winner in allowed):
+            return winner
+        return None  # ambiguous, or only a fragment → fall through to the LLM
     return None
 
 def _match_action_intent(

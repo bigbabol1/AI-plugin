@@ -14,6 +14,8 @@ from .lights import _ACTION_DOMAINS, _BRIGHTNESS_FLOOR_PCT, _BRIGHTNESS_STEP_PP
 from .timers import _TIMER_INTENTS
 
 
+# Offered on the two tools that read one entity or list a domain, which is all
+# the prompt's rules ask of it. The handlers still honour it if the model sends it.
 _EXPOSED_ONLY_PROP = {
     "exposed_only": {
         "type": "boolean",
@@ -23,6 +25,27 @@ _EXPOSED_ONLY_PROP = {
         ),
     },
 }
+
+
+# Tools of Home Assistant's own MCP server that a local tool here already does,
+# left out of what the model sees. Each one costs tokens on every prompt read,
+# and the local one handles more: media_command narrows to the caller's room,
+# set_brightness steps and takes white shades, and HassCancelAllTimers cancels
+# nothing, because HA skips the announce-mode timers this plugin starts.
+# GetDateTime repeats [CURRENT TIME], which every prompt carries.
+TOOLS_THE_PLUGIN_COVERS = frozenset({
+    "GetDateTime",
+    "HassCancelAllTimers",
+    "HassLightSet",
+    "HassMediaNext",
+    "HassMediaPause",
+    "HassMediaPlayerMute",
+    "HassMediaPlayerUnmute",
+    "HassMediaPrevious",
+    "HassMediaUnpause",
+    "HassSetVolume",
+    "HassSetVolumeRelative",
+})
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -123,7 +146,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "Max results to return (default 10).",
                     },
-                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["query"],
             },
@@ -137,9 +159,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Turn devices in an area on/off/toggle. Use for commands like "
                 "'lights in kitchen off', 'fans in bedroom on'. For a single "
                 "named device use HassTurnOn/HassTurnOff instead. "
-                "Pass area='all' whenever the user says 'all', 'every', "
+                "Pass area: 'all' whenever the user says 'all', 'every', "
                 "'everywhere' or 'whole house' ('all lights off' → "
-                "area='all'). Pass the room name when the user names one. "
+                "area: 'all'). Pass the room name when the user names one. "
                 "OMIT area ONLY when the user named neither — the plugin "
                 "then defaults to the calling satellite's room."
             ),
@@ -165,7 +187,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "enum": ["turn_on", "turn_off", "toggle"],
                     },
-                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["domain", "action"],
             },
@@ -184,8 +205,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "the area parameter entirely — the plugin will fall back "
                 "to the area of the satellite that received the request. "
                 "Do NOT guess or default to a specific room when none "
-                "was mentioned. The audio starting on the speaker IS "
-                "the confirmation — reply with an empty string."
+                "was mentioned."
             ),
             "parameters": {
                 "type": "object",
@@ -238,7 +258,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "'playlist'/'radio'."
                         ),
                     },
-                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["query"],
             },
@@ -259,15 +278,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "('stop'). 'louder' / 'lauter' → media_command('volume_up'). "
                 "'quieter' / 'leiser' → media_command('volume_down'). "
                 "'volume to 40 percent' → media_command('volume_set', "
-                "level=40). 'mute' / 'stumm' → media_command('mute'). "
+                "level: 40). 'mute' / 'stumm' → media_command('mute'). "
                 "'what's playing?' / 'was läuft?' / 'what song is this?' → "
                 "media_command('status'). Pass area only when the user names "
-                "a room ('pause hobby room', 'next track in the kitchen'); "
+                "a room ('pause hobby room', 'next track in the kitchen') and "
+                "name when they name a device ('mute the TV' → media_command"
+                "('mute', name: 'TV')); "
                 "otherwise the plugin auto-targets whichever media_player is "
-                "currently in the matching state. For playback CHANGES the "
-                "audio change IS the confirmation — reply with an empty "
-                "string. For 'status' DO answer the user with what the tool "
-                "returns."
+                "currently in the matching state. For 'status' answer the "
+                "user with what the tool returns."
             ),
             "parameters": {
                 "type": "object",
@@ -303,7 +322,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "playing speaker automatically."
                         ),
                     },
-                    **_EXPOSED_ONLY_PROP,
+                    "name": {
+                        "type": "string",
+                        "description": "The device, when the user named one.",
+                    },
                 },
                 "required": ["command"],
             },
@@ -335,17 +357,15 @@ TOOL_SCHEMAS.append(
             "name": "set_brightness",
             "description": (
                 "Make lights brighter or dimmer, set an absolute "
-                "brightness, or change their colour or white shade. Use "
-                "this for RELATIVE brightness requests — "
-                "HassLightSet is absolute only and cannot step. Examples: "
+                "brightness, or change their colour or white shade. Examples: "
                 "'brighter' / 'heller' / 'make it brighter in the living "
-                "room' -> set_brightness('brighter', area='living room'). "
+                "room' -> set_brightness('brighter', area: 'living room'). "
                 "'dimmer' / 'dunkler' / 'dim the lights' -> "
                 "set_brightness('dimmer'). 'set the lights to 40 percent' "
-                "-> set_brightness('set', level=40). 'make the light warm "
+                "-> set_brightness('set', level: 40). 'make the light warm "
                 "white' / 'Licht warmweiß' -> set_brightness('set', "
-                "color='warm white'). 'turn the lights blue' -> "
-                "set_brightness('set', color='blue'). Each brighter/dimmer "
+                "color: 'warm white'). 'turn the lights blue' -> "
+                "set_brightness('set', color: 'blue'). Each brighter/dimmer "
                 f"step is {_BRIGHTNESS_STEP_PP} percentage points and "
                 f"'dimmer' stops at {_BRIGHTNESS_FLOOR_PCT}% — it NEVER "
                 "turns lights off. To actually switch lights off use "
@@ -392,7 +412,6 @@ TOOL_SCHEMAS.append(
                             "colour changes and brightness stays."
                         ),
                     },
-                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["command"],
             },
@@ -594,7 +613,6 @@ TOOL_SCHEMAS.append(
                             "name and area for 'the heating'."
                         ),
                     },
-                    **_EXPOSED_ONLY_PROP,
                 },
                 "required": ["mode"],
             },

@@ -234,3 +234,32 @@ async def test_on_off_still_works_after_refactor(patched) -> None:
     assert result == (True, "")
     domain, service, eid = _last_call(hass)
     assert (domain, service, eid) == ("homeassistant", "turn_on", "light.mood")
+
+
+async def test_a_fragment_of_a_name_falls_through(patched):
+    """2026-11-03: "Turn the back on." turned on "Backup Lamp" in another room."""
+    hass, ent_reg, dev_reg = _make_hass([_entity("light.backup_lamp", name="Backup Lamp")])
+    patched(hass, ent_reg, dev_reg)
+    assert await async_try_action_shortcut(hass, "Turn the back on.", lang="en") is None
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_a_whole_word_of_a_name_still_matches(patched):
+    hass, ent_reg, dev_reg = _make_hass([_entity("light.reading", name="Reading Lamp")])
+    patched(hass, ent_reg, dev_reg)
+    handled = await async_try_action_shortcut(hass, "Turn on reading.", lang="en")
+    assert handled is not None
+    assert _last_call(hass) is not None
+
+
+async def test_a_word_shared_with_fragments_stays_ambiguous(patched):
+    """"Lampe" as a word in one name and a fragment of two more is no single lamp."""
+    hass, ent_reg, dev_reg = _make_hass([
+        _entity("light.printed", name="Gedruckte Lampe"),
+        _entity("light.floor_1", name="Stehlampe 1"),
+        _entity("light.floor_2", name="Stehlampe 2"),
+    ])
+    patched(hass, ent_reg, dev_reg)
+    assert await async_try_action_shortcut(hass, "Schalte Lampe ein", lang="de") is None
+    hass.services.async_call.assert_not_awaited()
+

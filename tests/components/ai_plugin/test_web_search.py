@@ -866,3 +866,13 @@ async def test_location_provider_caches_result(monkeypatch) -> None:
     assert a is b
     assert calls == 1
 
+
+
+def test_results_tell_the_model_to_prefer_them_over_its_memory() -> None:
+    """2026-11-03: two of four results named the current chancellor and one stale
+    snippet named the old one, and the model answered with the old name."""
+    from custom_components.ai_plugin.tools.web_search import _format_results
+
+    text = _format_results("q", [{"title": "T", "url": "", "snippet": "S"}])
+    assert "believe them over your memory" in text
+    assert "what most of them say" in text

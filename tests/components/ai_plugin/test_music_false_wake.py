@@ -185,7 +185,9 @@ async def test_the_dropped_turn_says_nothing_and_ends_the_session() -> None:
     ent._orchestrator.async_process.assert_not_awaited()
 
 
-async def test_the_switch_that_stops_echo_dropping_stops_this_too() -> None:
+async def test_the_echo_filter_switch_has_no_say_in_it() -> None:
+    """Off is how a home with its own echo handling runs. The guard stayed
+    dormant behind this switch after it shipped, and nobody could tell."""
     from custom_components.ai_plugin.const import CONF_BASE_URL, CONF_MODEL
 
     ent = _full_entity(options={
@@ -195,5 +197,6 @@ async def test_the_switch_that_stops_echo_dropping_stops_this_too() -> None:
         patch.object(conv, "satellite_entity", return_value="assist_satellite.hobby"),
         patch.object(conv, "room_players", return_value=["media_player.hobby"]),
     ):
-        await ent.async_process(_voice_input())
-    ent._orchestrator.async_process.assert_awaited_once()
+        result = await ent.async_process(_voice_input())
+    assert result.response.speech["plain"]["speech"] == ""
+    ent._orchestrator.async_process.assert_not_awaited()

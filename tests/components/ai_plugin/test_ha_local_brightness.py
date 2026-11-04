@@ -554,7 +554,7 @@ def test_both_prompts_route_colour_to_set_brightness() -> None:
     )
 
     for prompt in (SYSTEM_PROMPT_VOICE, SYSTEM_PROMPT_DEFAULT):
-        assert "color=" in prompt and "warm white" in prompt
+        assert "color:" in prompt and "warm white" in prompt
         assert "Never answer a colour request by changing only" in prompt
     schema = next(
         s for s in TOOL_SCHEMAS if s["function"]["name"] == "set_brightness"

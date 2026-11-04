@@ -26,6 +26,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from ..const import (
+    CONF_ENABLE_THINKING,
     BACKEND_SEARXNG,
     CONF_API_KEY,
     CONF_BASE_URL,
@@ -46,7 +47,6 @@ from ..const import (
     DEFAULT_WEB_SEARCH_BACKEND,
     DOMAIN,
     ERROR_INVALID_URL,
-    ERROR_CONTEXT_EXCEEDS_MODEL,
     ERROR_MODEL_NO_TOOLS,
     ERROR_MODEL_REQUIRED,
     PROVIDER_OPENAI_COMPAT,
@@ -57,6 +57,7 @@ from ..providers.openai_compat import (
     async_show_model,
     model_capabilities,
     model_context_length,
+    model_limit_errors,
 )
 
 
@@ -309,17 +310,22 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Step 4: Advanced settings + optional HA MCP quick-connect."""
         if user_input is not None:
             errors = _validate_advanced_input(user_input)
-            if not errors and user_input.get(CONF_CONTEXT_WINDOW):
-                # Fail-open Ollama check: reject a context window larger
-                # than the model can actually load.
+            if not errors and (
+                user_input.get(CONF_CONTEXT_WINDOW)
+                or user_input.get(CONF_ENABLE_THINKING)
+            ):
+                # Fail-open Ollama check: refuse what the model cannot do,
+                # here where it can be said, not later on a voice turn.
                 _show = await async_show_model(
                     str(self._options.get(CONF_BASE_URL, "")),
                     str(self._options.get(CONF_MODEL, "")),
                     api_key=self._options.get(CONF_API_KEY),
                 )
-                _limit = model_context_length(_show)
-                if _limit and int(user_input[CONF_CONTEXT_WINDOW]) > _limit:
-                    errors[CONF_CONTEXT_WINDOW] = ERROR_CONTEXT_EXCEEDS_MODEL
+                errors = model_limit_errors(
+                    user_input,
+                    model_capabilities(_show),
+                    model_context_length(_show),
+                )
             if errors:
                 schema = vol.Schema(
                     {

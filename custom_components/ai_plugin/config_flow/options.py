@@ -20,6 +20,7 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from ..const import (
+    CONF_ENABLE_THINKING,
     BACKEND_SEARXNG,
     CONF_API_KEY,
     CONF_BASE_URL,
@@ -38,16 +39,17 @@ from ..const import (
     DEFAULT_BASE_URL,
     DEFAULT_WEB_SEARCH_BACKEND,
     ERROR_INVALID_URL,
-    ERROR_CONTEXT_EXCEEDS_MODEL,
     ERROR_MODEL_NO_TOOLS,
     ERROR_MODEL_REQUIRED,
 )
 from ..exceptions import CannotConnect
+from ..option_values import merge_advanced_options
 from ..providers.openai_compat import (
     async_fetch_models,
     async_show_model,
     model_capabilities,
     model_context_length,
+    model_limit_errors,
 )
 
 
@@ -244,17 +246,22 @@ class AIPluginOptionsFlow(MCPServerStepsMixin, VoiceIDStepsMixin, config_entries
         """Edit advanced settings."""
         if user_input is not None:
             errors = _validate_advanced_input(user_input)
-            if not errors and user_input.get(CONF_CONTEXT_WINDOW):
-                # Fail-open Ollama check: reject a context window larger
-                # than the model can actually load.
+            if not errors and (
+                user_input.get(CONF_CONTEXT_WINDOW)
+                or user_input.get(CONF_ENABLE_THINKING)
+            ):
+                # Fail-open Ollama check: refuse what the model cannot do,
+                # here where it can be said, not later on a voice turn.
                 _show = await async_show_model(
                     str(self._options.get(CONF_BASE_URL, "")),
                     str(self._options.get(CONF_MODEL, "")),
                     api_key=self._options.get(CONF_API_KEY),
                 )
-                _limit = model_context_length(_show)
-                if _limit and int(user_input[CONF_CONTEXT_WINDOW]) > _limit:
-                    errors[CONF_CONTEXT_WINDOW] = ERROR_CONTEXT_EXCEEDS_MODEL
+                errors = model_limit_errors(
+                    user_input,
+                    model_capabilities(_show),
+                    model_context_length(_show),
+                )
             if errors:
                 return self.async_show_form(
                     step_id="advanced",
@@ -267,7 +274,7 @@ class AIPluginOptionsFlow(MCPServerStepsMixin, VoiceIDStepsMixin, config_entries
             for key in (CONF_TEMPERATURE, CONF_TOP_P):
                 if key in user_input:
                     user_input[key] = float(user_input[key])
-            self._options.update(user_input)
+            self._options = merge_advanced_options(self._options, user_input)
             return self.async_create_entry(title="", data=self._options)
 
         return self.async_show_form(

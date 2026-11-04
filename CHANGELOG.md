@@ -4,6 +4,151 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v1.1.0 — stays in the room, and says what it did
+
+### Heads-up when updating
+
+- **Telling Buddy something no longer saves it.** Only an explicit request does, such
+  as "remember" or "merk dir". A plain "I like tea" stays in the conversation only.
+- **A lights command that names nothing stays in the satellite's room,** and so does
+  anything that says "in here" or "hier". "All the lights" and a named room still work.
+- **Switching a satellite's pipeline language starts a new conversation,** so what was
+  said before the switch is gone from its memory.
+- **Eleven Home Assistant tools are no longer offered,** because a plugin tool covers
+  them (listed under Changed). A call that still arrives runs as before.
+
+### Known issue
+
+- **A satellite can answer its own reply.** When the reply plays on a separate speaker
+  that starts late, the microphone can reopen first and hear it. Seen once, with
+  *Ignore the satellite hearing its own reply* off. That option should catch it, but
+  it has not been tried against this case.
+
+### Fixed
+
+- **A misheard word could switch an unrelated device.** "Turn the back on." matched the
+  a lamp named "Backup Lamp". The on/off shortcut now matches a device name on whole words only,
+  and anything else goes to the model.
+- **A plain "Turn off the lights." could spread to other rooms.** Some models ask for the
+  whole home; refused, or even after succeeding, they then switched lamps one by one.
+  A lights command naming nothing else now stays in the satellite's room, as "in here"
+  does. "All the lights" and a named room still work.
+- **"In here" could reach other rooms.** The model could send another room, or a lamp
+  in another room. A command that says "in here" or "hier" now stays in the satellite's
+  room, unless it names a different room or excludes this one.
+- **"Every lamp a different colour" ended with one colour, in silence.** The model sent
+  several colours to the whole room, each replacing the last. A second room-wide colour
+  in one turn is no longer run, and the model is told to go lamp by lamp.
+- **"A show on Netflix" counted as a command.** "on" as a preposition triggered the
+  command retry and offered device tools on a question about TV.
+- **Clearing a setting in the options form did nothing.** The form leaves a cleared
+  field out and the old value stayed saved. Temperature, top_p and the other fields with
+  no default now really clear.
+- **A refused "forget" could say a stored fact was not stored.** When the request did
+  not name the fact, the plugin told the model to say so. It now says nothing was
+  removed and asks which fact is meant.
+- **"Enough for today." forced a web search.** A time word alone no longer forces one;
+  the message has to ask for something. "Enough for today" also ends the conversation.
+- **"Wake me." could set an alarm for a time nobody said.** Asking for an alarm and
+  naming no time now gets asked what time.
+- **"What day is today?" forced a web search.** The word "today" made a question the
+  clock already answers take 7 to 26 seconds. The day, date or time asked on its own no
+  longer searches.
+- **With reasoning on, a command could fail before its tool call.** The first reply to
+  a command is capped at 128 tokens, and reasoning counts against that. The cap no
+  longer applies while reasoning is on.
+- **"Enable model reasoning" broke every turn on a model that cannot reason.** Ollama
+  refuses such a request with HTTP 400, and the error was spoken as the reply. Settings
+  now refuse the option for such a model. If it gets there anyway, through a model
+  chosen later or an option saved earlier, replies work as usual without reasoning and
+  a notification says the option has no effect.
+- **"Forget" could say a stored fact was not there.** With a voice it did not
+  recognise, the plugin refuses to change memory, but the refusal only said nothing was
+  saved. The model then answered "I couldn't find that in my memory" with the fact
+  listed. It now says the voice was not recognised and to try again.
+- **A pipeline language switch kept the old conversation.** A satellite keeps its
+  conversation for 15 minutes, so after German turns an English pipeline went on
+  answering in German, and a German answer then reached English speech-to-text. A
+  change of pipeline language now starts a new conversation.
+- **"I've noted that" with nothing saved.** Stating a fact could get a spoken
+  confirmation with no save behind it. A reply that claims a save nothing backs is now
+  replaced by a sentence saying it was not saved and how to ask for it. With long-term
+  memory off it only says it was not saved. A reply after a tool ran is left alone,
+  including a memory tool you brought yourself.
+- **A web search could be read and still answered from memory.** One result naming
+  an out-of-date office holder was enough for the model to prefer the name it already
+  knew, though two others named the current one. Search results now tell it to believe them
+  over its memory and to go with what most of them say. This reduces the mistake but
+  does not remove it.
+- **Asking about the weather twice could give another place's weather.** The second
+  time the model answers from its earlier reading, and a word like "today" then forced
+  a web search with no location that replaced the answer and took 7 to 11 seconds.
+  Weather with no place named no longer forces a search.
+- **The first words of an answer to a follow-up question could be lost.** The
+  microphone stayed shut for about 2.5 seconds after the question ended, so "one
+  minute" arrived as "1.". The wait after the reply stops playing is now 0.3 seconds
+  instead of 1, and the room is checked twice as often.
+- **"Forget that I like X" could hang for 30 seconds and then fail.** With thinking
+  off the model copies the style of the examples it reads. Examples written as
+  `index=4` made it write that inside a tool call, where the server's grammar then
+  kept emitting digits until the request timed out (8 of 8 on one such request, none
+  of 6 after). Every example the model reads now uses `index: 4`, which also ended a
+  500 error on "Turn off the lights in 2 hours".
+- **"Cancel all my timers" could cancel nothing and still say it had.** Home
+  Assistant's own cancel-all skips any timer that carries a conversation command,
+  and announce mode puts one on every timer. `cancel_timer` now ends them all when
+  the request says all, and a room named in the request limits it to that room.
+- **"Set a timer for one minute." could take four tool calls.** The model sometimes
+  writes a number as `minutes=1` inside a tool call, and all of it arrived as one
+  argument name, so the timer was refused until the model wrote it differently.
+  Those arguments are now taken apart before the tool runs.
+- **"Play jazz" could hang for 30 seconds after the music had started.** Asking for
+  an empty reply after a music tool made the model repeat its thought marker until
+  the request timed out (9 of 20 on a captured request; a long German conversation 6
+  of 6). Nothing asks for an empty reply any more. Silence after music was already
+  done in code.
+- **An alarm set just after midnight could ring a day late.** The model sometimes adds
+  `day: tomorrow` to "wake me up at 7". Before 05:00 "tomorrow" now means the next
+  time that clock comes, which is also what it means when said at that hour.
+- **"Wake me up at 7 every weekday" no longer takes several refused calls** when the
+  model gives the repeat again as the day.
+- **"Unmute the bedroom"** works when the model passes the room as the device name.
+- **A device name copied with its room ("TV @ Living Room")** reaches the tool as "TV".
+- **With long-term memory off, a German "merk dir" was falsely confirmed.** It now
+  says it cannot save, in the user's language.
+- **An alarm clock symbol and the arms of a face such as `٩(◕‿◕)۶`** are now removed
+  from replies before they are spoken.
+- **The guard against music waking a satellite no longer depends on the self-echo
+  filter.** With *Ignore the satellite hearing its own reply* off, it never ran.
+  It now needs only voice recognition.
+
+### Changed
+
+- **Facts are stored only when you ask.** A fact is saved only on an explicit request
+  such as "remember" or "merk dir", in any of the shipped languages. The code enforces
+  this, not only the prompt.
+- **Smaller tool list.** Eleven Home Assistant tools that a plugin tool already
+  covers are no longer offered: pause, resume, next, previous, volume, relative
+  volume, mute, unmute, `HassLightSet`, `HassCancelAllTimers` and `GetDateTime`.
+  `exposed_only` stays only on `list_entities` and `get_entity`. On the install
+  this was measured on, the full request went from 12,632 to 11,248 tokens of a
+  16,384 context, leaving about 37% more room for history and the reply, and an
+  uncached read from 8.8 s to 8.0 s. Cached turns are as fast as before.
+- **Shorter voice prompt.** Rules that repeat a tool's description are gone: the full
+  request went from 11,254 to 10,725 tokens and an uncached read from 8.0 s to 7.6 s.
+  The alarm, reminder and message examples stay, because replays showed they steer
+  the model, for instance a message to one room going to every room without them.
+- **"Set an alarm for 10 minutes for the pasta"** now sets a named timer, and says so.
+  "Alarm in 10 minutes for the pasta" still sets an alarm.
+- **Setting the volume or muting is now silent, like other media commands.** The
+  change is the confirmation, and a spoken reply on a speaker playing music
+  interrupts it.
+- **"Set the volume to 40" with nothing playing** now means the speakers in the
+  satellite's room.
+- **`media_command` takes a device name**, so "mute the TV" still reaches the TV
+  now that Home Assistant's own volume tools are gone. A name that matches no
+  player is said back rather than applied to whatever is playing.
+
 ## v1.0.0 — alarms, reminders and music that makes room
 
 ### Heads-up when updating
@@ -53,8 +198,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   cancel a speaker that is not its own, so the music reads as someone still
   talking. A short command kept the microphone open for 4.7 to 7.1 s with music
   playing, and 1.2 to 2.1 s with this. It follows the satellite's state
-  in Home Assistant, so it works with or without Mic to MediaPlayer. A TV and
-  group players are left alone.
+  in Home Assistant, so it should work without Mic to MediaPlayer too, though
+  it has only been used with it so far. A TV and group players are left alone.
 - **"Play some music" plays from your saved taste.** *"Remember that I like
   jazz and soul"* once, then a random genre from it, a different playlist each
   time, shuffled. With nothing saved it asks what you would like to hear.

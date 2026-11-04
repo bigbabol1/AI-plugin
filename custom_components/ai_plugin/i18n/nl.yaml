@@ -60,6 +60,8 @@ templates:
   message_title:       "Bericht"
   message_title_from:  "Bericht van {name}"
   phrase_routine_refused: "Ik kan daar nog geen zin voor opslaan, dus er is niets ingesteld. Op een vast tijdstip kan het wel, als je zegt wanneer."
+  remember_not_saved: "Dat heb ik niet opgeslagen. Als ik het moet onthouden, zeg dan onthoud en daarna wat."
+  remember_not_saved_short: "Dat heb ik niet opgeslagen."
 keywords:
   time_now:      ["hoe laat is het", "wat is de tijd", "zeg me de tijd", "hoe laat"]
   sun_set:       ["zonsondergang", "wanneer gaat de zon onder", "hoe laat gaat de zon onder", "wanneer is zonsondergang", "wanneer wordt het donker"]
@@ -110,6 +112,27 @@ patterns:
     - '\bvanavond\b'
     - '\blater\b'
     - '\b(?:elke|iedere)\s+dag\b'
+  # A reply saying a fact was saved; said with nothing saved, it is replaced by remember_not_saved.
+  saved_claim:
+    - '\bik\s+heb\s+(?:het\s+|dat\s+)?(?:genoteerd|onthouden|opgeslagen)\b'
+    - '\bik\s+zal\s+(?:het\s+|dat\s+)?onthouden\b'
+    - '^genoteerd\b'
+  # A command for the room the satellite is in.
+  this_room:
+    - '\b(?:hier|deze\s+kamer)\b'
+  # Words that exclude it: "everywhere except here".
+  this_room_except:
+    - '\b(?:behalve|niet)\b'
+  # Asking for an alarm and naming no time: ask when, never guess.
+  alarm_no_time:
+    - '^(?:maak\s+me\s+wakker|zet\s+(?:een|de|mijn)\s+(?:wekker|alarm))(?:\s+alsjeblieft)?[\s.!?]*$'
+  # An explicit request to remember something; only this stores a fact.
+  remember_request:
+    - '\bonthoud\b'
+    - '\bvergeet\s+niet\b'
+    - '\bnoteer\b'
+    - '\bsla\b.*\bop\b'
+    - '\bbewaar\b'
   # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
   alarm_wake_request:
     - '\bmaak\s+(?:me|mij|ons)\b.*\bwakker\b'

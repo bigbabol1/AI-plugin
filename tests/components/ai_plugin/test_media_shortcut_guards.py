@@ -262,4 +262,136 @@ async def test_the_tool_says_when_there_is_nothing_to_continue(monkeypatch) -> N
     registry._is_exposed = lambda _: True
     result = await registry._media_command("resume", None, device_id=SAT)
     assert result.startswith("[Nothing is paused")
+
+
+@pytest.mark.parametrize("command", ["volume_set", "mute", "unmute", "volume_up"])
+async def test_volume_with_nothing_playing_means_this_room(monkeypatch, command) -> None:
+    """HassSetVolume, gone from the tool list, worked on an idle speaker too."""
+    from custom_components.ai_plugin.tools.ha_local import HALocalToolRegistry, media
+
+    hass = _home(monkeypatch, {HOBBY: ("idle", None), BATH: ("idle", None)})
+    ent_reg = shortcuts.registry.er.async_get(hass)
+    dev_reg = shortcuts.registry.dr.async_get(hass)
+    area_reg = MagicMock()
+    area_reg.async_get_area.side_effect = lambda area_id: (
+        SimpleNamespace(id=area_id) if area_id else None
+    )
+    monkeypatch.setattr(media.er, "async_get", lambda h: ent_reg)
+    monkeypatch.setattr(media.dr, "async_get", lambda h: dev_reg)
+    monkeypatch.setattr(media.ar, "async_get", lambda h: area_reg)
+    monkeypatch.setattr(
+        shortcuts.volume, "async_step_volume", AsyncMock(), raising=True
+    )
+    registry = HALocalToolRegistry(hass)
+    registry._is_exposed = lambda _: True
+    result = await registry._media_command(command, None, level=40, device_id=SAT)
+    assert result.startswith("OK") and HOBBY in result and BATH not in result
+
+
+async def test_volume_with_no_satellite_and_nothing_playing_says_so(monkeypatch) -> None:
+    from custom_components.ai_plugin.tools.ha_local import HALocalToolRegistry, media
+
+    hass = _home(monkeypatch, {HOBBY: ("idle", None)})
+    ent_reg = shortcuts.registry.er.async_get(hass)
+    area_reg = MagicMock()
+    area_reg.async_get_area.return_value = None
+    monkeypatch.setattr(media.er, "async_get", lambda h: ent_reg)
+    monkeypatch.setattr(media.ar, "async_get", lambda h: area_reg)
+    registry = HALocalToolRegistry(hass)
+    registry._is_exposed = lambda _: True
+    result = await registry._media_command("volume_set", None, level=40)
+    assert result.startswith("Nothing is")
+    hass.services.async_call.assert_not_awaited()
+    hass.services.async_call.assert_not_awaited()
+
+
+def _players(monkeypatch, players: dict[str, dict]):
+    """``players``: entity_id to its name, aliases, device class and exposure."""
+    from custom_components.ai_plugin.tools.ha_local import HALocalToolRegistry, media
+
+    hass = MagicMock()
+    ent_reg = MagicMock()
+    ent_reg.entities = {
+        eid: SimpleNamespace(
+            entity_id=eid, area_id=None, device_id=None, name=p.get("name"),
+            original_name=None, aliases=set(p.get("aliases", ())),
+        )
+        for eid, p in players.items()
+    }
+    hass.states.get.side_effect = lambda eid: SimpleNamespace(
+        state="idle",
+        attributes={
+            "friendly_name": players[eid].get("name"),
+            "device_class": players[eid].get("device_class", "speaker"),
+        },
+    )
+    hass.services.async_call = AsyncMock()
+    monkeypatch.setattr(media.er, "async_get", lambda h: ent_reg)
+    registry = HALocalToolRegistry(hass)
+    registry._is_exposed = lambda eid: players[eid].get("exposed", True)
+    registry._resolve_area = lambda name: None
+    return registry, hass
+
+
+@pytest.mark.parametrize(
+    "name, players, expected",
+    [
+        ("TV", {"media_player.a": {"name": "TV"}, "media_player.b": {"name": "Kitchen"}},
+         ["media_player.a"]),
+        ("Fernseher", {"media_player.a": {"name": "Wohnzimmer", "aliases": ["Fernseher"]}},
+         ["media_player.a"]),
+        ("TV", {"media_player.a": {"name": "Cast", "aliases": ["TV Chromecast"]}},
+         ["media_player.a"]),
+        ("TV", {"media_player.a": {"name": "Samsung Frame", "device_class": "tv"},
+                "media_player.b": {"name": "Radio"}},
+         ["media_player.a"]),
+        ("TV", {"media_player.a": {"name": "TV"},
+                "media_player.b": {"name": "Samsung Frame", "device_class": "tv"}},
+         ["media_player.a"]),
+    ],
+)
+async def test_a_named_player_is_the_target(monkeypatch, name, players, expected) -> None:
+    registry, hass = _players(monkeypatch, players)
+    assert (await registry._media_command("mute", None, name=name)).startswith("OK")
+    assert _targets(hass) == expected
+
+
+async def test_an_unknown_player_is_said_not_guessed(monkeypatch) -> None:
+    """Playing music elsewhere must not get muted for "mute the TV"."""
+    registry, hass = _players(monkeypatch, {"media_player.a": {"name": "Radio"}})
+    assert await registry._media_command("mute", None, name="TV") == (
+        "[No media player is called 'TV'.]"
+    )
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_a_room_given_as_the_device_is_the_room(monkeypatch) -> None:
+    """"Unmute the bedroom" came as name: 'bedroom' and was told no such player."""
+    registry, hass = _players(monkeypatch, {"media_player.a": {"name": "Speaker"}})
+    bedroom = SimpleNamespace(name="Bedroom", id="b")
+    registry._resolve_area = lambda name: bedroom if name == "bedroom" else None
+    registry._media_players_in_area = lambda area, exposed_only=True: ["media_player.a"]
+    assert (await registry._media_command("unmute", None, name="bedroom")).startswith("OK")
+    assert _targets(hass) == ["media_player.a"]
+
+
+async def test_a_player_that_is_not_exposed_is_not_found(monkeypatch) -> None:
+    registry, hass = _players(
+        monkeypatch, {"media_player.a": {"name": "TV", "exposed": False}}
+    )
+    assert (await registry._media_command("mute", None, name="TV")).startswith("[No media player")
+    hass.services.async_call.assert_not_awaited()
+
+
+async def test_a_device_passed_as_a_room_still_finds_it(monkeypatch) -> None:
+    registry, hass = _players(monkeypatch, {"media_player.a": {"name": "TV"}})
+    assert (await registry._media_command("pause", "TV")).startswith("OK")
+    assert _targets(hass) == ["media_player.a"]
+
+
+async def test_an_unknown_room_is_still_an_unknown_room(monkeypatch) -> None:
+    registry, hass = _players(monkeypatch, {"media_player.a": {"name": "TV"}})
+    assert await registry._media_command("pause", "Garden") == (
+        "Unknown area 'Garden'. Try list_areas."
+    )
     hass.services.async_call.assert_not_awaited()

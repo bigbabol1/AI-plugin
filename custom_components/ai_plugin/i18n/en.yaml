@@ -53,6 +53,8 @@ templates:
   message_title:       "Message"
   message_title_from:  "Message from {name}"
   phrase_routine_refused: "I can't save a phrase for that yet, so nothing was set. I can do it at a set time if you tell me when."
+  remember_not_saved: "I haven't saved that. If I should keep it, say remember and then the fact."
+  remember_not_saved_short: "I haven't saved that."
 keywords:
   time_now:      ["what time is it", "what is the time", "what's the time", "tell me the time", "current time"]
   sun_set:       ["when is sunset", "sunset", "when does the sun set", "when does the sun go down", "when does it get dark"]
@@ -100,6 +102,29 @@ patterns:
     - '\b(?:tomorrow|tonight|later)\b'
     - '\bthis\s+(?:evening|afternoon)\b'
     - '\bevery\s+(?:day|morning|evening|night|weekday|week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b'
+  # A reply saying a fact was saved; said with nothing saved, it is replaced by remember_not_saved.
+  saved_claim:
+    - '\bi(?:[\x27’]ve|\s+have)\s+(?:noted|saved|remembered|made\s+a\s+note)\b'
+    - '\bi(?:[\x27’]ll|\s+will)\s+(?:make\s+sure\s+to\s+)?(?:remember|keep\s+that\s+in\s+mind|make\s+a\s+note)\b'
+    - '^noted\b'
+  # A command for the room the satellite is in.
+  this_room:
+    - '\b(?:here|this\s+room)\b'
+  # Words that exclude it: "everywhere except here".
+  this_room_except:
+    - '\b(?:except|but|not|apart\s+from|other\s+than)\b'
+  # Asking for an alarm and naming no time: ask when, never guess.
+  alarm_no_time:
+    - '^(?:please\s+)?(?:wake\s+me(?:\s+up)?|get\s+me\s+up|set\s+(?:an?|the|my)\s+alarm)(?:\s+please)?[\s.!?]*$'
+  # An explicit request to remember something; only this stores a fact.
+  remember_request:
+    - '\bremember\b'
+    - '\bdon[\x27’]?t\s+forget\b'
+    - '\bdo\s+not\s+forget\b'
+    - '\bmake\s+a\s+note\b'
+    - '\bkeep\s+in\s+mind\b'
+    - '\bnote\s+(?:that|this|down)\b'
+    - '\bsave\s+(?:that|this)\b'
   # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
   alarm_wake_request:
     - '\b(?:wake\s+(?:me|us)|get\s+(?:me|us)\s+up)\b'

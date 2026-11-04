@@ -16,7 +16,7 @@ from custom_components.ai_plugin import scheduler as pkg
 from custom_components.ai_plugin.i18n import LOCALIZATIONS, L
 from custom_components.ai_plugin.orchestrator import core
 from custom_components.ai_plugin.providers import ChatResponse, ToolCall
-from custom_components.ai_plugin.scheduler import engine
+from custom_components.ai_plugin.scheduler import engine, when
 from custom_components.ai_plugin.scheduler.engine import (
     KIND_ALARM,
     KIND_COMMAND,
@@ -380,7 +380,7 @@ async def test_set_alarm(track) -> None:
         # Replayed: the model invented these for a plain alarm.
         ("Set an alarm in 30 seconds.", "en-US", "Alarm in 30 seconds", ""),
         ("Set an alarm in 10 seconds.", "en-US", "10 seconds", ""),
-        ("Set an alarm.", "en-US", "Alarm", ""),
+        ("Set an alarm at 7.", "en-US", "Alarm", ""),
         # Replayed: it echoed the request instead of saying what it is for.
         ("Wake me up in 10 minutes.", "en-US", "Wake me up", "Time to wake up."),
         ("Wake me up at 7.", "en-US", None, "Time to wake up."),
@@ -407,6 +407,27 @@ async def test_what_an_alarm_says(track, message, language, label, says) -> None
 def test_being_woken_is_recognised_in_every_language(message, lang) -> None:
     assert any(rx.search(message.lower()) for rx in L.pattern_list("alarm_wake_request", lang))
     assert L.template("alarm_wake", lang)
+
+
+@pytest.mark.parametrize("day", ["weekdays", "weekday", "Weekdays "])
+async def test_the_repeat_given_again_as_the_day_is_not_a_refusal(track, day) -> None:
+    """Refused, the model sent the same call until the tool limit ran out."""
+    scheduler = _scheduler()
+    out = await _call(scheduler, "set_alarm", {"at": "07:00", "day": day, "repeat": "weekdays"})
+    assert not out.startswith("[")
+    assert scheduler.jobs()[-1].repeat == "weekdays"
+
+
+@pytest.mark.parametrize("day", ["tomorrow", "morgen", "Tomorrow"])
+def test_just_after_midnight_tomorrow_is_after_the_night(day) -> None:
+    """At 01:12 "wake me up at 7" with day='tomorrow' would ring a day late."""
+    night = datetime(2026, 11, 2, 1, 12, tzinfo=TZ)
+    assert when.resolve(night, at="07:00", day=day) == datetime(2026, 11, 2, 7, 0, tzinfo=TZ)
+    # That clock time has gone, so the next one is the next day.
+    assert when.resolve(night, at="01:00", day=day) == datetime(2026, 11, 3, 1, 0, tzinfo=TZ)
+    # Once the day has begun it is the calendar's tomorrow.
+    morning = datetime(2026, 11, 2, 5, 0, tzinfo=TZ)
+    assert when.resolve(morning, at="07:00", day=day) == datetime(2026, 11, 3, 7, 0, tzinfo=TZ)
 
 
 async def test_a_repeating_alarm_keeps_its_clock_time(track) -> None:
@@ -849,3 +870,18 @@ async def test_a_retry_cannot_set_it_twice() -> None:
 
     kept = _readonly_schemas(pkg.TOOL_SCHEMAS)
     assert [s["function"]["name"] for s in kept] == ["list_scheduled"]
+
+
+async def test_an_alarm_with_no_time_is_not_set(track) -> None:
+    """2026-11-03: "Wake me." got an alarm for 06:00 that nobody asked for."""
+    from custom_components.ai_plugin.scheduler.tools import _async_add
+
+    scheduler = SimpleNamespace(async_add=AsyncMock(), now=lambda: None)
+    out = await _async_add(
+        scheduler, None, "set_alarm", {"at": "06:00"}, "sat", None, None, "en-US",
+        "Wake me.", None,
+    )
+    assert out.startswith("[Not set")
+    assert "what time" in out
+    scheduler.async_add.assert_not_awaited()
+

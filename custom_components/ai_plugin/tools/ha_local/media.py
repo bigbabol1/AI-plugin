@@ -27,6 +27,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _MUSIC_MEDIA_TYPES = {"track", "album", "artist", "playlist", "radio"}
 
+_TELEVISION_WORDS = {"tv", "television", "fernseher", "télé", "tele", "televisie", "telewizor"}
+
 
 _MEDIA_COMMAND_SERVICES = {
     "pause": "media_pause",
@@ -57,7 +59,7 @@ _NOTHING_NAMED_RE = re.compile(
 )
 NOTHING_NAMED_RESULT = (
     "[Nothing played: no music was named. If [USER FACTS] gives their taste, call "
-    "play_music again with its genres, comma separated, and from_taste=true. If it "
+    "play_music again with its genres, comma separated, and from_taste: true. If it "
     "does not, ask what they would like to hear.]"
 )
 _TASTE_WORDS_RE = re.compile(
@@ -371,6 +373,37 @@ class MediaToolsMixin:
         )
         return entity_id
 
+    def _media_players_named(self, name: str, exposed_only: bool = True) -> list[str]:
+        """Players called ``name``: exactly (name, alias or id), else with it as
+        a word in a name. "The TV" also finds a player of class tv, whatever
+        it is called."""
+        needle = name.strip().casefold()
+        exact: list[str] = []
+        partial: list[str] = []
+        televisions: list[str] = []
+        for eid, entry in er.async_get(self._hass).entities.items():
+            if not eid.startswith("media_player."):
+                continue
+            if exposed_only and not self._is_exposed(eid):
+                continue
+            state = self._hass.states.get(eid)
+            names = [_s(entry.name), _s(entry.original_name)]
+            names.extend(_s(alias) for alias in (entry.aliases or ()))
+            if state:
+                names.append(_s(state.attributes.get("friendly_name")))
+            names = [n.strip().casefold() for n in names if n]
+            if needle == eid or needle in names:
+                exact.append(eid)
+            elif any(re.search(rf"\b{re.escape(needle)}\b", n) for n in names):
+                partial.append(eid)
+            elif (
+                needle in _TELEVISION_WORDS
+                and state
+                and state.attributes.get("device_class") == "tv"
+            ):
+                televisions.append(eid)
+        return exact or partial or televisions
+
     def _media_players_in_area(
         self, target_area, exposed_only: bool = True
     ) -> list[str]:
@@ -401,8 +434,13 @@ class MediaToolsMixin:
         exposed_only: bool = True,
         level: int | None = None,
         device_id: str | None = None,
+        name: str | None = None,
     ) -> str:
         """Pause, resume, skip, stop, mute, or change volume.
+
+        With ``name``: targets the player called that. Without a match it says
+        so, because acting on whatever else is playing would be a silent wrong
+        answer. A device passed as ``area`` counts as a name.
 
         With ``area``: targets media_players in that area, preferring those
         already in a state the command applies to (playing for pause/next/
@@ -448,10 +486,21 @@ class MediaToolsMixin:
             "unmute": {"playing", "paused", "on"},
         }[command]
 
-        if area:
-            target_area = self._resolve_area(area)
-            if target_area is None:
+        named = self._media_players_named(name, exposed_only) if name else []
+        if name and not named and not area:
+            # "Unmute the bedroom": the model gave the room as the device.
+            if self._resolve_area(name) is None:
+                return f"[No media player is called {name!r}.]"
+            area = name
+        if not named and area and self._resolve_area(area) is None:
+            named = self._media_players_named(area, exposed_only)
+            if not named:
                 return f"Unknown area {area!r}. Try list_areas."
+
+        if named:
+            target_ids = sorted(named)
+        elif area:
+            target_area = self._resolve_area(area)
             candidates = self._media_players_in_area(target_area, exposed_only)
             if not candidates:
                 scope = "exposed " if exposed_only else ""
@@ -475,8 +524,16 @@ class MediaToolsMixin:
                 if st and st.state in relevant_states:
                     target_ids.append(eid)
             from ...shortcuts.media import narrow_media_targets  # noqa: PLC0415
+            from ...shortcuts.registry import _caller_area_id  # noqa: PLC0415
 
             target_ids = narrow_media_targets(self._hass, target_ids, device_id, command)
+            if not target_ids and command.startswith(("volume", "mute", "unmute")):
+                # Nothing is playing, and the volume can still be set for later.
+                caller_area = ar.async_get(self._hass).async_get_area(
+                    _caller_area_id(self._hass, device_id) or ""
+                )
+                if caller_area is not None:
+                    target_ids = self._media_players_in_area(caller_area, exposed_only)
             if command == "resume" and not target_ids:
                 return "[Nothing is paused, so there is nothing to continue. Ask what to play.]"
             if not target_ids:

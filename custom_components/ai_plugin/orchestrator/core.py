@@ -31,12 +31,15 @@ from typing import TYPE_CHECKING
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
     entity_registry as er,
 )
 
 from ..const import (
     CONF_CONTEXT_WINDOW,
     CONF_ENABLE_THINKING,
+    CONF_MODEL,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_SUMMARIZATION_ENABLED,
@@ -50,7 +53,7 @@ from ..const import (
     DOMAIN,
 )
 from ..context_manager import ContextManager
-from ..i18n import L
+from ..i18n import L, SUPPORTED_LANGS
 from ..providers.openai_compat import OpenAICompatProvider
 from ..shortcuts import (
     async_try_action_shortcut,
@@ -67,7 +70,10 @@ from ..shortcuts.phone import (
     person_for_user,
     resolve_owner,
 )
+from ..shortcuts.registry import _caller_area_id
 from ..tools.ha_local import HALocalToolRegistry
+from ..tools.ha_local.formatting import _s
+from ..tools.ha_local.lights import is_generic_lights_command
 from ..tools.ha_local.lights import hass_light_set_args
 from ..scheduler import (
     asks_for_phrase_routine,
@@ -83,9 +89,11 @@ from ..tools.calendar_events import (
     TOOL_SCHEMA as CALENDAR_SCHEMA,
     async_add_event,
 )
-from ..tools.ha_local.schemas import MOVE_MUSIC_SCHEMA
+from ..tools.ha_local.schemas import MOVE_MUSIC_SCHEMA, TOOLS_THE_PLUGIN_COVERS
 from ..tools.tell import TOOL_NAME as TELL_TOOL, TOOL_SCHEMA as TELL_SCHEMA, async_tell
 from ..tools.memory import (
+    asks_to_remember,
+    claims_saved,
     TOOL_NAMES as MEMORY_TOOL_NAMES,
     TOOL_SCHEMAS as MEMORY_TOOL_SCHEMAS,
     WRITE_TOOL_NAMES as MEMORY_WRITE_TOOLS,
@@ -129,7 +137,12 @@ from .textproc import (
 )
 from .timers import TimerAnnounceMixin
 from .warmup import PromptWarmupMixin
-from .toolcalls import _parse_raw_tool_call, _prune_ha_local_schemas, _readonly_schemas
+from .toolcalls import (
+    _parse_raw_tool_call,
+    _prune_ha_local_schemas,
+    _readonly_schemas,
+    name_without_room,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -148,6 +161,16 @@ TOOL_WAIT_LINE_DELAY_S = 2.0
 # to the configured 512 tokens, 18.9 s of silence before the action-command
 # retry could step in. Capped, such a reply ends after ~4 s.
 ACTION_FIRST_REPLY_MAX_TOKENS = 128
+
+# Returned instead of a second room-wide colour in one turn. Asked for "each lamp
+# a different colour", K2 Horizon sent three colours to the whole room and the last
+# replaced the others, in silence, since each call succeeded (2026-11-03).
+ROOM_COLOUR_REPLACED_RESULT = (
+    "[Not changed: another colour for the whole room would only replace the one "
+    "just set. To give lamps different colours, call set_brightness once per lamp "
+    "with name and color; list_entities(domain: 'light') names them. If one colour "
+    "was all that was asked for, stop here.]"
+)
 
 # Returned instead of running a look-up the model already ran, with the same
 # arguments, earlier in the same turn. A DHL drop-off question on 2026-10-27
@@ -177,6 +200,39 @@ _IN_SCHEDULED_RUN: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+def says_this_room(message: str) -> bool:
+    """True when a command is for the room the speaker is in: "in here", "hier"."""
+    text = (message or "").lower()
+
+    def found(key: str) -> bool:
+        return any(
+            rx.search(text)
+            for code in SUPPORTED_LANGS
+            for rx in L.pattern_list(key, code)
+        )
+
+    return found("this_room") and not found("this_room_except")
+
+
+def _room_colour_scope(name: str, arguments: dict) -> tuple[str, str] | None:
+    """(room, colour) when this call colours a whole room, else None."""
+    if name != "set_brightness" or arguments.get("name"):
+        return None
+    colour = str(arguments.get("color") or "").strip().lower()
+    if not colour:
+        return None
+    return str(arguments.get("area") or "").strip().lower(), colour
+
+
+def _remember_was_refused(tool_msgs: list[dict]) -> bool:
+    """True when a tool result in this turn says nothing was saved."""
+    return any(
+        str(m.get("content") or "").startswith("[Not saved")
+        for m in tool_msgs
+        if m.get("role") == "tool"
+    )
+
+
 class Orchestrator(
     EntityContextMixin, PromptBlocksMixin, PromptWarmupMixin, TimerAnnounceMixin
 ):
@@ -185,6 +241,8 @@ class Orchestrator(
     One Orchestrator instance per config entry. Created at platform
     setup; replaced on options change via full entry reload.
     """
+
+    _thinking_announced = False
 
     # Voice recognition manager (None when the entry has none).
     _voice_id = None
@@ -293,6 +351,11 @@ class Orchestrator(
     ) -> list[dict]:
         """The tool schemas sent with a turn, in the order they are sent."""
         tool_schemas = self._mcp.get_tool_schemas() if self._mcp else []
+        if self._ha_local is not None:
+            tool_schemas = [
+                s for s in tool_schemas
+                if s.get("function", {}).get("name") not in TOOLS_THE_PLUGIN_COVERS
+            ]
         if self._web_search is not None:
             tool_schemas = [WEB_SEARCH_SCHEMA, *tool_schemas]
         if self._browse_url is not None:
@@ -393,7 +456,7 @@ class Orchestrator(
         # else keeps the fully-buffered behaviour.
         stream_safe = (
             on_delta is not None
-            and not self._entry.options.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING)
+            and not self._reasoning_active()
             and not _is_state_set_query(message)
             and not _is_action_command(message)
             and not (self._web_search is not None and _is_online_query(message))
@@ -713,7 +776,7 @@ class Orchestrator(
                         "CRITICAL: The user asked about the CURRENT state across a domain "
                         "(e.g. which lights are on, any windows open). You did NOT call "
                         "list_entities. Answering from memory is wrong. Call "
-                        "list_entities(domain=..., state=...) now, then answer from the "
+                        "list_entities(domain: ..., state: ...) now, then answer from the "
                         "returned rows."
                     ),
                 })
@@ -871,9 +934,9 @@ class Orchestrator(
                         f"({message!r}). You must CALL a tool to execute it — "
                         "do NOT just say 'I'll turn it on'. For whole-home "
                         "actions ('all lights on', 'all lights off', 'all "
-                        "off'): CALL set_area_state(area='all', "
-                        "domain='light', action='turn_on') (or 'turn_off') — "
-                        "area='all' is required, omitting it means this room "
+                        "off'): CALL set_area_state(area: 'all', "
+                        "domain: 'light', action: 'turn_on') (or 'turn_off') — "
+                        "area: 'all' is required, omitting it means this room "
                         "only. For one room: pass that room as area. "
                         "For a specific device: CALL "
                         "search_entities then HassTurnOn/HassTurnOff with the "
@@ -953,6 +1016,26 @@ class Orchestrator(
             # reply. "Done." in its place did not help (0 of 10, all stalls).
             media_acted = _any_media_success(tool_msgs)
             actuator_acted = _any_actuator_success(tool_msgs)
+            # The rule in the prompt alone left "I live in Utah." answered with
+            # "I've noted that you live in Utah." and no tool call, 8 of 8 in
+            # replay. A claim that nothing backs must not reach the user or
+            # history, where the model would take it as true. Turns with other
+            # tools stay out of this: "noted" can be about a calendar entry, or
+            # come from a memory tool the user brought. With long-term memory
+            # off it happened 18 of 18, and "say remember" would be no help.
+            if (
+                not tool_msgs or _remember_was_refused(tool_msgs)
+            ) and claims_saved(stored_reply):
+                _LOGGER.info(
+                    "AI Plugin: reply claimed a fact was saved, but none was: %r",
+                    stored_reply[:120],
+                )
+                stored_reply = reply = L.template(
+                    "remember_not_saved"
+                    if self._memory is not None
+                    else "remember_not_saved_short",
+                    lang,
+                )
             history_reply = stored_reply
             if (
                 actuator_acted
@@ -986,6 +1069,7 @@ class Orchestrator(
             gate.flush_final(stored_reply)
 
             await self._context_mgr.add_turn(conversation_id, "assistant", history_reply)
+            await self._announce_thinking_refused()
 
             # Track last-controlled entities for explicit context injection.
             # Defensive: registry quirks (e.g. ComputedNameType) must never
@@ -1154,6 +1238,7 @@ class Orchestrator(
         last_response = None
         history_messages: list[dict] = []
         seen_lookups: set[str] = set()
+        room_colour: tuple[str, str] | None = None
         valid_tool_names = {
             s.get("function", {}).get("name")
             for s in tool_schemas
@@ -1164,9 +1249,12 @@ class Orchestrator(
         for iteration in range(self._max_tool_iterations):
             # Only the first reply to an action command is capped: later
             # ones answer from tool results and may need to say more.
+            # Reasoning counts against the same limit, so with it on the cap ran
+            # out before the tool call: "Turn on the light." failed 4 of 4.
             cap = (
                 {"max_tokens": ACTION_FIRST_REPLY_MAX_TOKENS}
-                if action_command and iteration == 0 else {}
+                if action_command and iteration == 0 and not self._reasoning_active()
+                else {}
             )
             if gate is not None and gate.active:
                 # Drop any unemitted tail from the previous iteration —
@@ -1248,6 +1336,20 @@ class Orchestrator(
                     continue
                 if lookup_key is not None:
                     seen_lookups.add(lookup_key)
+                colour_scope = _room_colour_scope(tc.name, tc.arguments)
+                if colour_scope is not None and room_colour is not None and (
+                    colour_scope[0] == room_colour[0] and colour_scope[1] != room_colour[1]
+                ):
+                    _LOGGER.info(
+                        "AI Plugin: second colour %r for the same room in one turn — not run",
+                        colour_scope[1],
+                    )
+                    msg = tc.to_tool_result_message(ROOM_COLOUR_REPLACED_RESULT)
+                    messages.append(msg)
+                    history_messages.append(msg)
+                    continue
+                if colour_scope is not None and room_colour is None:
+                    room_colour = colour_scope
                 self._arm_wait_line(wait, tc.name, voice_mode, device_id, gate)
                 tool_started = time.monotonic()
                 result = await self._dispatch_tool(
@@ -1288,6 +1390,109 @@ class Orchestrator(
         suffix = " " + L.template("note_tool_limit", _lang)
         return (last_response.reply_text() if last_response else "") + suffix, history_messages
 
+    def _reasoning_active(self) -> bool:
+        """The option is on and the model has not refused it."""
+        return bool(
+            self._entry.options.get(CONF_ENABLE_THINKING, DEFAULT_ENABLE_THINKING)
+        ) and getattr(self._provider, "thinking_refused", False) is not True
+
+    async def _announce_thinking_refused(self) -> None:
+        """Say once, where it will be seen, that the option has no effect.
+
+        Settings refuse it for such a model, but a model chosen later or an
+        option saved earlier still gets here. The turn is answered regardless.
+        """
+        if (
+            getattr(self._provider, "thinking_refused", False) is not True
+            or self._thinking_announced
+            or self._hass is None
+        ):
+            return
+        self._thinking_announced = True
+        await self._hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "title": "AI Plugin",
+                "message": (
+                    f"The model {self._entry.options.get(CONF_MODEL, '')} cannot "
+                    "reason, so 'Enable model reasoning' has no effect. Replies "
+                    "work as usual. Turn the option off or choose a model that can."
+                ),
+                "notification_id": "ai_plugin_no_reasoning",
+            },
+            blocking=False,
+        )
+
+    def _confine_to_this_room(
+        self, name: str, arguments: dict, user_message: str, device_id: str | None
+    ) -> tuple[dict, str | None]:
+        """Hold "in here" to the satellite's room, whatever the model sent.
+
+        "Switch every lamp in here to a different color" came back in replay
+        with four rooms as the area (2026-11-03). A plain "Turn off the lights."
+        means this room too: K2 Horizon sent area 'all' 25 of 49 times, and even
+        after a success went on to lamps in other rooms (5 of 16). Returns the
+        arguments to use, and a refusal when the named device is in another room.
+        """
+        if name not in _ACTUATOR_TOOL_NAMES or not (
+            says_this_room(user_message) or is_generic_lights_command(user_message)
+        ):
+            return arguments, None
+        room = self._this_room(device_id, user_message)
+        if room is None:
+            return arguments, None
+        device = _s(arguments.get("name")).strip()
+        if device:
+            if self._named_device_elsewhere(device, room):
+                return arguments, (
+                    f"[Not changed: {device} is not in this room. Tell the user, "
+                    "and name a device that is here.]"
+                )
+            return arguments, None
+        if "area" in arguments or name in ("set_brightness", "set_area_state"):
+            return {**arguments, "area": room}, None
+        return arguments, None
+
+    def _this_room(self, device_id: str | None, user_message: str) -> str | None:
+        """The satellite's room, unless the message names a different one, as in
+        "turn off the kitchen light from here"."""
+        if self._hass is None or not device_id:
+            return None
+        area_id = _caller_area_id(self._hass, device_id)
+        if not area_id:
+            return None
+        area = ar.async_get(self._hass).async_get_area(area_id)
+        if area is None:
+            return None
+        named = self._ha_local._area_named_in_message(user_message) if self._ha_local else None
+        if named and named.lower() != area.name.lower():
+            return None
+        return area.name
+
+    def _named_device_elsewhere(self, device: str, room: str) -> bool:
+        """True when the name matches devices and none of them is in this room.
+        A name that matches nothing is left to the tool, which says so."""
+        ent_reg = er.async_get(self._hass)
+        dev_reg = dr.async_get(self._hass)
+        area_reg = ar.async_get(self._hass)
+        needle = device.lower()
+        found = False
+        for eid, entry in ent_reg.entities.items():
+            state = self._hass.states.get(eid)
+            friendly = _s(state.attributes.get("friendly_name") if state else "").lower()
+            if needle != eid.lower() and needle not in friendly:
+                continue
+            found = True
+            area_id = entry.area_id
+            if not area_id and entry.device_id:
+                dev = dev_reg.async_get(entry.device_id)
+                area_id = dev.area_id if dev else None
+            area = area_reg.async_get_area(area_id) if area_id else None
+            if area is not None and area.name.lower() == room.lower():
+                return False
+        return found
+
     def _speaker_unrecognised(self, device_id: str | None) -> bool:
         """True when voice ID checked this device's turn and knew nobody:
         facts said then would land in a store that is no one's."""
@@ -1306,6 +1511,11 @@ class Orchestrator(
         available_tools: set[str] | None = None,
     ) -> str:
         """Route a tool call to ha_local, memory, web search, or MCP. Never raises."""
+        arguments, refused = self._confine_to_this_room(
+            name, arguments, user_message, device_id
+        )
+        if refused:
+            return refused
         if self._ha_local is not None and name in self._ha_local.tool_names:
             return await self._ha_local.call_tool(
                 name, arguments,
@@ -1358,9 +1568,32 @@ class Orchestrator(
             )
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             if name in MEMORY_WRITE_TOOLS and self._speaker_unrecognised(device_id):
+                _LOGGER.debug("AI Plugin: %s refused: voice not recognised", name)
+                # Named for what it is: "nothing was saved" on a forget came out
+                # as "I couldn't find that in my memory", with the fact listed
+                # (2026-11-03), and the user could not know to try again.
+                if name == "forget":
+                    return (
+                        "[Not removed: the speaker's voice was not recognised, so "
+                        "their facts cannot be changed. Tell the user you did not "
+                        "recognise their voice, so nothing was removed, and to try "
+                        "again.]"
+                    )
                 return (
                     "[Not saved: the speaker's voice was not recognised, so nothing "
-                    "can be stored for them. Tell the user nothing was saved.]"
+                    "can be stored for them. Tell the user you did not recognise "
+                    "their voice, so nothing was saved, and to try again.]"
+                )
+            if (
+                name == "remember"
+                and user_message
+                and not asks_to_remember(
+                    user_message, (language or "en").split("-")[0].lower()
+                )
+            ):
+                return (
+                    "[Not saved: the user did not ask you to remember this. Do not "
+                    "say it was saved or noted. Reply to what they said.]"
                 )
             return await self._memory.call_tool(
                 name, arguments, user_id=user_id, user_message=user_message
@@ -1386,7 +1619,7 @@ class Orchestrator(
         if self._mcp is not None:
             if name == "HassLightSet":
                 arguments = hass_light_set_args(arguments)
-            return await self._mcp.call_tool(name, arguments)
+            return await self._mcp.call_tool(name, name_without_room(arguments))
         return f"[Tool {name!r} unavailable — no handler configured]"
 
 

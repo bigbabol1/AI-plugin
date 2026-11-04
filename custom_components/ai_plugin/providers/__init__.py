@@ -91,6 +91,43 @@ def openai_tool_schema(mcp_tool: Any) -> dict[str, Any]:
     }
 
 
+def _plain_value(text: str) -> Any:
+    """A value written inside a key, as the type it would have had."""
+    value = text.strip().strip("'\"")
+    if value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    for kind in (int, float):
+        try:
+            return kind(value)
+        except ValueError:
+            pass
+    return value
+
+
+def _unglue_arguments(arguments: Any) -> Any:
+    """{"minutes=1,name": "pasta"} becomes {"minutes": 1, "name": "pasta"}.
+
+    gemma sometimes writes a number as ``minutes=1`` inside a tool call, and the
+    runtime's parser then takes everything up to the next colon for one key. The
+    tool sees no duration and refuses, and the model tries again: "Set a timer
+    for one minute." took four calls and 3.5 s more (2026-11-02). A key the
+    arguments spell out themselves wins over one recovered this way.
+    """
+    if not isinstance(arguments, dict):
+        return arguments
+    out = {key: value for key, value in arguments.items() if "=" not in key}
+    for key, value in arguments.items():
+        if "=" not in key:
+            continue
+        parts = [part.partition("=") for part in key.split(",")]
+        if not all(name.strip().isidentifier() for name, _, _ in parts):
+            out[key] = value
+            continue
+        for name, equals, written in parts:
+            out.setdefault(name.strip(), _plain_value(written) if equals else value)
+    return out
+
+
 def normalize_tool_calls(raw_message: dict[str, Any]) -> list[ToolCall]:
     """Extract and normalise tool calls from a provider response message.
 
@@ -106,7 +143,9 @@ def normalize_tool_calls(raw_message: dict[str, Any]) -> list[ToolCall]:
             name = fn["name"]
             raw_args = fn.get("arguments", "{}")
             arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            result.append(ToolCall(id=tc.get("id", name), name=name, arguments=arguments))
+            result.append(
+                ToolCall(id=tc.get("id", name), name=name, arguments=_unglue_arguments(arguments))
+            )
         except (KeyError, json.JSONDecodeError) as exc:
             _LOGGER.warning("Skipping malformed tool call: %s — %s", tc, exc)
     return result

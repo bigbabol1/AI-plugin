@@ -472,3 +472,95 @@ async def test_read_in_is_skipped_on_servers_other_than_ollama() -> None:
     provider = _make_ollama_provider(None)
     provider._is_ollama = False
     assert await provider.async_warm([{"role": "user", "content": "."}]) is None
+
+
+def _thinking_provider() -> OpenAICompatProvider:
+    provider = OpenAICompatProvider(
+        base_url="http://localhost:11434/v1", model="gemma:test", api_key=None,
+        timeout=30, enable_thinking=True,
+    )
+    provider._is_ollama = True
+    return provider
+
+
+def _refused(text: str) -> MagicMock:
+    resp = _mock_response(400, {})
+    resp.status = 400
+    resp.text = AsyncMock(return_value=text)
+    resp.raise_for_status = MagicMock(side_effect=aiohttp.ClientError("400 Bad Request"))
+    return resp
+
+
+async def test_a_model_that_cannot_reason_still_answers(caplog) -> None:
+    """2026-11-03: the option broke every voice turn on such a model."""
+    provider = _thinking_provider()
+    refused = _refused('{"error":"\\"gemma:test\\" does not support thinking"}')
+    answered = _mock_response(200, {"message": {"content": "ok"}})
+    sent: list[bool] = []
+
+    def post(url, **kwargs):
+        sent.append(kwargs["json"]["think"])
+        return refused if len(sent) == 1 else answered
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.post = post
+        first = await provider.async_chat([{"role": "user", "content": "hi"}])
+        second = await provider.async_chat([{"role": "user", "content": "hi"}])
+
+    assert first.content == "ok" and second.content == "ok"
+    # Refused once, then not asked again.
+    assert sent == [True, False, False]
+    assert provider.thinking_refused is True
+    warnings = [r for r in caplog.records if "cannot reason" in r.getMessage()]
+    assert len(warnings) == 1 and "gemma:test" in warnings[0].getMessage()
+
+
+async def test_another_bad_request_still_fails_and_logs_why(caplog) -> None:
+    provider = _thinking_provider()
+    sent: list[bool] = []
+
+    def post(url, **kwargs):
+        sent.append(kwargs["json"]["think"])
+        return _refused('{"error":"model not found"}')
+
+    with patch.object(provider, "_get_session") as mock_session:
+        mock_session.return_value.post = post
+        with pytest.raises(OrchestratorError):
+            await provider.async_chat([{"role": "user", "content": "hi"}])
+
+    assert sent == [True]
+    assert any("model not found" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("user_input", "capabilities", "limit", "expected"),
+    [
+        ({"enable_thinking": True}, ["completion", "tools"], None,
+         {"enable_thinking": "model_no_thinking"}),
+        ({"enable_thinking": True}, ["tools", "thinking"], None, {}),
+        # Not Ollama, or Ollama did not answer: unknown is not "no".
+        ({"enable_thinking": True}, None, None, {}),
+        ({"enable_thinking": False}, ["tools"], None, {}),
+        ({"context_window": 32768}, ["tools"], 16384,
+         {"context_window": "context_exceeds_model"}),
+        ({"context_window": 8192}, ["tools"], 16384, {}),
+    ],
+)
+def test_model_limit_errors(user_input, capabilities, limit, expected) -> None:
+    from custom_components.ai_plugin.providers.openai_compat import model_limit_errors
+
+    assert model_limit_errors(user_input, capabilities, limit) == expected
+
+
+def test_a_cleared_setting_is_removed_and_others_stay() -> None:
+    from custom_components.ai_plugin.option_values import merge_advanced_options
+
+    saved = {"temperature": 1.0, "top_p": 0.4, "model": "m", "max_tokens": 512}
+    merged = merge_advanced_options(saved, {"max_tokens": 256})
+    assert merged == {"model": "m", "max_tokens": 256}
+    # A form that kept them keeps them.
+    assert merge_advanced_options(saved, {"temperature": 0.7, "top_p": 0.4, "max_tokens": 512})[
+        "temperature"
+    ] == 0.7
+    assert saved["temperature"] == 1.0
+

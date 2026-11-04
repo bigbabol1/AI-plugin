@@ -53,6 +53,8 @@ templates:
   message_title:       "Nachricht"
   message_title_from:  "Nachricht von {name}"
   phrase_routine_refused: "Einen Satz dafür kann ich mir noch nicht merken, also ist nichts eingestellt. Zu einer festen Uhrzeit geht es, sag mir dann wann."
+  remember_not_saved: "Das habe ich nicht gespeichert. Wenn ich es behalten soll, sag merk dir und dann, was."
+  remember_not_saved_short: "Das habe ich nicht gespeichert."
 keywords:
   time_now:      ["wie spät ist es", "wie viel uhr ist es", "wieviel uhr ist es", "sag mir die uhrzeit", "wie spät"]
   sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]
@@ -102,6 +104,32 @@ patterns:
     - '\bheute\s+abend\b'
     - '\b(?:später|nachher)\b'
     - '\bjeden\s+(?:tag|morgen|abend|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b'
+  # A reply saying a fact was saved; said with nothing saved, it is replaced by remember_not_saved.
+  saved_claim:
+    - '\b(?:ich\s+habe|habe\s+ich)\s+(?:(?:mir|das|es)\s+)*(?:gemerkt|notiert|gespeichert)\b'
+    - '\bich\s+merke\s+(?:(?:mir|das|es)\s+)+'
+    - '\bmerke\s+ich\s+mir\b'
+    - '\bich\s+werde\s+(?:(?:mir|das|es)\s+)*(?:merken|behalten|notieren|speichern)\b'
+    - '^notiert\b'
+    - '\bist\s+notiert\b'
+  # A command for the room the satellite is in.
+  this_room:
+    - '\b(?:hier|diesem\s+raum|diesem\s+zimmer)\b'
+  # Words that exclude it: "everywhere except here".
+  this_room_except:
+    - '\b(?:außer|ausser|nicht)\b'
+  # Asking for an alarm and naming no time: ask when, never guess.
+  alarm_no_time:
+    - '^(?:bitte\s+)?(?:weck(?:e)?\s+mich(?:\s+auf)?|stell(?:e)?\s+(?:einen|den|meinen)\s+wecker|stell(?:e)?\s+(?:einen|den)\s+alarm)(?:\s+bitte)?[\s.!?]*$'
+  # An explicit request to remember something; only this stores a fact.
+  remember_request:
+    - '\bmerk(?:e|t|en)?\b'
+    - '\bnotier\w*\b'
+    - '\bspeicher\w*\b'
+    - '\bvergiss\s+nicht\b'
+    - '\bnicht\s+vergessen\b'
+    - '\berinner\w*\s+dich\b'
+    - '\bbehalt\w*\b'
   # An alarm the user wants to be woken by says alarm_wake; any other stays neutral.
   alarm_wake_request:
     - '\bweck\w*\s+(?:mich|uns)\b'

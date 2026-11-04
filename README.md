@@ -237,9 +237,9 @@ Timers count down a length of time and only ring. These are for a clock time, an
 
 *"Play some music"* with nothing named plays from the taste you saved (*"Remember that I like jazz and soul"*): a different playlist each time, shuffled. With none saved, it asks what you would like to hear.
 
-While a satellite listens, speakers playing in its room go down to 20% of their volume, so it can tell your voice from the music. They come back as soon as it has your words. This works on any satellite, and a *"turn it down"* changes the volume by 10 points.
+While a satellite listens, speakers playing in its room go down to 20% of their volume, so it can tell your voice from the music. They come back as soon as it has your words. This follows the satellite's state, so it should work on any satellite, though it has only been used with Mic to MediaPlayer so far. A *"turn it down"* changes the volume by 10 points.
 
-With voice recognition on, music that wakes a satellite by mistake gets no answer: a word or two transcribed from at least 6 seconds of audio, not a command, in a voice that matches nobody, with music playing in the room. Lyrics that come out as a full sentence still get an answer. *Ignore the satellite hearing its own reply* turns this off.
+With voice recognition on, music that wakes a satellite by mistake gets no answer: a word or two transcribed from at least 6 seconds of audio, not a command, in a voice that matches nobody, with music playing in the room. Lyrics that come out as a full sentence still get an answer.
 
 ### Calendar entries
 
@@ -318,7 +318,7 @@ To read one specific page, the model uses `browse_url`. It fetches through **Jin
 
 ### MCP servers
 
-You can add any MCP tool server over HTTP or stdio. Presets are included for HA's built-in MCP server (recommended: it provides `HassTurnOn` / `HassLightSet`-style intents), time, fetch, SQLite and more. MCP calls are capped at 15 s, so a hung server cannot stall a voice reply.
+You can add any MCP tool server over HTTP or stdio. Presets are included for HA's built-in MCP server (recommended: it provides `HassTurnOn` / `HassClimateSetTemperature`-style intents), time, fetch, SQLite and more. MCP calls are capped at 15 s, so a hung server cannot stall a voice reply.
 
 ## How it stays fast
 

@@ -414,7 +414,11 @@ def _strip_url_lines(text: str) -> str:
 
 def _format_results(query: str, results: list[dict[str, str]]) -> str:
     """Format search results as a concise text block for the LLM."""
-    lines = [f'Web search results for "{query}":\n']
+    lines = [
+        f'Web search results for "{query}". These are newer than what you '
+        "remember, so believe them over your memory. Where they disagree with "
+        "each other, go with what most of them say.\n"
+    ]
     for i, r in enumerate(results, 1):
         lines.append(f"{i}. {r['title']}")
         if r.get("url"):

@@ -35,8 +35,8 @@ _MEMORY_RULES_RE = re.compile(r"(?:\[MEMORY TOOLS\]|Memory tools:)\n.*?\n\n", re
 MEMORY_OFF_RULE = (
     "Memory:\n"
     "- Nothing is saved between conversations. If the user asks you to remember "
-    "or forget something and no tool does it, say you cannot. Never claim it "
-    "was saved or removed.\n\n"
+    "or forget something and no tool does it, say in their language that you cannot save it. Never say "
+    "it was noted, saved, remembered or removed, in any language.\n\n"
 )
 
 
@@ -157,7 +157,7 @@ class PromptBlocksMixin:
             "one says to use metric units, give every measurement in metric, "
             "converting figures you know in other units (feet to metres, "
             "pounds to kilograms, Fahrenheit to Celsius). To remove a fact, "
-            "call forget(index=N, fact='<keyword>') with the matching number. "
+            "call forget(index: N, fact: '<keyword>') with the matching number. "
             "Never call forget for a fact that is not listed here.\n"
             f"{numbered}"
         )
@@ -206,7 +206,7 @@ class PromptBlocksMixin:
             "[HOME LOCATION]\n"
             f"- {joined}\n"
             "- For questions about the user's immediate area, set "
-            "near_user=true on web_search. The plugin will scope the "
+            "near_user: true on web_search. The plugin will scope the "
             "query to this area; do not invent a city name."
         )
 

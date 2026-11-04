@@ -250,9 +250,10 @@ async def test_unrecognised_speaker_cannot_save_to_memory() -> None:
     orch = _voice_orch(_fake_voice())
     await _run(orch)
     orch._memory = _memory()
-    for tool in ("remember", "forget"):
+    for tool, refusal in (("remember", "[Not saved"), ("forget", "[Not removed")):
         out = await orch._dispatch_tool(tool, {"fact": "My name is Art"}, device_id="sat1")
-        assert out.startswith("[Not saved")
+        assert out.startswith(refusal)
+        assert "did not recognise their voice" in out
     orch._memory.call_tool.assert_not_called()
     await orch._dispatch_tool("recall", {}, device_id="sat1")
     orch._memory.call_tool.assert_awaited_once()

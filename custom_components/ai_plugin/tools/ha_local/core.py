@@ -16,7 +16,7 @@ the model's context; overflow reports a truncation count so the model can
 narrow the filter and retry.
 
 Single-device actions (set brightness, set temperature, etc.) still flow
-through HA's built-in MCP server tools (HassTurnOn, HassLightSet, etc.).
+through HA's built-in MCP server tools (HassTurnOn, HassClimateSetTemperature, etc.).
 """
 
 from __future__ import annotations
@@ -323,6 +323,7 @@ class HALocalToolRegistry(
                     exposed_only=exposed_only,
                     level=arguments.get("level"),
                     device_id=device_id,
+                    name=_s(arguments.get("name")).strip() or None,
                 )
             return f"[Unknown local tool: {name!r}]"
         except Exception as exc:  # noqa: BLE001

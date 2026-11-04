@@ -91,6 +91,15 @@ def _parse_utterance_duration(text: str) -> dict[str, int] | None:
 
 _TIMER_WORD_SUFFIX_RE = re.compile(r"[\s\-]*(?:timer|wecker|countdown)$")
 
+# "Cancel all my timers", "Alle Timer abbrechen". Narrower than the lights' own
+# said-all check: "komplett" there would end two timers on "den Timer komplett
+# abbrechen", where the question of which one still has to be asked.
+_ALL_TIMERS_RE = re.compile(
+    r"\b(?:all|every(?:thing)?|alle[srnm]?|s[äa]mtliche[srn]?|tous|toutes|"
+    r"todos|todas|wszystkie|wszystkich)\b",
+    re.IGNORECASE,
+)
+
 
 
 def _timer_name_key(name: object) -> str:
@@ -198,6 +207,20 @@ class TimerToolsMixin:
                     (user_message or "")[:80], parsed,
                 )
 
+        # The words spoken decide, not a tool argument: offered "all", the model
+        # sent it for a plain "Cancel the timer." too (4 of 4 replays).
+        spoken_name = _s((slots.get("name") or {}).get("value"))
+        if (
+            tool_name == "cancel_timer"
+            and _ALL_TIMERS_RE.search(user_message or "")
+            and (
+                not spoken_name
+                or _ALL_TIMERS_RE.search(spoken_name)
+                # "... in the kitchen" arrives as name="kitchen" (4 of 4 replays).
+                or self._resolve_area(spoken_name) is not None
+            )
+        ):
+            return self._cancel_all_timers(user_message)
         if tool_name != "start_timer":
             return self._manage_timer(tool_name, slots, device_id)
 
@@ -274,6 +297,44 @@ class TimerToolsMixin:
             pass
         return speech or f"OK — {intent_type} dispatched."
 
+    def _visible_timers(self, manager: Any) -> list[Any]:
+        """This plugin's timers and plain ones, without other integrations'
+        delayed commands ("turn off the lights in 10 minutes"), as in HA."""
+        from ...const import TIMER_DONE_SENTINEL  # noqa: PLC0415
+
+        return [
+            t for t in list(manager.timers.values())
+            if not t.conversation_command
+            or t.conversation_command.startswith(TIMER_DONE_SENTINEL)
+        ]
+
+    def _cancel_all_timers(self, user_message: str) -> str:
+        """Cancel every timer, or every timer in a room the user named.
+
+        The room comes from the words spoken, because "cancel all timers in
+        the kitchen" must not reach the bedroom when the model leaves it out.
+        """
+        manager = self._hass.data.get(_TIMER_DATA_KEY)
+        if manager is None:
+            return "[Voice timers are unavailable — HA's intent integration is not loaded.]"
+        timers = self._visible_timers(manager)
+        spoken_room = self._area_named_in_message(user_message)
+        area = self._resolve_area(spoken_room) if spoken_room else None
+        where = ""
+        if area is not None:
+            timers = [t for t in timers if t.area_id == area.id]
+            where = f" in {area.name}"
+        if not timers:
+            return f"No timers are running{where}."
+        try:
+            for timer in timers:
+                manager.cancel_timer(timer.id)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI Plugin cancel all timers failed")
+            return f"[cancel_timer error: {exc}]"
+        count = len(timers)
+        return f"Cancelled {count} timer{'' if count == 1 else 's'}{where}."
+
     def _manage_timer(
         self, tool_name: str, slots: dict[str, Any], device_id: str | None
     ) -> str:
@@ -287,20 +348,12 @@ class TimerToolsMixin:
         are read from the manager and changed by id — which also returns the
         remaining time as text, where the intent's response carries no speech.
 
-        Other integrations' delayed-command timers ("turn off the lights in
-        10 minutes") stay excluded, as they are in HA.
         """
-        from ...const import TIMER_DONE_SENTINEL  # noqa: PLC0415
-
         manager = self._hass.data.get(_TIMER_DATA_KEY)
         if manager is None:
             return "[Voice timers are unavailable — HA's intent integration is not loaded.]"
 
-        timers = [
-            t for t in list(manager.timers.values())
-            if not t.conversation_command
-            or t.conversation_command.startswith(TIMER_DONE_SENTINEL)
-        ]
+        timers = self._visible_timers(manager)
         # The calling satellite's own timers first.
         timers.sort(key=lambda t: t.device_id != device_id)
         if not timers:

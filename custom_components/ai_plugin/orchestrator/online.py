@@ -100,6 +100,52 @@ _PERSONAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Weather with no place named means here, which the home's weather entity
+# answers. Asked a second time in a conversation the model answers from its
+# earlier reading, and "today" then forced a search with no location that replaced
+# that answer with another place's weather (2026-11-03; 12 of 12 in replay).
+_WEATHER_RE = re.compile(
+    r"\b(?:weather|rain(?:ing|y)?|snow(?:ing|y)?|sunny|"
+    r"wetter(?:vorhersage|bericht)?|regen|regnet|schnee|schneit|sonnig)\b",
+    re.IGNORECASE,
+)
+
+
+# The day, date or time, asked as nothing else: [CURRENT TIME] answers it. "What
+# day is today?" forced a search on 2026-11-03, 7 to 26 seconds for an answer the
+# model already had. Matched whole, so "what day is the match today?" still
+# searches.
+_CLOCK_QUESTION_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:what|which)(?:['’]s|\s+is)?\s+(?:the\s+)?(?:day|date|time|year|month)"
+    r"(?:\s+is\s+(?:it|today))?"
+    r"(?:\s+(?:is\s+it\s+)?(?:today|right\s+now|now|currently|at\s+the\s+moment))?"
+    r"|what(?:['’]s|\s+is)\s+today['’]?s\s+date"
+    # German
+    r"|welche[rs]?\s+(?:tag|datum)\s+(?:ist|haben\s+wir)(?:\s+heute)?"
+    r"|was\s+für\s+ein\s+tag\s+ist\s+heute"
+    r"|(?:der|den)\s+wievielte[n]?\s+(?:ist|haben\s+wir)\s+heute"
+    r"|wie\s+spät\s+ist\s+es(?:\s+(?:gerade|jetzt|im\s+moment))?"
+    r")\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
+# Does the message ask for anything? A time word alone is no question: "Enough
+# for today." forced a search and turned a goodbye into talk of a trip
+# (2026-11-03).
+_ASKS_RE = re.compile(
+    r"\?|^\s*(?:"
+    r"what|who|whom|whose|when|where|why|how|which|is|are|was|were|do|does|did|"
+    r"can|could|will|would|has|have|any|tell|show|give|find|search|look|check|read|"
+    # German
+    r"wer|wen|wem|wann|wo|woher|wohin|warum|wieso|weshalb|wie|welche[rsmn]?|ist|"
+    r"sind|gibt|gab|hat|haben|kann|kannst|wird|sag|zeig|such|finde?|gib|lies"
+    r")\b|\b(?:news|headlines|nachrichten|schlagzeilen)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_online_query(text: str) -> bool:
     """Return True when the message almost certainly needs live web data.
 
@@ -122,7 +168,11 @@ def _is_online_query(text: str) -> bool:
         return False
     if _PERSONAL_RE.search(text):
         return False
-    if _TEMPORAL_ANCHOR_RE.search(text):
+    if _WEATHER_RE.search(text) and not _PLACE_QUERY_RE.search(text):
+        return False
+    if _CLOCK_QUESTION_RE.match(text):
+        return False
+    if _TEMPORAL_ANCHOR_RE.search(text) and _ASKS_RE.search(text):
         return True
     if _PLACE_QUERY_RE.search(text) and _EVENT_VERB_RE.search(text):
         return True

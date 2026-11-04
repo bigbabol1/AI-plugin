@@ -175,7 +175,12 @@ def _any_unobservable_action(tool_msgs: list[dict]) -> bool:
 _ACTION_COMMAND_RE = re.compile(
     r"^\s*(?:"
     # English: "Lights on", "Bedroom off", "X on/off/dim", verbs
-    r"(?:[\w\s]{2,40}\s+(?:on|off|aus|an)|"
+    # What follows on/off is what tells a switch from a preposition: "a show on
+    # Netflix" got the command retry and its tools on 2026-11-03.
+    r"(?:[\w\s]{2,40}\s+(?:on|off|aus|an)"
+    r"(?=\s*(?:[.!?,]|$)|\s+(?:please|now|again|in|for|"
+    r"bitte|jetzt|wieder|im|mal)\b)|"
+    r"(?:(?:please|can\s+you|could\s+you|would\s+you|will\s+you)\s+)*"
     r"(?:turn|switch|toggle|put|set|dim|brighten|fade)\s+\S+)"
     # German: "Licht an/aus", "Schalte X ein/aus"
     r"|(?:licht|lichter|lampe|lampen|fan|ventilator|stehlampe|"

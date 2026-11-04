@@ -141,6 +141,12 @@ _NOT_A_PURPOSE = frozenset({
 WRITE_TOOL_NAMES = ("set_alarm", "set_reminder", "schedule_action", "cancel_scheduled")
 
 
+def _names_no_alarm_time(message: str, lang: str) -> bool:
+    """True when the whole message only asks for an alarm: "Wake me."."""
+    text = (message or "").strip().lower()
+    return any(rx.match(text) for rx in L.pattern_list("alarm_no_time", lang))
+
+
 def names_later_time(message: str, lang: str) -> bool:
     """True when the words put a command in the future: "in 30 minutes"."""
     text = (message or "").lower()
@@ -241,6 +247,10 @@ async def _async_add(
     resolve_person,
 ) -> str:
     lang = language.split("-")[0].lower()
+    # "Wake me." got an alarm for 06:00 tomorrow that nobody asked for
+    # (2026-11-03): the model fills in a time rather than asking.
+    if name == "set_alarm" and _names_no_alarm_time(user_message, lang):
+        return "[Not set: the user named no time. Ask what time the alarm should ring.]"
     # A reminder for someone else goes to them, not to whoever is speaking.
     for_name = str(arguments.get("person") or "").strip() if name == "set_reminder" else ""
     someone_else = False
