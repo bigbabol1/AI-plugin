@@ -25,7 +25,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   and setup failed with `cannot import name 'streamablehttp_client'`. The plugin now
   works with `mcp` 1 and 2, so older Home Assistant versions keep working. HTTP, SSE and
   stdio servers are all handled, and a failed tool call still reads as failed.
-- **Buddy could say it had changed a reminder when it hadn't.** A reply claiming an alarm
+- **The assistant could say it had changed a reminder when it hadn't.** A reply claiming an alarm
   or reminder was changed, when none was, is now replaced by "I haven't changed anything.
   Tell me the new time and I'll set it." in the speaker's language.
 - **A corrected reminder could fire at both times.** The model often set the new time
@@ -42,7 +42,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Heads-up when updating
 
-- **Telling Buddy something no longer saves it.** Only an explicit request does, such
+- **Telling the assistant something no longer saves it.** Only an explicit request does, such
   as "remember" or "merk dir". A plain "I like tea" stays in the conversation only.
 - **A lights command that names nothing stays in the satellite's room,** and so does
   anything that says "in here" or "hier". "All the lights" and a named room still work.
@@ -916,7 +916,7 @@ All four changes target the same number: seconds between speaking and hearing th
 ## v0.9.0 — Data-driven multilingual support
 
 **Breaking:**
-- `trigger_languages` config option removed. Language now follows the HA Assist pipeline (`Buddy (DE)`, `Buddy (FR)`, etc.).
+- `trigger_languages` config option removed. Language now follows the HA Assist pipeline (`Assist (DE)`, `Assist (FR)`, etc.).
 
 **New:**
 - All per-language data lives in `custom_components/ai_plugin/i18n/<code>.yaml` files. Adding a new language is a YAML PR — no Python changes.
@@ -951,7 +951,7 @@ All four changes target the same number: seconds between speaking and hearing th
 ### Fixed
 
 - **Adding any MCP preset that needs a path (SQLite, filesystem) failed with "unknown error"** (`config_flow.py`, `strings.json`, `translations/en.json`). The preset-config form passed `selector.TextSelectorConfig(placeholder=...)`, but `placeholder` is not a valid `TextSelectorConfig` field — HA core whitelists only `multiline / prefix / suffix / type / autocomplete / multiple`. Voluptuous rejected the unknown key on schema build and HA surfaced the generic "unknown error" string with no log line tying it to the config flow. Fix: drop the kwarg, surface the example path through `description_placeholders["example"]` instead, and append `Example: {example}` to the step description so users still see the suggested path.
-- **SQLite preset now suggests a non-conflicting path** (`config_flow.py`). Old example `/config/home-assistant_v2.db` is HA's recorder DB and is locked for writes while HA runs — `mcp-server-sqlite` exposes `write_query` and `create_table`, so any LLM-issued write would have collided with the recorder. New example `/config/buddy_notes.db` is auto-created by `mcp-server-sqlite` on first connect (`Path.parent.mkdir(parents=True, exist_ok=True)` + `sqlite3.connect(...)`) and gives the model a private scratchpad to read and write without fighting the recorder. The label was updated to reflect the scratchpad use case.
+- **SQLite preset now suggests a non-conflicting path** (`config_flow.py`). Old example `/config/home-assistant_v2.db` is HA's recorder DB and is locked for writes while HA runs — `mcp-server-sqlite` exposes `write_query` and `create_table`, so any LLM-issued write would have collided with the recorder. New example `/config/assistant_notes.db` is auto-created by `mcp-server-sqlite` on first connect (`Path.parent.mkdir(parents=True, exist_ok=True)` + `sqlite3.connect(...)`) and gives the model a private scratchpad to read and write without fighting the recorder. The label was updated to reflect the scratchpad use case.
 
 ### Removed
 

@@ -594,7 +594,7 @@ def _pipeline(pid, agent, engine):
 async def test_switch_and_restore_only_our_pipelines(registry) -> None:
     from custom_components.ai_plugin.voice_id import pipelines
 
-    ours = _pipeline("buddy", "conversation.ai_plugin", "stt.home_assistant_cloud")
+    ours = _pipeline("assist", "conversation.ai_plugin", "stt.home_assistant_cloud")
     other = _pipeline("ha", "conversation.home_assistant", "stt.home_assistant_cloud")
     ap.PIPELINES.extend([ours, other])
     mgr = _manager()
@@ -602,7 +602,7 @@ async def test_switch_and_restore_only_our_pipelines(registry) -> None:
     assert await pipelines.async_switch(mgr._hass, mgr._entry, mgr) == 1
     assert ours.stt_engine == "stt.ai_plugin_voice_id"
     assert other.stt_engine == "stt.home_assistant_cloud"
-    assert mgr.pipeline_originals == {"buddy": "stt.home_assistant_cloud"}
+    assert mgr.pipeline_originals == {"assist": "stt.home_assistant_cloud"}
     # Switching again changes nothing; the wrapped engine is still known.
     assert await pipelines.async_switch(mgr._hass, mgr._entry, mgr) == 0
     assert pipelines.engines_to_wrap(mgr._hass, mgr._entry, mgr) == ["stt.home_assistant_cloud"]
@@ -614,7 +614,7 @@ async def test_switch_and_restore_only_our_pipelines(registry) -> None:
 async def test_restore_leaves_a_hand_changed_pipeline_alone(registry) -> None:
     from custom_components.ai_plugin.voice_id import pipelines
 
-    ours = _pipeline("buddy", "conversation.ai_plugin", "stt.home_assistant_cloud")
+    ours = _pipeline("assist", "conversation.ai_plugin", "stt.home_assistant_cloud")
     ap.PIPELINES.append(ours)
     mgr = _manager()
     await pipelines.async_switch(mgr._hass, mgr._entry, mgr)
@@ -720,7 +720,7 @@ def _routed_flow(answer_after_listen: bool):
     mgr = _manager([ANNA])
     flow = _Flow(mgr)
     routed = SimpleNamespace(
-        pipeline_id="buddy", media_player_entity_id="media_player.bedroom",
+        pipeline_id="assist", media_player_entity_id="media_player.bedroom",
         matches_satellite_id=lambda sat: sat == "assist_satellite.kitchen",
     )
     flow.hass.data["mic_to_mediaplayer"] = {"e1": routed}
@@ -745,7 +745,7 @@ def _routed_flow(answer_after_listen: bool):
         if eid == "media_player.bedroom":
             return SimpleNamespace(state=speaker.pop(0) if speaker else "idle", attributes={})
         if eid == "select.kitchen_assistant":
-            return SimpleNamespace(state="Buddy (DE)", attributes={"options": ["preferred", "Buddy", "Buddy (DE)"]})
+            return SimpleNamespace(state="Assist (DE)", attributes={"options": ["preferred", "Assist", "Assist (DE)"]})
         return SimpleNamespace(state="idle", attributes={})
 
     flow.hass.states.get = MagicMock(side_effect=_state)
@@ -770,9 +770,9 @@ async def _run_background(background):
 
 
 _PIPELINES = [
-    SimpleNamespace(id="buddy", name="Buddy", language="en", conversation_engine="conversation.ai_plugin", tts_engine="tts.cloud",
+    SimpleNamespace(id="assist", name="Assist", language="en", conversation_engine="conversation.ai_plugin", tts_engine="tts.cloud",
                     tts_language="en-US", tts_voice="LunaNeural"),
-    SimpleNamespace(id="buddy_de", name="Buddy (DE)", language="de", conversation_engine="conversation.ai_plugin", tts_engine="tts.cloud",
+    SimpleNamespace(id="assist_de", name="Assist (DE)", language="de", conversation_engine="conversation.ai_plugin", tts_engine="tts.cloud",
                     tts_language="de-DE", tts_voice="MajaNeural"),
 ]
 

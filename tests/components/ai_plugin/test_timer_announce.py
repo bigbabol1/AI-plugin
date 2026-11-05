@@ -190,10 +190,10 @@ def _pipelines(monkeypatch, selects: dict[str, str]):
     import homeassistant.components.assist_pipeline as ap
     import homeassistant.helpers.entity_registry as er
 
-    buddy = SimpleNamespace(name="Buddy", language="en")
-    buddy_de = SimpleNamespace(name="Buddy (DE)", language="de")
-    monkeypatch.setattr(ap, "async_get_pipeline", lambda h, pid=None: buddy)
-    monkeypatch.setattr(ap, "async_get_pipelines", lambda h: [buddy, buddy_de])
+    assist = SimpleNamespace(name="Assist", language="en")
+    assist_de = SimpleNamespace(name="Assist (DE)", language="de")
+    monkeypatch.setattr(ap, "async_get_pipeline", lambda h, pid=None: assist)
+    monkeypatch.setattr(ap, "async_get_pipelines", lambda h: [assist, assist_de])
     entries = {
         eid: _select(eid, "abc-pipeline_2" if eid.endswith("_2") else "abc-pipeline")
         for eid in selects
@@ -201,21 +201,21 @@ def _pipelines(monkeypatch, selects: dict[str, str]):
     monkeypatch.setattr(er, "async_get", lambda h: SimpleNamespace(entities=entries))
     hass = MagicMock()
     hass.states.get.side_effect = lambda eid: SimpleNamespace(
-        state=selects[eid], attributes={"options": ["preferred", "Buddy", "Buddy (DE)"]}
+        state=selects[eid], attributes={"options": ["preferred", "Assist", "Assist (DE)"]}
     )
     return hass
 
 
 def test_main_pipeline_without_a_language(monkeypatch) -> None:
     hass = _pipelines(monkeypatch, {
-        "select.sat_assistant_2": "Buddy (DE)", "select.sat_assistant": "preferred",
+        "select.sat_assistant_2": "Assist (DE)", "select.sat_assistant": "preferred",
     })
-    assert satellite_speech.satellite_pipeline(hass, "dev1").name == "Buddy"
+    assert satellite_speech.satellite_pipeline(hass, "dev1").name == "Assist"
 
 
 def test_second_wake_word_pipeline_in_the_timer_language(monkeypatch) -> None:
     hass = _pipelines(monkeypatch, {
-        "select.sat_assistant": "Buddy", "select.sat_assistant_2": "Buddy (DE)",
+        "select.sat_assistant": "Assist", "select.sat_assistant_2": "Assist (DE)",
     })
-    assert satellite_speech.satellite_pipeline(hass, "dev1", "de").name == "Buddy (DE)"
-    assert satellite_speech.satellite_pipeline(hass, "dev1", "fr").name == "Buddy"
+    assert satellite_speech.satellite_pipeline(hass, "dev1", "de").name == "Assist (DE)"
+    assert satellite_speech.satellite_pipeline(hass, "dev1", "fr").name == "Assist"
