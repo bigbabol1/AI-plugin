@@ -4,6 +4,40 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v1.1.1 — works on Home Assistant 2026.11
+
+### Heads-up when updating
+
+- **Correcting a reminder or alarm now replaces it.** "Actually, make it 4" removes the
+  earlier one if it has the same text, kind, repeat setting and person or room. Saying
+  "also" or "another" keeps both.
+
+### Known issues
+
+- **A correction may not find the earlier reminder when the speaker isn't recognised,**
+  because it was stored under a person. The old reminder then stays.
+- **A satellite can answer its own reply.** Unchanged from v1.1.0: when the reply plays
+  on a separate speaker that starts late, the microphone can reopen first and hear it.
+
+### Fixed
+
+- **The plugin did not load on Home Assistant 2026.11.** That version moved to `mcp` 2,
+  and setup failed with `cannot import name 'streamablehttp_client'`. The plugin now
+  works with `mcp` 1 and 2, so older Home Assistant versions keep working. HTTP, SSE and
+  stdio servers are all handled, and a failed tool call still reads as failed.
+- **Buddy could say it had changed a reminder when it hadn't.** A reply claiming an alarm
+  or reminder was changed, when none was, is now replaced by "I haven't changed anything.
+  Tell me the new time and I'll set it." in the speaker's language.
+- **A corrected reminder could fire at both times.** The model often set the new time
+  without cancelling the old one, then said it had updated it.
+- **Stray characters reached the speaker.** Leftovers of emoticons, such as `٩ⅴ` or `⸜⸜`,
+  are removed from replies. Ordinary punctuation and text in other scripts stay.
+
+### Changed
+
+- **CI runs the tests against both `mcp` 1 and `mcp` 2.** The test requirements pinned
+  `mcp` below 2, which is why the failure above was not caught in advance.
+
 ## v1.1.0 — stays in the room, and says what it did
 
 ### Heads-up when updating
@@ -927,7 +961,7 @@ All four changes target the same number: seconds between speaking and hearing th
 
 - **Mistral 7B added to the bench, Llama 3.1 row removed.** Fresh 51-prompt voice-mode sweep against `mistral:7b` Q4_K_M scored 82.4 % (42/51) at median 0.4 s — fastest of the four tested but the only one that fabricated a German weather forecast for `wie ist das wetter?` instead of calling a tool, and it dumps the system prompt verbatim on bare nouns like `weather` / `events` / `temperature`. Llama 3.1 8B was never benched in this round so it has been pulled from the table; recommendations remain Qwen3 8B for voice, Qwen2.5 7B for text.
 - **Ollama-only disclaimer.** Features list now states upfront that only Ollama has been exercised end-to-end. The OpenAI-compatible endpoint should accept OpenAI / xAI / LM Studio / llama.cpp, but those paths are untested.
-- **Removed local IP / failure-analysis subsection / stale troubleshooting bullet.** The `192.168.0.66:11435` reference, the per-prompt qwen failure-analysis tables, and the obsolete `"Any lights on?" answers about a single light — fixed in v0.5.38` troubleshooting line are all dropped from the README.
+- **Removed local IP / failure-analysis subsection / stale troubleshooting bullet.** The local address reference, the per-prompt qwen failure-analysis tables, and the obsolete `"Any lights on?" answers about a single light — fixed in v0.5.38` troubleshooting line are all dropped from the README.
 
 ## [0.5.46] - 2026-04-26
 

@@ -242,8 +242,8 @@ class VoiceIDManager:
     def find_person(self, name: str) -> str | None:
         """Match a spoken name to exactly one person entity, else None.
 
-        Speech-to-text mangles names ("Arndt Geafer" came back as "Aunt
-        Gaither" and "aren't Jaffer"), so this is fuzzy: the best of the
+        Speech-to-text mangles names, often into ordinary words, so this
+        is fuzzy: the best of the
         whole-name and per-word similarity must reach NAME_MATCH_MIN and lead
         the next person by NAME_MATCH_LEAD. Only HA's own people compete, and
         the session's first sentence says the name back, so a wrong pick is

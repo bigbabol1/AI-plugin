@@ -62,6 +62,7 @@ templates:
   phrase_routine_refused: "Ik kan daar nog geen zin voor opslaan, dus er is niets ingesteld. Op een vast tijdstip kan het wel, als je zegt wanneer."
   remember_not_saved: "Dat heb ik niet opgeslagen. Als ik het moet onthouden, zeg dan onthoud en daarna wat."
   remember_not_saved_short: "Dat heb ik niet opgeslagen."
+  schedule_not_changed: "Ik heb niets gewijzigd. Zeg de nieuwe tijd en ik stel hem in."
 keywords:
   time_now:      ["hoe laat is het", "wat is de tijd", "zeg me de tijd", "hoe laat"]
   sun_set:       ["zonsondergang", "wanneer gaat de zon onder", "hoe laat gaat de zon onder", "wanneer is zonsondergang", "wanneer wordt het donker"]
@@ -117,6 +118,19 @@ patterns:
     - '\bik\s+heb\s+(?:het\s+|dat\s+)?(?:genoteerd|onthouden|opgeslagen)\b'
     - '\bik\s+zal\s+(?:het\s+|dat\s+)?onthouden\b'
     - '^genoteerd\b'
+  # A reply saying a reminder or alarm was moved. Checked against what the turn really did.
+  schedule_changed_claim:
+    - '(?<!niet\s)\b(?:bijgewerkt|gewijzigd|veranderd|verplaatst|aangepast|gecorrigeerd)\b'
+  # Words for a reminder or alarm, to tell such a claim from one about a calendar entry.
+  schedule_thing:
+    - '\b(?:herinnering(?:en)?|wekkers?|alarm(?:en)?)\b'
+  # A user correcting something they just asked for: a new reminder then replaces its old twin.
+  schedule_correction:
+    - '\b(?:mijn\s+fout|eigenlijk|in\s+plaats\s+daarvan|ik\s+bedoelde|sorry|correctie|fout|verander\w*|wijzig\w*|verplaats\w*)\b'
+    - '^nee\b'
+  # A user asking for one more: the old reminder stays even if the wording sounds like a correction.
+  schedule_keep_both:
+    - '\b(?:ook|nog\s+een|extra|tweede|daarnaast)\b'
   # A command for the room the satellite is in.
   this_room:
     - '\b(?:hier|deze\s+kamer)\b'

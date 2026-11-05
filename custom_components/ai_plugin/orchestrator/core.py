@@ -82,6 +82,8 @@ from ..scheduler import (
     WRITE_TOOL_NAMES as SCHEDULER_WRITE_TOOL_NAMES,
     Job,
     async_call_tool as async_call_scheduler_tool,
+    async_drop_replaced,
+    claims_schedule_changed,
     names_later_time,
 )
 from ..tools.calendar_events import (
@@ -445,10 +447,12 @@ class Orchestrator(
 
         # "Stop" or "snooze" while an alarm rings: before everything else, or
         # the media shortcut takes "stop" and the alarm rings on.
+        jobs_before: set[str] | None = None
         if getattr(self, "_scheduler", None) is not None:
             alarm_reply = await self._scheduler.async_handle_spoken(message, device_id, lang)
             if alarm_reply is not None:
                 return alarm_reply
+            jobs_before = {job.id for job in self._scheduler.jobs()}
 
         # Streaming gate: forward sentence-complete deltas to the voice
         # pipeline for early TTS — but only on turns where no verifier can
@@ -1036,6 +1040,29 @@ class Orchestrator(
                     else "remember_not_saved_short",
                     lang,
                 )
+            # What the jobs did this turn decides, not which tools were called:
+            # a refused call changes nothing either.
+            if jobs_before is not None:
+                if {job.id for job in self._scheduler.jobs()} == jobs_before:
+                    if claims_schedule_changed(stored_reply):
+                        _LOGGER.info(
+                            "AI Plugin: reply claimed a schedule change, but none was made: %r",
+                            stored_reply[:120],
+                        )
+                        stored_reply = reply = L.template("schedule_not_changed", lang)
+                else:
+                    try:
+                        replaced = await async_drop_replaced(
+                            self._scheduler, jobs_before, message, stored_reply, lang
+                        )
+                    except Exception:  # noqa: BLE001 — the reply must still go out
+                        _LOGGER.exception("AI Plugin: could not cancel replaced jobs")
+                    else:
+                        if replaced:
+                            _LOGGER.info(
+                                "AI Plugin: cancelled %d job(s) this turn replaced: %s",
+                                len(replaced), [job.id for job in replaced],
+                            )
             history_reply = stored_reply
             if (
                 actuator_acted

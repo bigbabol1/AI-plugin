@@ -885,3 +885,123 @@ async def test_an_alarm_with_no_time_is_not_set(track) -> None:
     assert "what time" in out
     scheduler.async_add.assert_not_awaited()
 
+
+
+# ── a correction replaces the reminder it corrects ──────────────────────
+
+
+async def _reminder(sched, text: str, hour: int, person: str = "person.anna"):
+    return await sched.async_add(
+        KIND_REMINDER, NOW + timedelta(days=2, hours=hour), text=text, person_id=person
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "reply", "lang"),
+    [
+        ("My bad. Actually the viewing is on Tuesday at 4:30.", "Reminder set for 15:30.", "en"),
+        ("Make it half past three.", "I've updated the reminder to 15:30.", "en"),
+        ("Nein, stattdessen um halb vier.", "Erinnerung gesetzt.", "de"),
+    ],
+)
+async def test_a_correction_cancels_the_old_reminder_for_each_person(
+    track, message: str, reply: str, lang: str
+) -> None:
+    sched = _scheduler()
+    old_a = await _reminder(sched, "Dentist appointment", 5)
+    old_b = await _reminder(sched, "Dentist appointment", 5, "person.ben")
+    other = await _reminder(sched, "Buy milk", 5)
+    before = {j.id for j in sched.jobs()}
+    new_a = await _reminder(sched, "Dentist", 6)
+    new_b = await _reminder(sched, "dentist appointment", 6, "person.ben")
+    replaced = await pkg.async_drop_replaced(sched, before, message, reply, lang)
+    assert {j.id for j in replaced} == {old_a.id, old_b.id}
+    assert {j.id for j in sched.jobs()} == {other.id, new_a.id, new_b.id}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Remind me about the viewing at 15:30.",
+        "Actually, also remind me an hour before.",
+        "Set another reminder for the viewing, sorry.",
+    ],
+)
+async def test_a_second_reminder_keeps_the_first(track, message: str) -> None:
+    sched = _scheduler()
+    await _reminder(sched, "Dentist", 5)
+    before = {j.id for j in sched.jobs()}
+    await _reminder(sched, "Dentist", 6)
+    assert await pkg.async_drop_replaced(sched, before, message, "Reminder set.", "en") == []
+    assert len(sched.jobs()) == 2
+
+
+async def test_a_correction_leaves_a_repeating_alarm_and_another_room_alone(track) -> None:
+    sched = _scheduler()
+    due = NOW + timedelta(days=1)
+    daily = await sched.async_add(KIND_ALARM, due, device_id=SAT, repeat="daily", clock="07:00")
+    elsewhere = await sched.async_add(KIND_ALARM, due, device_id="sat-kitchen")
+    old = await sched.async_add(KIND_ALARM, due, device_id=SAT)
+    before = {j.id for j in sched.jobs()}
+    new = await sched.async_add(KIND_ALARM, due + timedelta(hours=1), device_id=SAT)
+    replaced = await pkg.async_drop_replaced(sched, before, "Actually make it 8.", "", "en")
+    assert [j.id for j in replaced] == [old.id]
+    assert {j.id for j in sched.jobs()} == {daily.id, elsewhere.id, new.id}
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I've updated the reminders for the dentist to Tuesday at 3:30 PM.",
+        "I have moved your alarm to 8.",
+        "Ich habe die Erinnerung auf 15:30 verschoben.",
+        "J'ai déplacé le rappel à 15h30.",
+        "He cambiado la alarma a las ocho.",
+    ],
+)
+def test_replies_that_claim_a_schedule_change(reply: str) -> None:
+    assert pkg.claims_schedule_changed(reply)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I've updated the calendar entry.",
+        "Reminder set for Tuesday at 15:30.",
+        "I haven't changed the reminder.",
+        "Ich habe die Erinnerung nicht verschoben.",
+        *[data.templates["schedule_not_changed"] for data in LOCALIZATIONS.values()],
+    ],
+)
+def test_replies_that_do_not_claim_a_schedule_change(reply: str) -> None:
+    assert not pkg.claims_schedule_changed(reply)
+
+
+async def test_a_change_claim_with_nothing_changed_is_replaced(track) -> None:
+    sched = _scheduler()
+    await _reminder(sched, "Dentist", 5)
+    orch, _ = _wired("list_scheduled", "I've updated the reminder to 15:30.")
+    orch._scheduler = sched
+    reply = await orch.async_process("It's at half past four.", "c-claim", "en")
+    assert reply == L.template("schedule_not_changed", "en")
+    assert len(sched.jobs()) == 1
+    assert orch._context_mgr.get_history("c-claim")[-1]["content"] == reply
+
+
+async def test_an_updated_claim_drops_the_old_reminder_end_to_end(track) -> None:
+    sched = _scheduler()
+    old = await _reminder(sched, "Dentist", 5, None)
+    orch, _ = _wired("set_reminder", "I've updated the reminder to 15:30.")
+    orch._scheduler = sched
+
+    async def add_job(*_args, **_kwargs):
+        await sched.async_add(
+            KIND_REMINDER, NOW + timedelta(days=2, hours=6), text="Dentist"
+        )
+        return "Reminder set."
+
+    with patch.object(core, "async_call_scheduler_tool", add_job):
+        reply = await orch.async_process("It's at half past four.", "c-moved", "en")
+    assert reply == "I've updated the reminder to 15:30."
+    assert [j.text for j in sched.jobs()] == ["Dentist"]
+    assert old.id not in {j.id for j in sched.jobs()}

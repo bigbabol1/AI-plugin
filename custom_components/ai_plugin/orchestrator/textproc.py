@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 
 from ..i18n import L
 
@@ -87,10 +88,28 @@ _KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏᐀-ᙿ]+|[ಠಥ]\s*_\s*[ಠಥ]
 # "(^o^)"). Maths such as "(5^2)" has no caret pair and survives.
 _KAOMOJI_FACE_RE = re.compile(r"[(（][^\s\w()（）]?[^\s()（）]_[^\s()（）][^\s\w()（）]?[)）]|[(（]\^.?\^[)）]")
 
-# Arms of a face such as "٩(◕‿◕)۶", left standing once the face between them is
-# gone. These are digits in Arabic text, so a reply in Arabic keeps them.
-_KAOMOJI_ARMS_RE = re.compile(r"(?:(?<=\s)|^)[٩۶٥༼༽₍₎]{2,4}(?=\s|$)")
-_ARABIC_LETTER_RE = re.compile(r"[\u0621-\u064A]")
+# What is left of a face once the part between its arms has gone: "٩۶", "٩ⅴ",
+# "⸜⸜". Gemma picks these from all over Unicode, so a list of them never ends
+# (2026-11-05, spoken to TTS): a word made only of foreign digits and
+# punctuation goes instead. These can be real digits and punctuation in a reply
+# written in another script, which keeps them. Ordinary typography stays.
+_STRAY_GLYPH_CATEGORIES = frozenset({"Nd", "Nl", "Pd", "Pe", "Pf", "Pi", "Po", "Ps"})
+_KEPT_TYPOGRAPHY = frozenset("–—…«»„“”‘’‚‹›¿¡·•§†‰")
+_WORD_RE = re.compile(r"(?:(?<=\s)|^)\S+(?=\s|$)")
+
+
+def _has_non_latin_letter(text: str) -> bool:
+    return any(ch.isalpha() and ord(ch) > 0x24F for ch in text)
+
+
+def _is_stray_glyph_word(word: str) -> bool:
+    return all(
+        not ch.isascii()
+        and ch not in _KEPT_TYPOGRAPHY
+        and unicodedata.category(ch) in _STRAY_GLYPH_CATEGORIES
+        for ch in word
+    )
+
 
 def _strip_emoji(text: str) -> str:
     """Remove emoji/pictographs/kaomoji. Safe for TTS and voice output."""
@@ -100,8 +119,10 @@ def _strip_emoji(text: str) -> str:
     cleaned = _KAOMOJI_GROUP_RE.sub("", cleaned)
     cleaned = _KAOMOJI_CHAR_RE.sub("", cleaned)
     cleaned = _KAOMOJI_FACE_RE.sub("", cleaned)
-    if not _ARABIC_LETTER_RE.search(cleaned):
-        cleaned = _KAOMOJI_ARMS_RE.sub("", cleaned)
+    if not _has_non_latin_letter(cleaned):
+        cleaned = _WORD_RE.sub(
+            lambda m: "" if _is_stray_glyph_word(m.group()) else m.group(), cleaned
+        )
     # Collapse residual double-spaces introduced by stripped glyphs.
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()

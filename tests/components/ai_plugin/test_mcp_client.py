@@ -760,3 +760,94 @@ def test_home_assistant_tools_are_told_apart_from_other_servers() -> None:
     assert registry.is_home_assistant_tool("intent__HassTurnOn")
     assert not registry.is_home_assistant_tool("fetch")
     assert not registry.is_home_assistant_tool("unknown")
+
+
+# ── mcp 2 (Home Assistant 2026.11) ────────────────────────────────────────────
+
+
+def test_tool_schema_reads_either_mcp_field_name() -> None:
+    """mcp 2 renamed inputSchema to input_schema."""
+    from types import SimpleNamespace
+
+    from custom_components.ai_plugin.providers import openai_tool_schema
+    from custom_components.ai_plugin.tools.mcp_client import _distinct
+
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    v1 = SimpleNamespace(name="a", description="d", inputSchema=schema)
+    v2 = SimpleNamespace(name="a", description="d", input_schema=schema)
+    assert openai_tool_schema(v1)["function"]["parameters"] == schema
+    assert openai_tool_schema(v2)["function"]["parameters"] == schema
+    assert _distinct([v2]) == [v2]
+
+
+def test_error_result_reads_either_mcp_field_name() -> None:
+    """A failed action must not pass for a performed one under mcp 2."""
+    from types import SimpleNamespace
+
+    from custom_components.ai_plugin.tools.mcp_client import _is_error_result
+
+    assert _is_error_result(SimpleNamespace(isError=True))
+    assert _is_error_result(SimpleNamespace(is_error=True))
+    assert not _is_error_result(SimpleNamespace(isError=False))
+    assert not _is_error_result(SimpleNamespace(is_error=False))
+    assert not _is_error_result(SimpleNamespace())
+
+
+@pytest.mark.asyncio
+async def test_call_tool_brackets_mcp2_error_result() -> None:
+    from types import SimpleNamespace
+
+    from custom_components.ai_plugin.tools import mcp_client as mod
+
+    conn = mod._MCPServerConnection({"transport": "http", "url": "http://x/mcp"})
+    conn._state = mod._State.CONNECTED
+    conn._session = MagicMock()
+    conn._session.call_tool = AsyncMock(
+        return_value=SimpleNamespace(
+            content=[SimpleNamespace(text="no entities matched")], is_error=True
+        )
+    )
+    assert (await conn.call_tool("HassTurnOn", {})).startswith("[Tool 'HassTurnOn' failed")
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_under_mcp2_passes_a_built_client() -> None:
+    """mcp 2 takes http_client= and yields two streams, not three."""
+    import ssl
+    from contextlib import asynccontextmanager
+
+    from custom_components.ai_plugin.tools import mcp_client as mod
+
+    seen: dict = {}
+
+    @asynccontextmanager
+    async def _fake_v2(url, *, http_client=None):
+        seen["url"] = url
+        seen["client"] = http_client
+        yield "read", "write"
+
+    class _Client:
+        def __init__(self, **kw):
+            seen["kw"] = kw
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            seen["closed"] = True
+
+    fake_http = MagicMock()
+    fake_http.AsyncClient = _Client
+    with (
+        patch.object(mod, "streamablehttp_client", None),
+        patch.object(mod, "streamable_http_client", _fake_v2, create=True),
+        patch.object(mod, "_http", fake_http),
+    ):
+        async with mod._streamable_http_streams(
+            "http://x/mcp", {"Authorization": "Bearer t"}, ssl.create_default_context()
+        ) as streams:
+            assert streams == ("read", "write")
+    assert seen["url"] == "http://x/mcp"
+    assert isinstance(seen["client"], _Client)
+    assert seen["kw"]["headers"] == {"Authorization": "Bearer t"}
+    assert seen["closed"] is True

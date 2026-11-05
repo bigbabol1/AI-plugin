@@ -8,12 +8,9 @@ aiohttp
 httpx
 voluptuous
 PyYAML
-# Pinned below 2.x: mcp 2.0 removed mcp.client.streamable_http.
-# streamablehttp_client, which tools/mcp_client.py imports at module
-# scope — so an unpinned install fails COLLECTION of the whole
-# tests/components/ai_plugin package, not just the MCP tests. Every CI
-# run since mcp 2.x shipped was red for this reason alone.
-mcp>=1.0.0,<2
+# Home Assistant 2026.11 pins mcp 2 and older versions pin mcp 1, and
+# tools/mcp_client.py supports both. CI installs each major over this line.
+mcp>=1.0.0
 # Voice recognition runs on numpy (an HA core dependency, so not in the
 # manifest). The full-model parity test additionally needs the model files
 # via AI_PLUGIN_VOICE_MODEL_DIR and is skipped without them.

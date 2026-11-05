@@ -74,18 +74,28 @@ class ChatResponse:
 # ── Schema conversion helpers ─────────────────────────────────────────────────
 
 
+def mcp_tool_input_schema(mcp_tool: Any) -> Any:
+    """An MCP tool's JSON Schema. mcp 2 renamed inputSchema to input_schema."""
+    schema = getattr(mcp_tool, "inputSchema", None)
+    if schema is None:
+        schema = getattr(mcp_tool, "input_schema", None)
+    return schema
+
+
 def openai_tool_schema(mcp_tool: Any) -> dict[str, Any]:
     """Convert an MCP Tool object to OpenAI function-calling schema format.
 
-    MCP tool objects expose: .name, .description, .inputSchema (JSON Schema dict).
+    MCP tool objects expose: .name, .description and the JSON Schema dict
+    read by mcp_tool_input_schema().
     """
+    schema = mcp_tool_input_schema(mcp_tool)
     return {
         "type": "function",
         "function": {
             "name": mcp_tool.name,
             "description": mcp_tool.description or "",
-            "parameters": mcp_tool.inputSchema
-            if isinstance(mcp_tool.inputSchema, dict)
+            "parameters": schema
+            if isinstance(schema, dict)
             else {"type": "object", "properties": {}},
         },
     }

@@ -36,20 +36,37 @@ import asyncio
 import json
 import logging
 import ssl
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from enum import Enum
 from typing import Any
 
-import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+
+# Home Assistant 2026.11 moved to mcp 2, older versions pin mcp 1. The two
+# differ in the Streamable HTTP entry point and in the HTTP library they accept.
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:  # mcp 2
+    import httpx2 as _http
+    from mcp.client.streamable_http import streamable_http_client
+
+    streamablehttp_client = None
+else:  # mcp 1
+    import httpx as _http
+
+    streamable_http_client = None
 
 from ..context_manager import ContextManager
-from ..providers import openai_tool_schema
+from ..providers import mcp_tool_input_schema, openai_tool_schema
 
 _LOGGER = logging.getLogger(__name__)
 
+# What mcp 1's own client factory uses; mcp 2 takes a client built by the caller.
+_HTTP_TIMEOUT = 30.0
+_HTTP_READ_TIMEOUT = 300.0
 
 
 def _create_ssl_context() -> ssl.SSLContext:
@@ -72,6 +89,52 @@ _EXTRA_PATH_DIRS = [
 ]
 
 
+def _client_factory(ssl_ctx: ssl.SSLContext) -> Any:
+    """An HTTP client factory that does not load certificates on the event loop."""
+
+    def _create(
+        headers: dict[str, str] | None = None,
+        timeout: Any = None,
+        auth: Any = None,
+    ) -> Any:
+        kw: dict[str, Any] = {"follow_redirects": True, "verify": ssl_ctx}
+        if timeout is not None:
+            kw["timeout"] = timeout
+        if headers is not None:
+            kw["headers"] = headers
+        if auth is not None:
+            kw["auth"] = auth
+        return _http.AsyncClient(**kw)
+
+    return _create
+
+
+@asynccontextmanager
+async def _streamable_http_streams(
+    url: str, headers: dict[str, str], ssl_ctx: ssl.SSLContext
+) -> AsyncIterator[tuple[Any, Any]]:
+    """Open a Streamable HTTP transport under either mcp major version."""
+    factory = _client_factory(ssl_ctx)
+    if streamablehttp_client is not None:
+        async with streamablehttp_client(
+            url, headers=headers or None, httpx_client_factory=factory
+        ) as streams:
+            yield streams[0], streams[1]
+        return
+    timeout = _http.Timeout(_HTTP_TIMEOUT, read=_HTTP_READ_TIMEOUT)
+    async with factory(headers=headers or None, timeout=timeout) as client:
+        async with streamable_http_client(url, http_client=client) as streams:
+            yield streams[0], streams[1]
+
+
+def _is_error_result(result: Any) -> bool:
+    """True for an MCP error result. mcp 2 renamed isError to is_error."""
+    flag = getattr(result, "isError", None)
+    if flag is None:
+        flag = getattr(result, "is_error", False)
+    return bool(flag)
+
+
 def _distinct(tools: list[Any]) -> list[Any]:
     """Drop tools a server lists twice under two names.
 
@@ -86,7 +149,7 @@ def _distinct(tools: list[Any]) -> list[Any]:
     by_key: dict[str, list[Any]] = {}
     for tool in tools:
         key = json.dumps(
-            [tool.description, tool.inputSchema], sort_keys=True, default=str
+            [tool.description, mcp_tool_input_schema(tool)], sort_keys=True, default=str
         )
         by_key.setdefault(key, []).append(tool)
     dropped: set[int] = set()
@@ -291,7 +354,7 @@ class _MCPServerConnection:
             # e.g. HA's intent tools report "no entities matched" this way.
             # Bracket them so downstream success checks (TTS suppression)
             # never mistake a failed action for a performed one.
-            if getattr(result, "isError", False) and not text.lstrip().startswith("["):
+            if _is_error_result(result) and not text.lstrip().startswith("["):
                 return f"[Tool {name!r} failed: {text}]"
             return text
         except TimeoutError:
@@ -374,24 +437,10 @@ class _MCPServerConnection:
         loop = asyncio.get_running_loop()
         ssl_ctx = await loop.run_in_executor(None, _create_ssl_context)
 
-        def _client_factory(
-            headers: dict[str, str] | None = None,
-            timeout: httpx.Timeout | None = None,
-            auth: httpx.Auth | None = None,
-        ) -> httpx.AsyncClient:
-            kw: dict[str, Any] = {"follow_redirects": True, "verify": ssl_ctx}
-            if timeout is not None:
-                kw["timeout"] = timeout
-            if headers is not None:
-                kw["headers"] = headers
-            if auth is not None:
-                kw["auth"] = auth
-            return httpx.AsyncClient(**kw)
-
         async with sse_client(
             url,
             headers=headers or None,
-            httpx_client_factory=_client_factory,
+            httpx_client_factory=_client_factory(ssl_ctx),
         ) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -409,25 +458,7 @@ class _MCPServerConnection:
         loop = asyncio.get_running_loop()
         ssl_ctx = await loop.run_in_executor(None, _create_ssl_context)
 
-        def _client_factory(
-            headers: dict[str, str] | None = None,
-            timeout: httpx.Timeout | None = None,
-            auth: httpx.Auth | None = None,
-        ) -> httpx.AsyncClient:
-            kw: dict[str, Any] = {"follow_redirects": True, "verify": ssl_ctx}
-            if timeout is not None:
-                kw["timeout"] = timeout
-            if headers is not None:
-                kw["headers"] = headers
-            if auth is not None:
-                kw["auth"] = auth
-            return httpx.AsyncClient(**kw)
-
-        async with streamablehttp_client(
-            url,
-            headers=headers or None,
-            httpx_client_factory=_client_factory,
-        ) as (read, write, _):
+        async with _streamable_http_streams(url, headers, ssl_ctx) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 await self._on_connected(session)

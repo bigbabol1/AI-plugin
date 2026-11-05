@@ -7,7 +7,7 @@ from collections.abc import Callable
 import logging
 from typing import Any
 
-from ..i18n import L
+from ..i18n import SUPPORTED_LANGS, L
 from ..satellite_speech import satellite_in_area
 from .engine import KIND_ALARM, KIND_COMMAND, KIND_REMINDER, Scheduler
 from .when import REPEATS, WhenError, describe, resolve
@@ -311,6 +311,63 @@ async def _async_add(
     await scheduler.async_add(KIND_REMINDER, due, text=text, device_id=target, **fields)
     for_whom = f" for {for_name}" if someone_else else ""
     return f"Reminder set{for_whom} for {when}: {text}."
+
+
+def _matches_any_language(key: str, text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    return any(
+        rx.search(lowered) for code in SUPPORTED_LANGS for rx in L.pattern_list(key, code)
+    )
+
+
+def claims_schedule_changed(reply: str) -> bool:
+    """True when a reply says a reminder or an alarm was updated or moved."""
+    return _matches_any_language("schedule_changed_claim", reply) and _matches_any_language(
+        "schedule_thing", reply
+    )
+
+
+def _same_scheduled_thing(old, new) -> bool:
+    """True when ``new`` is the same reminder, alarm or command as ``old`` at
+    another time. The model words a reminder afresh, so one text may hold the other."""
+    if old.kind != new.kind or old.repeat != new.repeat:
+        return False
+    if new.kind == KIND_REMINDER and (old.person_id or new.person_id):
+        if old.person_id != new.person_id:
+            return False
+    elif old.device_id != new.device_id:
+        return False
+    a, b = old.text.strip().lower(), new.text.strip().lower()
+    return a == b or bool(a and b and (a in b or b in a))
+
+
+async def async_drop_replaced(
+    scheduler: Scheduler, jobs_before: set[str], message: str, reply: str, lang: str
+) -> list:
+    """Cancel what this turn's new jobs replace, and return it.
+
+    There is no tool to move a reminder, and the model does not cancel the old
+    one first: "My bad, it's at 4:30" got "I've updated the reminders" with both
+    the old and the new ones left to ring (2026-11-05). In code, so that the
+    tool descriptions the voice model is tuned on stay as they are.
+    """
+    message = (message or "").strip().lower()
+    if any(rx.search(message) for rx in L.pattern_list("schedule_keep_both", lang)):
+        return []
+    if not (
+        any(rx.search(message) for rx in L.pattern_list("schedule_correction", lang))
+        or _matches_any_language("schedule_changed_claim", reply)
+    ):
+        return []
+    jobs = scheduler.jobs()
+    new = [j for j in jobs if j.id not in jobs_before]
+    replaced = [
+        j for j in jobs
+        if j.id in jobs_before and any(_same_scheduled_thing(j, n) for n in new)
+    ]
+    if replaced:
+        await scheduler.async_cancel(replaced)
+    return replaced
 
 
 async def _async_cancel(scheduler, arguments) -> str:

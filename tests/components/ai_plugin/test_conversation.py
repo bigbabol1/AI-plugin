@@ -542,6 +542,10 @@ def test_strip_emoji_removes_kaomoji() -> None:
     # The face goes first; its arms must not stay behind to be read out.
     assert _strip_emoji("Looking fabulous! ٩(◕‿◕)۶") == "Looking fabulous!"
     assert _strip_emoji("Looking fabulous! ٩۶") == "Looking fabulous!"
+    # Live 2026-11-05: what gemma left behind, the second one spoken by TTS.
+    assert _strip_emoji("You're very welcome! ٩ⅴ") == "You're very welcome!"
+    assert _strip_emoji("You're very welcome! ⸜⸜") == "You're very welcome!"
+    assert _strip_emoji("You're very welcome! ⸜(◕‿◕)⸝") == "You're very welcome!"
 
 
 def test_strip_emoji_preserves_degrees_and_parens() -> None:
@@ -549,6 +553,11 @@ def test_strip_emoji_preserves_degrees_and_parens() -> None:
 
     # In Arabic these are digits.
     assert _strip_emoji("الساعة ٩٥") == "الساعة ٩٥"
+    assert _strip_emoji("समय ५ बजे है ।") == "समय ५ बजे है ।"
+    # Ordinary typography and symbols stand on their own.
+    assert _strip_emoji("Tea – or coffee … „gern“ « oui » ¿sí?") == "Tea – or coffee … „gern“ « oui » ¿sí?"
+    assert _strip_emoji("• Milk\n• Eggs") == "• Milk\n• Eggs"
+    assert _strip_emoji("It is 21 ℃ and 5 € ½ off.") == "It is 21 ℃ and 5 € ½ off."
     assert _strip_emoji("It is 21°C outside.") == "It is 21°C outside."
     assert _strip_emoji("Timer (eval) is running.") == "Timer (eval) is running."
     assert _strip_emoji("Five squared (5^2) is 25.") == "Five squared (5^2) is 25."

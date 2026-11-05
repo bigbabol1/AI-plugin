@@ -55,6 +55,7 @@ templates:
   phrase_routine_refused: "Einen Satz dafür kann ich mir noch nicht merken, also ist nichts eingestellt. Zu einer festen Uhrzeit geht es, sag mir dann wann."
   remember_not_saved: "Das habe ich nicht gespeichert. Wenn ich es behalten soll, sag merk dir und dann, was."
   remember_not_saved_short: "Das habe ich nicht gespeichert."
+  schedule_not_changed: "Ich habe nichts geändert. Sag mir die neue Zeit, dann stelle ich sie ein."
 keywords:
   time_now:      ["wie spät ist es", "wie viel uhr ist es", "wieviel uhr ist es", "sag mir die uhrzeit", "wie spät"]
   sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]
@@ -112,6 +113,19 @@ patterns:
     - '\bich\s+werde\s+(?:(?:mir|das|es)\s+)*(?:merken|behalten|notieren|speichern)\b'
     - '^notiert\b'
     - '\bist\s+notiert\b'
+  # A reply saying a reminder or alarm was moved. Checked against what the turn really did.
+  schedule_changed_claim:
+    - '(?<!nicht\s)\b(?:aktualisiert|geändert|verschoben|angepasst|korrigiert|umgestellt)\b'
+  # Words for a reminder or alarm, to tell such a claim from one about a calendar entry.
+  schedule_thing:
+    - '\b(?:erinnerung(?:en)?|wecker|alarme?)\b'
+  # A user correcting something they just asked for: a new reminder then replaces its old twin.
+  schedule_correction:
+    - '\b(?:mein\s+fehler|eigentlich|stattdessen|ich\s+meinte|sorry|entschuldigung|korrektur|falsch|änder\w*|verschieb\w*|aktualisier\w*)\b'
+    - '^nein\b'
+  # A user asking for one more: the old reminder stays even if the wording sounds like a correction.
+  schedule_keep_both:
+    - '\b(?:auch|zusätzlich|noch\s+eine\w*|weitere\w*|zweite\w*)\b'
   # A command for the room the satellite is in.
   this_room:
     - '\b(?:hier|diesem\s+raum|diesem\s+zimmer)\b'

@@ -7,6 +7,8 @@ from .tools import (
     WRITE_TOOL_NAMES,
     asks_for_phrase_routine,
     async_call_tool,
+    async_drop_replaced,
+    claims_schedule_changed,
     names_later_time,
 )
 
@@ -18,5 +20,7 @@ __all__ = [
     "WRITE_TOOL_NAMES",
     "asks_for_phrase_routine",
     "async_call_tool",
+    "async_drop_replaced",
+    "claims_schedule_changed",
     "names_later_time",
 ]

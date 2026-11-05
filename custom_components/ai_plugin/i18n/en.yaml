@@ -55,6 +55,7 @@ templates:
   phrase_routine_refused: "I can't save a phrase for that yet, so nothing was set. I can do it at a set time if you tell me when."
   remember_not_saved: "I haven't saved that. If I should keep it, say remember and then the fact."
   remember_not_saved_short: "I haven't saved that."
+  schedule_not_changed: "I haven't changed anything. Tell me the new time and I'll set it."
 keywords:
   time_now:      ["what time is it", "what is the time", "what's the time", "tell me the time", "current time"]
   sun_set:       ["when is sunset", "sunset", "when does the sun set", "when does the sun go down", "when does it get dark"]
@@ -107,6 +108,19 @@ patterns:
     - '\bi(?:[\x27’]ve|\s+have)\s+(?:noted|saved|remembered|made\s+a\s+note)\b'
     - '\bi(?:[\x27’]ll|\s+will)\s+(?:make\s+sure\s+to\s+)?(?:remember|keep\s+that\s+in\s+mind|make\s+a\s+note)\b'
     - '^noted\b'
+  # A reply saying a reminder or alarm was moved. Checked against what the turn really did.
+  schedule_changed_claim:
+    - '(?<!n[\x27’]t\s)(?<!not\s)\b(?:updated|changed|moved|rescheduled|adjusted|corrected|shifted)\b'
+  # Words for a reminder or alarm, to tell such a claim from one about a calendar entry.
+  schedule_thing:
+    - '\b(?:reminders?|alarms?)\b'
+  # A user correcting something they just asked for: a new reminder then replaces its old twin.
+  schedule_correction:
+    - '\b(?:my\s+bad|actually|instead|i\s+mean|i\s+meant|sorry|correction|mistake|wrong|change|move|reschedule|update)\b'
+    - '^no\b'
+  # A user asking for one more: the old reminder stays even if the wording sounds like a correction.
+  schedule_keep_both:
+    - '\b(?:also|too|as\s+well|another|additional|second|extra)\b'
   # A command for the room the satellite is in.
   this_room:
     - '\b(?:here|this\s+room)\b'

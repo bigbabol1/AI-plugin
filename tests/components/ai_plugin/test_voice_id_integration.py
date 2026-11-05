@@ -112,15 +112,15 @@ def test_find_person_requires_a_single_match() -> None:
 @pytest.mark.parametrize(
     ("heard", "expected"),
     [
-        # Real speech-to-text output for "Arndt Geafer", 2026-10-24.
-        ("Aunt Gaither", "person.arndt"),
-        ("aren't Jaffer", "person.arndt"),
+        # An unusual name that speech-to-text turned into ordinary words.
+        ("Mirror Jensen", "person.mirko"),
+        ("Mercer Janson", "person.mirko"),
         ("Lenna", "person.lena"),
         ("Anna", None),
     ],
 )
 def test_find_person_survives_mangled_names(heard, expected) -> None:
-    mgr = _manager([_person("person.arndt", "Arndt Geafer"), _person("person.lena", "Lena Weber")])
+    mgr = _manager([_person("person.mirko", "Mirko Jansen"), _person("person.lena", "Lena Weber")])
     assert mgr.find_person(heard) == expected
 
 

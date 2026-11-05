@@ -55,6 +55,7 @@ templates:
   phrase_routine_refused: "Todavía no puedo guardar una frase para eso, así que no he configurado nada. Puedo hacerlo a una hora fija si me dices cuándo."
   remember_not_saved: "No lo he guardado. Si quieres que lo recuerde, di recuerda y luego el dato."
   remember_not_saved_short: "No lo he guardado."
+  schedule_not_changed: "No he cambiado nada. Dime la nueva hora y la pongo."
 keywords:
   time_now:      ["qué hora es", "que hora es", "dime la hora"]
   sun_set:       ["puesta de sol", "cuándo se pone el sol", "a qué hora se pone el sol"]
@@ -100,6 +101,19 @@ patterns:
     - '(?<!no\s)(?<!no\slo\s)(?<!no\sla\s)\bhe\s+(?:anotado|guardado|memorizado|tomado\s+nota)\b'
     - '\brecordar[ée]\b'
     - '^anotado\b'
+  # A reply saying a reminder or alarm was moved. Checked against what the turn really did.
+  schedule_changed_claim:
+    - '(?<!no\s)(?<!no\she\s)\b(?:(?:actualizad|cambiad|movid|modificad|ajustad|corregid|reprogramad)[oa]s?|actualicé|cambié|moví|modifiqué|ajusté|corregí|reprogramé)(?!\w)'
+  # Words for a reminder or alarm, to tell such a claim from one about a calendar entry.
+  schedule_thing:
+    - '\b(?:recordatorios?|alarmas?)\b'
+  # A user correcting something they just asked for: a new reminder then replaces its old twin.
+  schedule_correction:
+    - '\b(?:culpa\s+mía|en\s+realidad|en\s+vez|quería\s+decir|perdón|lo\s+siento|corrección|error|equivocad\w*|cambi\w*|mueve|mover|modific\w*)\b'
+    - '^no\b'
+  # A user asking for one more: the old reminder stays even if the wording sounds like a correction.
+  schedule_keep_both:
+    - '\b(?:también|otr[oa]|adicional|además|segund\w*)\b'
   # A command for the room the satellite is in.
   this_room:
     - '\b(?:aqu[íi]|esta\s+habitaci[óo]n)\b'

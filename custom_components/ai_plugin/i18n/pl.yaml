@@ -55,6 +55,7 @@ templates:
   phrase_routine_refused: "Nie mogę jeszcze zapisać do tego zdania, więc nic nie ustawiłem. Mogę to zrobić o wybranej godzinie, jeśli powiesz kiedy."
   remember_not_saved: "Nie zapisałem tego. Jeśli mam to zapamiętać, powiedz zapamiętaj, a potem co."
   remember_not_saved_short: "Nie zapisałem tego."
+  schedule_not_changed: "Niczego nie zmieniłem. Podaj nową godzinę, a ją ustawię."
 keywords:
   time_now:      ["która jest godzina", "ktora jest godzina", "podaj godzinę"]
   sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]
@@ -100,6 +101,19 @@ patterns:
   saved_claim:
     - '(?<!nie\s)\b(?:zapami[ęe]ta[łl]|zapisa[łl]|zanotowa[łl])(?:em|am)\b'
     - '(?<!nie\s)\bzapami[ęe]tam\b'
+  # A reply saying a reminder or alarm was moved. Checked against what the turn really did.
+  schedule_changed_claim:
+    - '(?<!nie\s)\b(?:zaktualizowa|zmieni|przesun|poprawi|przeniosł|przeniesi)\w*'
+  # Words for a reminder or alarm, to tell such a claim from one about a calendar entry.
+  schedule_thing:
+    - '\b(?:przypomnieni\w*|budzik\w*|alarm\w*)\b'
+  # A user correcting something they just asked for: a new reminder then replaces its old twin.
+  schedule_correction:
+    - '\b(?:mój\s+błąd|właściwie|zamiast|chodziło\s+mi|przepraszam|sorry|korekta|błąd|zmień\w*|zmieni\w*|przesuń\w*|przenieś\w*)\b'
+    - '^nie\b'
+  # A user asking for one more: the old reminder stays even if the wording sounds like a correction.
+  schedule_keep_both:
+    - '\b(?:też|także|również|kolejn\w*|drug\w*|dodatkow\w*)\b'
   # A command for the room the satellite is in.
   this_room:
     - '\b(?:tutaj|tu|tym\s+pokoju)\b'
