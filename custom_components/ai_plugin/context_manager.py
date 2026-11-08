@@ -247,21 +247,46 @@ class ContextManager:
         Format: [system_message, *history], hard-truncated so the total
         never exceeds 85 % of the available budget.
         """
-        _, hard_limit = self._budget(system_prompt, tool_tokens)
-
         async with self._get_lock(conv_id):
             history = list(self._history.get(conv_id, []))
 
-        # Hard limit: drop oldest messages until we fit.
-        # Drop from the front until the first user message (or the context
-        # block sent with it) so we never start with an orphaned tool or
-        # assistant message.
+        return [
+            {"role": "system", "content": system_prompt},
+            *self._fit_hard_limit(history, system_prompt, tool_tokens),
+        ]
+
+    def _fit_hard_limit(
+        self, history: list[dict], system_prompt: str, tool_tokens: int | None
+    ) -> list[dict]:
+        """Drop the oldest messages until the history fits.
+
+        Then on to the first user message (or the context block sent with it),
+        so it never starts with an orphaned tool or assistant message.
+        """
+        _, hard_limit = self._budget(system_prompt, tool_tokens)
         while history and self._estimate_messages_tokens(history) > hard_limit:
             history = history[1:]
         while history and not _starts_turn(history):
             history = history[1:]
+        return history
 
-        return [{"role": "system", "content": system_prompt}, *history]
+    async def newest_block_is(
+        self,
+        conv_id: str,
+        marker: str,
+        block: str,
+        system_prompt: str,
+        tool_tokens: int | None = None,
+    ) -> bool:
+        """True when the newest message holding marker, among those the next
+        request would send, also holds block."""
+        async with self._get_lock(conv_id):
+            history = list(self._history.get(conv_id, []))
+        for message in reversed(self._fit_hard_limit(history, system_prompt, tool_tokens)):
+            content = message.get("content")
+            if isinstance(content, str) and marker in content:
+                return block in content
+        return False
 
     async def summarize_if_needed(
         self,

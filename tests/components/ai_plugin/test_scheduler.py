@@ -196,7 +196,7 @@ async def test_one_failing_job_does_not_stop_the_next(track, announce) -> None:
 
 async def test_reminder_also_goes_to_the_persons_phone(track, announce) -> None:
     scheduler = _scheduler()
-    phone = SimpleNamespace(service="mobile_app_lena", name="Lena")
+    phone = SimpleNamespace(service="mobile_app_lena", name="Lena", apple=True)
     await scheduler.async_add(
         KIND_REMINDER, NOW, text="trash", device_id=SAT, person_id="person.lena", language="de-DE"
     )
@@ -318,7 +318,7 @@ async def test_stop_with_no_alarm_ringing_is_not_ours() -> None:
 async def test_an_alarm_that_cannot_play_tries_the_phone(track, announce) -> None:
     announce.return_value = None
     scheduler = _scheduler()
-    phone = SimpleNamespace(service="mobile_app_lena", name="Lena")
+    phone = SimpleNamespace(service="mobile_app_lena", name="Lena", apple=True)
     await scheduler.async_add(KIND_ALARM, NOW, device_id=SAT, person_id="person.lena")
     with patch("custom_components.ai_plugin.shortcuts.phone.phones_of", return_value=[phone]):
         await scheduler._async_on_timer()
@@ -477,7 +477,7 @@ async def test_reminder_from_the_app_goes_to_the_phone(track) -> None:
 async def test_a_reminder_for_someone_else_goes_to_their_phone(track, announce) -> None:
     """Live replay: "a reminder for Anna" went to whoever was speaking."""
     scheduler = _scheduler()
-    phone = SimpleNamespace(service="mobile_app_anna", name="Anna")
+    phone = SimpleNamespace(service="mobile_app_anna", name="Anna", apple=True)
     with patch("custom_components.ai_plugin.shortcuts.phone.phones_of", return_value=[phone]):
         result = await async_call_tool(
             scheduler, scheduler._hass, "set_reminder",

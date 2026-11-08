@@ -55,6 +55,14 @@ templates:
   phrase_routine_refused: "Todavía no puedo guardar una frase para eso, así que no he configurado nada. Puedo hacerlo a una hora fija si me dices cuándo."
   remember_not_saved: "No lo he guardado. Si quieres que lo recuerde, di recuerda y luego el dato."
   remember_not_saved_short: "No lo he guardado."
+  second_room_refused: "No puedo reproducir en dos habitaciones a la vez. Puedo mover la música si quieres."
+  broadcast_what: "¿Qué quieres que anuncie?"
+  broadcast_sent: "Lo he dicho en las demás habitaciones."
+  broadcast_failed: "No he podido anunciarlo."
+  broadcast_cancelled: "Vale, no anuncio nada."
+  message_sent_to: "Enviado a {name}: {label}"
+  message_not_sent: "No he podido enviarlo."
+  message_cancelled: "Vale, no envío nada."
   schedule_not_changed: "No he cambiado nada. Dime la nueva hora y la pongo."
 keywords:
   time_now:      ["qué hora es", "que hora es", "dime la hora"]
@@ -115,6 +123,36 @@ patterns:
   schedule_keep_both:
     - '\b(?:también|otr[oa]|adicional|además|segund\w*)\b'
   # A command for the room the satellite is in.
+  # The room something is moved to is the speaker's own: "move the music here".
+  move_here:
+    - '\b(?:a|hacia)\s+(?:aqu[íi]|ac[áa]|esta\s+habitaci[óo]n|este\s+cuarto)\b'
+    - '(?<!\bde\s)(?<!\bdesde\s)\b(?:aqu[íi]|ac[áa])(?:\s+por\s+favor)?[\s.!?]*$'
+  # A reply saying something was done. With nothing done, it is replaced by err_action_failed.
+  action_done_claim:
+    - '(?:^|[.!?,]\s+)(?:ya\s+)?he\s+(?:anunciado|movido|añadido|agregado|quitado|eliminado|borrado|encendido|apagado|pausado|parado|iniciado|reproducido|cambiado)\b'
+  # Music in a second room as well, which the plugin cannot do: "also play in the bathroom".
+  second_room:
+    - '\b(?:pon\w*|reproduc\w*|toca\w*)\b.*\btambi[ée]n\s+(?:en|aqu[íi]|all[íi])\b'
+    - '\btambi[ée]n\s+(?:pon\w*|reproduc\w*|toca\w*)\b.*\b(?:en|aqu[íi]|all[íi])\b'
+    - '\b(?:pon\w*|reproduc\w*|toca\w*)\b.*\ben\s+(?:dos|varias|ambas)\s+(?:habitaciones|salas)\b'
+  # "Broadcast." and nothing to say yet: the next thing said is the message.
+  broadcast_empty:
+    - '^(?:por\s+favor\s+)?(?:anuncia|haz\s+un\s+anuncio|emite\s+un\s+anuncio|broadcast)(?:\s+algo)?$'
+  # Asking for an announcement, in any wording, and the assistant asking what to say.
+  broadcast_word:
+    - '\b(?:anuncia|anunciar|anuncie|anuncio|broadcast)\b'
+  # Taking that back instead of giving the message.
+  broadcast_cancel:
+    - '^(?:no[,\s]+)?(?:déjalo|olvídalo|cancela|cancelar|nada|para)$'
+  # The assistant asking what to say to one person: the next thing said is the message.
+  message_asked:
+    - '^¿?\s*(?:qué|cuál)\b.*\b(?:diga|decir|escriba|escribir|envíe|enviar|mande|mandar|mensaje)\b'
+  # Correcting who a message is for: not itself a message.
+  message_correction:
+    - '^no\s+(?:a|para)\b'
+  # A reply saying a message went out. "Already sent" stays out: it can be true.
+  message_sent_claim:
+    - '(?:^|[.!?,]\s+)he\s+(?:enviado|mandado)\b'
   this_room:
     - '\b(?:aqu[íi]|esta\s+habitaci[óo]n)\b'
   # Words that exclude it: "everywhere except here".

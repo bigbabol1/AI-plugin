@@ -546,6 +546,25 @@ def test_strip_emoji_removes_kaomoji() -> None:
     assert _strip_emoji("You're very welcome! ٩ⅴ") == "You're very welcome!"
     assert _strip_emoji("You're very welcome! ⸜⸜") == "You're very welcome!"
     assert _strip_emoji("You're very welcome! ⸜(◕‿◕)⸝") == "You're very welcome!"
+    # Live 2026-11-08: the arms of "٩(◕ᗜ◕̤)ﮩ", spoken and copied turn after turn.
+    assert _strip_emoji("Hello! How can I help you today? ٩ﮩ") == "Hello! How can I help you today?"
+    assert _strip_emoji("Hello there! ٩(◕ᗜ◕̤)ﮩ") == "Hello there!"
+    assert _strip_emoji("Hello there! ٩ﮩ.") == "Hello there!"
+    assert _strip_emoji("Hello there!٩ﮩ") == "Hello there!"
+    assert _strip_emoji("Hello there! ٩ه") == "Hello there!"
+
+
+def test_strip_emoji_keeps_other_scripts() -> None:
+    from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
+
+    for text in (
+        "مرحبا، الساعة ٩ الآن",
+        "Hello in Arabic is مرحبا.",
+        "The Japanese for cat is 猫.",
+        "Привет, как дела?",
+        "Es ist 21°C — schön, und „gut“ …",
+    ):
+        assert _strip_emoji(text) == text, text
 
 
 def test_strip_emoji_preserves_degrees_and_parens() -> None:

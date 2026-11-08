@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import re
 import time
 from datetime import date as _date
 from typing import TYPE_CHECKING
@@ -92,7 +93,13 @@ from ..tools.calendar_events import (
     async_add_event,
 )
 from ..tools.ha_local.schemas import MOVE_MUSIC_SCHEMA, TOOLS_THE_PLUGIN_COVERS
-from ..tools.tell import TOOL_NAME as TELL_TOOL, TOOL_SCHEMA as TELL_SCHEMA, async_tell
+from ..tools.tell import (
+    BROADCAST_TOOL_NAME,
+    TOOL_NAME as TELL_TOOL,
+    TOOL_SCHEMA as TELL_SCHEMA,
+    async_broadcast,
+    async_tell,
+)
 from ..tools.memory import (
     asks_to_remember,
     claims_saved,
@@ -120,6 +127,8 @@ from .grounding import (
     _any_list_entities_call,
     _any_media_status_call,
     _any_media_success,
+    _claims_undone_action,
+    _claims_unsent_message,
     _any_tool_call,
     _any_unobservable_action,
     _get_entity_missed,
@@ -144,6 +153,7 @@ from .toolcalls import (
     _prune_ha_local_schemas,
     _readonly_schemas,
     name_without_room,
+    split_list_items,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -214,6 +224,85 @@ def says_this_room(message: str) -> bool:
         )
 
     return found("this_room") and not found("this_room_except")
+
+
+def moves_here(message: str) -> bool:
+    """True when something is to be moved to the speaker's room: "move it here"."""
+    text = (message or "").strip().lower()
+    return any(
+        rx.search(text) for code in SUPPORTED_LANGS for rx in L.pattern_list("move_here", code)
+    ) and not any(
+        rx.search(text)
+        for code in SUPPORTED_LANGS
+        for rx in L.pattern_list("this_room_except", code)
+    )
+
+
+def asks_for_second_room(message: str, lang: str) -> bool:
+    """True for "also play in the bathroom": music in another room as well."""
+    text = (message or "").strip().lower()
+    return any(rx.search(text) for rx in L.pattern_list("second_room", lang))
+
+
+# How long the next thing said on a satellite counts as the message to announce.
+_BROADCAST_ANSWER_S = 60.0
+
+
+def _broadcast_words(message: str) -> str:
+    return (message or "").strip().strip(" .,!?¿¡").lower()
+
+
+def asks_for_empty_broadcast(message: str, lang: str) -> bool:
+    """True for "Broadcast." alone: there is no message yet."""
+    text = _broadcast_words(message)
+    return any(rx.search(text) for rx in L.pattern_list("broadcast_empty", lang))
+
+
+def person_asked_about(reply: str, lang: str, names) -> str | None:
+    """The one person a reply asks the message for: "What should I say to Anna?".
+
+    "To Anna or Ben?" and "Shall I send it to Anna?" don't ask for the message,
+    so what comes next isn't one.
+    """
+    text = (reply or "").strip().lower()
+    if not text.endswith("?"):
+        return None
+    question = re.split(r"(?<=[.!])\s+", text)[-1]
+    if not any(rx.search(question) for rx in L.pattern_list("message_asked", lang)):
+        return None
+    def named_in(part: str) -> list[str]:
+        return [n for n in names if re.search(rf"\b{re.escape(n.lower())}\b", part)]
+
+    # The question itself decides. Earlier sentences only count when it names
+    # nobody: "Since you are Anna, Ben is the other person. What should I say to
+    # Ben?" and "I'll message Ben. What should I say?".
+    named = named_in(question) or named_in(text)
+    return named[0] if len(named) == 1 else None
+
+
+def corrects_message_target(message: str, lang: str) -> bool:
+    """True for "Not to Anna, the other person": who it is for, not what to say."""
+    text = _broadcast_words(message)
+    return any(rx.search(text) for rx in L.pattern_list("message_correction", lang))
+
+
+def asks_what_to_broadcast(message: str, reply: str, lang: str) -> bool:
+    """True when the model answered a request to announce by asking what to say.
+
+    Both have to name it: "Turn on the broadcast." answered with "Which radio?"
+    is about something else, and the next thing said must not reach every room."""
+    if not (reply or "").strip().endswith("?"):
+        return False
+    return all(
+        any(rx.search(text.lower()) for rx in L.pattern_list("broadcast_word", lang))
+        for text in (message or "", reply)
+    )
+
+
+def cancels_broadcast(message: str, lang: str) -> bool:
+    """True for "never mind" in answer to what to announce."""
+    text = _broadcast_words(message)
+    return any(rx.search(text) for rx in L.pattern_list("broadcast_cancel", lang))
 
 
 def _room_colour_scope(name: str, arguments: dict) -> tuple[str, str] | None:
@@ -490,6 +579,32 @@ class Orchestrator(
             # 1. Add user turn to history.
             await self._context_mgr.add_turn(conversation_id, "user", message)
 
+            # 1a. "Broadcast." alone, then the message. Left to the model, the
+            # answer never became a tool call: 0 of 12 in replay, and "I've
+            # broadcast that you are here" with nothing sent on a real satellite
+            # (2026-11-08). The answer goes before the shortcuts below, which
+            # would act on its words.
+            broadcast_reply = await self._broadcast_turn(
+                message, conversation_id, device_id, lang
+            )
+            if broadcast_reply is not None:
+                await self._context_mgr.add_turn(
+                    conversation_id, "assistant", broadcast_reply
+                )
+                return broadcast_reply
+
+            # An answer that sounds like a request was taken for one: "I am getting
+            # hungry" got a restaurant search and "Hello, please make a dance" a
+            # false "I've sent it" (0 of 12 sent in replay, 2026-11-08).
+            message_reply = await self._message_answer_turn(
+                message, conversation_id, device_id, user_id, lang
+            )
+            if message_reply is not None:
+                await self._context_mgr.add_turn(
+                    conversation_id, "assistant", message_reply
+                )
+                return message_reply
+
             # 1b. Deterministic pre-LLM shortcut for "<attr> in <area>" questions.
             # Bypasses the tool loop entirely when we can answer from the
             # entity/area registry directly. ~50ms vs ~2-4s via the LLM, and
@@ -522,6 +637,19 @@ class Orchestrator(
             # the model it answered "I have scheduled that" with no tool at all.
             if asks_for_phrase_routine(message, lang):
                 refused = L.template("phrase_routine_refused", lang)
+                await self._context_mgr.add_turn(conversation_id, "assistant", refused)
+                return refused
+
+            # Nothing can play in a second room as well. Left to the model, "Also
+            # play in the bathroom." moved the music and left the kitchen silent,
+            # and "also here" got "I have moved the music" with no move (2026-11-08).
+            if (
+                not later
+                and self._ha_local is not None
+                and asks_for_second_room(message, lang)
+                and self._ha_local.music_players_playing()
+            ):
+                refused = L.template("second_room_refused", lang)
                 await self._context_mgr.add_turn(conversation_id, "assistant", refused)
                 return refused
 
@@ -681,6 +809,9 @@ class Orchestrator(
                 conversation_id,
                 speaker=speaker.name if speaker else None,
                 speaker_checked=speaker_task is not None,
+                signed_in=self._signed_in_name(user_id),
+                system_prompt=system_prompt,
+                tool_tokens=schema_tokens,
             )
             reserved_tokens = schema_tokens + self._context_mgr.estimate_tokens(volatile)
 
@@ -1040,6 +1171,18 @@ class Orchestrator(
                     else "remember_not_saved_short",
                     lang,
                 )
+            if _claims_unsent_message(message, stored_reply, tool_msgs):
+                _LOGGER.info(
+                    "AI Plugin: reply claimed a message went out, but none did: %r",
+                    stored_reply[:120],
+                )
+                stored_reply = reply = L.template("message_not_sent", lang)
+            if _claims_undone_action(message, stored_reply, tool_msgs):
+                _LOGGER.info(
+                    "AI Plugin: reply claimed an action, but none was done: %r",
+                    stored_reply[:120],
+                )
+                stored_reply = reply = L.template("err_action_failed", lang)
             # What the jobs did this turn decides, not which tools were called:
             # a refused call changes nothing either.
             if jobs_before is not None:
@@ -1124,6 +1267,17 @@ class Orchestrator(
             self._schedule_summarization(
                 conversation_id, system_prompt, reserved_tokens
             )
+
+        # "Broadcast something for me." comes in many wordings, and the model
+        # asks what to say to them all. The answer then needs the same handling.
+        if asks_what_to_broadcast(message, stored_reply, lang) and not _any_tool_call(
+            tool_msgs, BROADCAST_TOOL_NAME
+        ):
+            self.__dict__.setdefault("_broadcast_asked", {})[
+                device_id or conversation_id
+            ] = time.monotonic()
+
+        self._note_message_question(stored_reply, tool_msgs, conversation_id, device_id, lang)
 
         return stored_reply
 
@@ -1481,6 +1635,98 @@ class Orchestrator(
             return {**arguments, "area": room}, None
         return arguments, None
 
+    async def _broadcast_turn(
+        self, message: str, conversation_id: str, device_id: str | None, lang: str
+    ) -> str | None:
+        """Ask what to announce, or announce the answer; None for any other turn.
+
+        Kept per satellite, because the answer can arrive after a new wake word
+        in a new conversation."""
+        hass = getattr(self, "_hass", None)
+        if hass is None:
+            return None
+        asked = self.__dict__.setdefault("_broadcast_asked", {})
+        key = device_id or conversation_id
+        asked_at = asked.pop(key, None)
+        if asks_for_empty_broadcast(message, lang):
+            asked[key] = time.monotonic()
+            return L.template("broadcast_what", lang)
+        if asked_at is None or time.monotonic() - asked_at > _BROADCAST_ANSWER_S:
+            return None
+        if cancels_broadcast(message, lang):
+            return L.template("broadcast_cancelled", lang)
+        result = await async_broadcast(
+            hass, {"message": message}, language=lang, device_id=device_id
+        )
+        if result.startswith("["):
+            _LOGGER.info("AI Plugin: broadcast of the answer failed: %s", result)
+            return L.template("broadcast_failed", lang)
+        return L.template("broadcast_sent", lang)
+
+    def _note_message_question(
+        self,
+        reply: str,
+        tool_msgs: list[dict],
+        conversation_id: str,
+        device_id: str | None,
+        lang: str,
+    ) -> None:
+        """Remember that the model asked what to say to someone."""
+        hass = getattr(self, "_hass", None)
+        if hass is None or _any_tool_call(tool_msgs, TELL_TOOL):
+            return
+        person = person_asked_about(reply, lang, people_with_phones(hass).values())
+        if person is not None:
+            self.__dict__.setdefault("_message_asked", {})[
+                device_id or conversation_id
+            ] = (person, time.monotonic())
+
+    async def _message_answer_turn(
+        self,
+        message: str,
+        conversation_id: str,
+        device_id: str | None,
+        user_id: str | None,
+        lang: str,
+    ) -> str | None:
+        """Send the answer to "What should I say to Anna?"; None for any other turn.
+
+        It repeats the message, so a misheard one can be noticed."""
+        pending = self.__dict__.setdefault("_message_asked", {}).pop(
+            device_id or conversation_id, None
+        )
+        if pending is None or time.monotonic() - pending[1] > _BROADCAST_ANSWER_S:
+            return None
+        if corrects_message_target(message, lang):
+            return None
+        if cancels_broadcast(message, lang):
+            return L.template("message_cancelled", lang)
+        person = pending[0]
+        result = await self._dispatch_tool(
+            TELL_TOOL,
+            {"message": message, "person": person},
+            user_id=user_id,
+            device_id=device_id,
+            language=lang,
+        )
+        if result.startswith("["):
+            _LOGGER.info("AI Plugin: sending the answer failed: %s", result)
+            return L.template("message_not_sent", lang)
+        return L.template("message_sent_to", lang, name=person, label=message)
+
+    def _move_destination(self, area: str, user_message: str, device_id: str | None) -> str:
+        """The satellite's room for "move the music here", else the room as sent.
+
+        The model is not told its room: from the kitchen, "to this room" moved
+        the music to the living room (2026-11-08). A room named as the source, as
+        in "the music in the bathroom", must not stop this.
+        """
+        if self._hass is None or not moves_here(user_message):
+            return area
+        area_id = _caller_area_id(self._hass, device_id)
+        here = ar.async_get(self._hass).async_get_area(area_id) if area_id else None
+        return here.name if here else area
+
     def _this_room(self, device_id: str | None, user_message: str) -> str | None:
         """The satellite's room, unless the message names a different one, as in
         "turn off the kitchen light from here"."""
@@ -1586,8 +1832,13 @@ class Orchestrator(
                 resolve_person=self._resolve_person,
                 sender_name=state.attributes.get("friendly_name") if state else None,
             )
+        if name == BROADCAST_TOOL_NAME and self._hass is not None:
+            return await async_broadcast(
+                self._hass, arguments, language=language, device_id=device_id
+            )
         if name == "move_music" and self._ha_local is not None:
-            return await self._ha_local.move_music(arguments.get("area") or "", device_id)
+            area = self._move_destination(arguments.get("area") or "", user_message, device_id)
+            return await self._ha_local.move_music(area, device_id)
         if name == CALENDAR_TOOL and getattr(self, "_scheduler", None) is not None:
             return await async_add_event(
                 self._hass, arguments, self._scheduler.now(),
@@ -1646,7 +1897,16 @@ class Orchestrator(
         if self._mcp is not None:
             if name == "HassLightSet":
                 arguments = hass_light_set_args(arguments)
-            return await self._mcp.call_tool(name, name_without_room(arguments))
+            arguments = name_without_room(arguments)
+            if name == "HassListAddItem":
+                items = split_list_items(arguments.get("item"))
+                if len(items) > 1:
+                    # One entry per item, so each can be ticked off alone.
+                    return "\n".join([
+                        await self._mcp.call_tool(name, {**arguments, "item": one})
+                        for one in items
+                    ])
+            return await self._mcp.call_tool(name, arguments)
         return f"[Tool {name!r} unavailable — no handler configured]"
 
 
@@ -1655,6 +1915,13 @@ class Orchestrator(
         return resolve_owner(
             self._hass, name, speaker_person=None, find_person=self._find_person
         ) if name else None
+
+    def _signed_in_name(self, user_id: str | None) -> str | None:
+        """The name of the person whose Home Assistant login this turn came in on."""
+        hass = getattr(self, "_hass", None)
+        person = person_for_user(hass, user_id) if hass is not None else None
+        state = hass.states.get(person) if person else None
+        return state.attributes.get("friendly_name") if state else None
 
     def _speaking_person(self, device_id: str | None, user_id: str | None) -> str | None:
         """The person entity of who is speaking: by voice, else by HA login."""

@@ -55,6 +55,14 @@ templates:
   phrase_routine_refused: "Einen Satz dafür kann ich mir noch nicht merken, also ist nichts eingestellt. Zu einer festen Uhrzeit geht es, sag mir dann wann."
   remember_not_saved: "Das habe ich nicht gespeichert. Wenn ich es behalten soll, sag merk dir und dann, was."
   remember_not_saved_short: "Das habe ich nicht gespeichert."
+  second_room_refused: "Ich kann nicht in zwei Räumen gleichzeitig spielen. Ich kann die Musik aber verschieben."
+  broadcast_what: "Was soll ich durchsagen?"
+  broadcast_sent: "Ich habe es in allen anderen Räumen gesagt."
+  broadcast_failed: "Das konnte ich nicht durchsagen."
+  broadcast_cancelled: "Okay, keine Durchsage."
+  message_sent_to: "An {name} geschickt: {label}"
+  message_not_sent: "Das konnte ich nicht senden."
+  message_cancelled: "Okay, nichts gesendet."
   schedule_not_changed: "Ich habe nichts geändert. Sag mir die neue Zeit, dann stelle ich sie ein."
 keywords:
   time_now:      ["wie spät ist es", "wie viel uhr ist es", "wieviel uhr ist es", "sag mir die uhrzeit", "wie spät"]
@@ -127,6 +135,39 @@ patterns:
   schedule_keep_both:
     - '\b(?:auch|zusätzlich|noch\s+eine\w*|weitere\w*|zweite\w*)\b'
   # A command for the room the satellite is in.
+  # The room something is moved to is the speaker's own: "move the music here".
+  move_here:
+    - '\b(?:hierher|hierhin|hier\s+her)\b'
+    - '\bin\s+(?:diesen\s+raum|dieses\s+zimmer)\b'
+    - '(?<!\bvon\s)\b(?:hier|in\s+diesem\s+(?:raum|zimmer))(?:\s+(?:bitte|jetzt))?[\s.!?]*$'
+  # A reply saying something was done. With nothing done, it is replaced by err_action_failed.
+  action_done_claim:
+    - '(?:^|[.!?,]\s+)ich\s+habe\s+(?!.*\b(?:nicht|nichts|kein\w*)\b).*\b(?:durchgesagt|angekündigt|verschoben|hinzugefügt|entfernt|gelöscht|ausgeschaltet|eingeschaltet|angeschaltet|abgeschaltet|gedimmt|pausiert|gestoppt|gestartet|abgespielt|geändert|erledigt)\b'
+  # Music in a second room as well, which the plugin cannot do: "also play in the bathroom".
+  second_room:
+    - '\b(?:spiel\w*|abspielen)\b.*\b(?:auch|zus[äa]tzlich)\s+(?:im|in|auf|hier|dort|da)\b'
+    - '\b(?:auch|zus[äa]tzlich)\s+(?:im|in|auf|hier|dort|da)\b.*\b(?:spiel\w*|abspielen)\b'
+    - '\b(?:spiel\w*|abspielen|musik)\b.*\b(?:beiden|zwei|mehreren)\s+(?:r[äa]umen|zimmern|lautsprechern)\b'
+  # "Broadcast." and nothing to say yet: the next thing said is the message.
+  broadcast_empty:
+    - '^(?:bitte\s+)?(?:durchsage|ansage|broadcast|(?:mach|sende)\s+eine\s+(?:durchsage|ansage)|etwas\s+durchsagen)(?:\s+bitte)?$'
+  # Asking for an announcement, in any wording, and the assistant asking what to say.
+  broadcast_word:
+    - '\b(?:durchsage|durchsagen|ansage|ansagen|broadcast)\b'
+  # Taking that back instead of giving the message.
+  broadcast_cancel:
+    - '^(?:nein[,\s]+)?(?:vergiss\s+es|abbrechen|abbruch|nichts|egal|schon\s+gut|stopp?)(?:\s+bitte)?$'
+  # The assistant asking what to say to one person: the next thing said is the message.
+  message_asked:
+    - '^(?:und\s+)?(?:was\b|welche\s+nachricht\b).*\b(?:sagen|schreiben|senden|schicken|ausrichten|mitteilen)\b'
+  # Correcting who a message is for: not itself a message.
+  message_correction:
+    - '^(?:nein[,\s]+)?nicht\s+(?:an|zu|für)\b'
+    - '\b(?:die|der|den|das|dem)\s+ander'
+  # A reply saying a message went out. "Already sent" stays out: it can be true.
+  message_sent_claim:
+    - '(?:^|[.!?,]\s+)ich\s+habe\s+(?!.*\b(?:nicht|nichts|kein\w*|schon|bereits)\b).*\b(?:geschickt|gesendet|geschrieben|weitergeleitet|ausgerichtet)\b'
+    - '\bnachricht\s+wurde\s+(?:gesendet|geschickt)\b'
   this_room:
     - '\b(?:hier|diesem\s+raum|diesem\s+zimmer)\b'
   # Words that exclude it: "everywhere except here".

@@ -34,6 +34,33 @@ def name_without_room(arguments: dict) -> dict:
     return {**arguments, "name": plain} if plain else arguments
 
 
+# Items said in a row ("I need oat milk, parmesan and eggs") reach
+# HassListAddItem as one item, and Home Assistant stores it as one entry
+# (2026-11-07). A comma followed by a space separates items, so "1,5 l Milch"
+# stays whole; so does "mac and cheese" said alone. In a list with commas, the
+# word before the last item ("…, vegetables and eggs") separates too.
+_ITEM_SEPARATOR_RE = re.compile(r",\s+|\s*[;\n]\s*")
+_LAST_ITEM_JOIN_RE = re.compile(
+    r"(?:^|\s+)(?:and|und|et|y|e|i|en|oraz)\s+", re.IGNORECASE
+)
+
+
+def split_list_items(item: object) -> list[str]:
+    """The separate to-do items in one spoken item, or the item as it was."""
+    if not isinstance(item, str):
+        return []
+    parts = [p.strip() for p in _ITEM_SEPARATOR_RE.split(item.strip())]
+    parts = [p for p in parts if p]
+    if len(parts) < 2:
+        return [item]
+    *head, last = parts
+    tail = [p.strip() for p in _LAST_ITEM_JOIN_RE.split(last, maxsplit=1)]
+    items = [*head, *(p for p in tail if p)]
+    if item.strip()[:1].isupper():
+        items = [p[:1].upper() + p[1:] for p in items]
+    return items
+
+
 def _readonly_schemas(schemas: list[dict]) -> list[dict]:
     """Schemas minus actuators — for grounding retries that must not act."""
     return [

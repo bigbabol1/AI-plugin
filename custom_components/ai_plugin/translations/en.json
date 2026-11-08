@@ -230,7 +230,7 @@
       },
       "mcp_servers": {
         "title": "MCP Servers",
-        "description": "Connect AI Plugin to external tools via the Model Context Protocol (MCP). Add Home Assistant's built-in MCP server to let Buddy read sensors and control devices.\n\nConfigured servers:\n{servers}",
+        "description": "Connect AI Plugin to external tools via the Model Context Protocol (MCP). Add Home Assistant's built-in MCP server to let the assistant read sensors and control devices.\n\nConfigured servers:\n{servers}",
         "data": {
           "mcp_action": "What would you like to do?"
         },

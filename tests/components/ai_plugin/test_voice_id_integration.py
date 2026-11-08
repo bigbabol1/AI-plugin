@@ -229,7 +229,9 @@ async def test_recognised_speaker_reaches_memory_and_prompt() -> None:
     orch = _voice_orch(voice)
     seen = {}
 
-    async def _volatile(user_id, conversation_id, speaker=None, speaker_checked=False):
+    async def _volatile(
+        user_id, conversation_id, speaker=None, speaker_checked=False, **_
+    ):
         seen.update(user_id=user_id, speaker=speaker, checked=speaker_checked)
         return ""
 

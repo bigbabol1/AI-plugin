@@ -4,6 +4,64 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v1.1.2 — broadcasts, messages and fewer repeated facts
+
+### Heads-up when updating
+
+- **After "What should I announce?" or "What should I say to Anna?", the next thing said
+  on that device within 60 seconds goes out word for word.** "Never mind" cancels it, and
+  "not to Anna" goes back to the model. Anything else said in that minute is sent too.
+- **"Also play in the bathroom" now gets a fixed reply while music is playing, and nothing
+  moves.** Rooms can't be grouped reliably: a Nest Mini can't run Sendspin, and it drops
+  out of a group a few seconds after the join reports success.
+- **Messages and reminders to an Android phone now go out at high priority,** so a phone
+  that is idle doesn't hold them back. iPhones are unchanged.
+
+### Known issues
+
+- **A correction may not find the earlier reminder when the speaker isn't recognised,**
+  because it was stored under a person. The old reminder then stays.
+- **A satellite can answer its own reply when a separate speaker starts late.** The
+  microphone now waits for the speaker Mic to MediaPlayer routes the reply to. Other
+  setups with a separate speaker can still hear it.
+- **Names can be misheard by speech-to-text,** and a misheard message is sent as heard.
+  The reply repeats a message it was given as an answer, so this can be noticed.
+
+### Fixed
+
+- **Saved facts were repeated in the conversation on every turn.** With 96 facts the
+  prompt grew by about 2,300 tokens per turn, and now by about 90. The facts go in again
+  only when the model can't already see them: after a change, another speaker, or a
+  summary that replaced them. Your first turn is the same size as before.
+- **A broadcast interrupted the satellite that asked, and its reply was lost.** It also
+  played on each satellite's own speaker, not the one Mic to MediaPlayer routes replies
+  to. It now speaks in every other room, through the routed speaker, and confirms aloud.
+- **"Broadcast." followed by the message wasn't announced.** The assistant could say it had
+  announced something when it hadn't. Any wording that makes the model ask what to announce
+  now works too.
+- **The microphone could reopen while a reply was still playing,** so the end of the
+  reply became part of the answer. "What should I announce?" followed by "Hello" went out
+  as "Should I? Hello."
+- **In the Companion app and the Assist panel the model didn't know who was speaking,** so
+  "send a message to the other person" asked who that was, or picked the speaker. It now
+  gets the name of the person signed in, unless a voice was recognised.
+- **"What should I say to Anna?" could end without a message being sent.** An answer that
+  sounded like a request, such as "I'm getting hungry", was taken for one.
+- **The assistant could say a message had gone out when it hadn't.** That reply is now
+  replaced by "I couldn't send that." in the speaker's language.
+- **The assistant could claim other actions it hadn't done,** such as "I've moved the music"
+  or "I've removed eggs". That reply is now replaced by the action-failed message.
+- **"Move the music here" could pick the wrong room.** "Here" now means the room of the
+  satellite that heard it, and a playing group's queue moves as a whole.
+- **Several items said in a row became one shopping list entry.** "I need oat milk,
+  parmesan" now adds two. "Mac and cheese" and "1,5 l Milch" stay whole.
+- **Stray characters at the end of replies.** Leftovers of emoticons such as `٩ﮩ` got past
+  the filter, were spoken, and were copied by the next reply. Text in other scripts stays.
+
+### Changed
+
+- **Setup text says "the assistant"** where it used a name for it.
+
 ## v1.1.1 — works on Home Assistant 2026.11
 
 ### Heads-up when updating

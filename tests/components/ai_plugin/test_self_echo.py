@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from custom_components.ai_plugin.conversation import (
     _is_self_echo,
     AIPluginConversationEntity,
@@ -943,3 +945,57 @@ async def test_reopen_records_a_quiet_room_only(monkeypatch) -> None:
     await ent._reopen_after_quiet("d1", "assist_satellite.sat", "Two words", 0.5)
     hass.services.async_call.assert_awaited_once()  # reopened at the cap
     assert "d1" not in ent._reopened_store()
+
+
+async def test_reopen_waits_for_the_routed_speaker_to_start(monkeypatch) -> None:
+    """A gap between the satellite's own player and the speaker is not quiet."""
+    from custom_components.ai_plugin import conversation as conv
+
+    ent, hass, _ = _entity_with_satellite(monkeypatch)
+    checks = iter([False, False, True])
+    seen: list[str | None] = []
+
+    def _started(_hass, speaker, _age):
+        seen.append(speaker)
+        return next(checks)
+
+    async def _fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(conv.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(conv, "_routed_speaker", lambda *a: "media_player.bedroom")
+    monkeypatch.setattr(conv, "_routed_speaker_started", _started)
+    monkeypatch.setattr(conv, "_reply_playback_started", lambda *a: True)
+    monkeypatch.setattr(conv, "_reply_audio_active", lambda *a: False)
+
+    await ent._reopen_after_quiet("d1", "assist_satellite.sat", "Two words", 0.5)
+
+    assert seen == ["media_player.bedroom"] * 3
+    hass.services.async_call.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("speaker", "state", "seconds_ago", "started"),
+    [
+        (None, None, 0.0, True),  # not routed
+        ("media_player.x", "idle", 30.0, False),  # has not begun the reply
+        ("media_player.x", "idle", 1.0, True),  # played it and finished
+        ("media_player.x", "playing", 0.5, True),
+        ("media_player.x", "playing", 600.0, True),  # music hides the reply
+    ],
+)
+def test_routed_speaker_started(speaker, state, seconds_ago, started) -> None:
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.ai_plugin import conversation as conv
+
+    hass = MagicMock()
+    hass.states.get.return_value = SimpleNamespace(
+        state=state, last_changed=dt_util.utcnow() - timedelta(seconds=seconds_ago)
+    )
+    assert conv._routed_speaker_started(hass, speaker, 2.5) is started
+

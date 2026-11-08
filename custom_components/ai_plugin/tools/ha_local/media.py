@@ -259,6 +259,16 @@ class MediaToolsMixin:
         elif not was_on:
             turned_on.add(entity_id)
 
+    def music_players_playing(self) -> list[str]:
+        """The Music Assistant players playing now, by entity id."""
+        return sorted(
+            eid for eid, entry in er.async_get(self._hass).entities.items()
+            if eid.startswith("media_player.")
+            and entry.platform == "music_assistant"
+            and (state := self._hass.states.get(eid)) is not None
+            and state.state == "playing"
+        )
+
     async def move_music(self, area: str, device_id: str | None = None) -> str:
         """Move what is playing to another room, through Music Assistant."""
         if not self._hass.services.has_service("music_assistant", "transfer_queue"):
@@ -272,30 +282,30 @@ class MediaToolsMixin:
         target = self._music_player_in_area(target_area, True)
         if target is None:
             return f"[No speaker in {target_area.name}. Tell the user.]"
-        ent_reg = er.async_get(self._hass)
-        playing = sorted(
-            eid for eid, entry in ent_reg.entities.items()
-            if eid.startswith("media_player.")
-            and entry.platform == "music_assistant"
-            and (state := self._hass.states.get(eid)) is not None
-            and state.state == "playing"
-        )
+        playing = self.music_players_playing()
         if not playing:
             return "[Nothing is playing, so there is nothing to move. Ask what to play.]"
         if target in playing:
             return f"[It is already playing in {target_area.name}. Tell the user.]"
+        # The members of a playing group report playing too, and the group holds
+        # the queue: Big Speaker sorted ahead of its group Wohnzimmer (2026-11-08).
+        groups = [
+            eid for eid in playing
+            if self._hass.states.get(eid).attributes.get("mass_player_type") == "group"
+        ]
+        source = (groups or playing)[0]
         try:
             await self._hass.services.async_call(
                 "music_assistant",
                 "transfer_queue",
                 target={"entity_id": target},
-                service_data={"source_player": playing[0], "auto_play": True},
+                service_data={"source_player": source, "auto_play": True},
                 blocking=True,
             )
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("AI Plugin move_music failed")
             return f"[move_music failed: {exc}]"
-        return f"OK — moved the music from {playing[0]} to {target}."
+        return f"OK — moved the music from {source} to {target}."
 
     def _music_area(self, area: str):
         """The area with this exact name or alias, or None."""

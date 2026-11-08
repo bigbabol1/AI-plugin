@@ -75,7 +75,7 @@ class MCPServerStepsMixin:
             "command": "uvx",
             "args_template": ["mcp-server-sqlite", "--db-path", "{value}"],
             "config_label": "database file path",
-            "config_placeholder": "/config/buddy_notes.db",
+            "config_placeholder": "/config/assistant_notes.db",
         },
         "calculator": {
             "label": "Calculator — precise math without model guessing",
@@ -99,7 +99,7 @@ class MCPServerStepsMixin:
         if not self._pending_mcp:
             return (
                 "No servers configured yet.\n"
-                "Tip: Add Home Assistant's built-in MCP server to let Buddy read "
+                "Tip: Add Home Assistant's built-in MCP server to let the assistant read "
                 "your sensors and control devices."
             )
         lines = [f"{i}. {self._mcp_server_label(s)}" for i, s in enumerate(self._pending_mcp, 1)]

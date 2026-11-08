@@ -62,6 +62,14 @@ templates:
   phrase_routine_refused: "Ik kan daar nog geen zin voor opslaan, dus er is niets ingesteld. Op een vast tijdstip kan het wel, als je zegt wanneer."
   remember_not_saved: "Dat heb ik niet opgeslagen. Als ik het moet onthouden, zeg dan onthoud en daarna wat."
   remember_not_saved_short: "Dat heb ik niet opgeslagen."
+  second_room_refused: "Ik kan niet in twee kamers tegelijk spelen. Ik kan de muziek verplaatsen als je wilt."
+  broadcast_what: "Wat moet ik omroepen?"
+  broadcast_sent: "Ik heb het in alle andere kamers gezegd."
+  broadcast_failed: "Ik kon dat niet omroepen."
+  broadcast_cancelled: "Oké, niets omgeroepen."
+  message_sent_to: "Naar {name} gestuurd: {label}"
+  message_not_sent: "Ik kon dat niet versturen."
+  message_cancelled: "Oké, niets verstuurd."
   schedule_not_changed: "Ik heb niets gewijzigd. Zeg de nieuwe tijd en ik stel hem in."
 keywords:
   time_now:      ["hoe laat is het", "wat is de tijd", "zeg me de tijd", "hoe laat"]
@@ -132,6 +140,36 @@ patterns:
   schedule_keep_both:
     - '\b(?:ook|nog\s+een|extra|tweede|daarnaast)\b'
   # A command for the room the satellite is in.
+  # The room something is moved to is the speaker's own: "move the music here".
+  move_here:
+    - '\bnaar\s+(?:hier|deze\s+kamer)\b'
+    - '\bhierheen\b'
+    - '(?<!\bvan\s)(?<!\bvanaf\s)\bhier(?:\s+alsjeblieft)?[\s.!?]*$'
+  # A reply saying something was done. With nothing done, it is replaced by err_action_failed.
+  action_done_claim:
+    - '(?:^|[.!?,]\s+)ik\s+heb\s+(?!.*\b(?:niet|niets|geen)\b).*\b(?:omgeroepen|aangekondigd|verplaatst|toegevoegd|verwijderd|aangezet|uitgezet|gepauzeerd|gestopt|gestart|gewijzigd)\b'
+  # Music in a second room as well, which the plugin cannot do: "also play in the bathroom".
+  second_room:
+    - '\b(?:speel|zet)\b.*\book\s+(?:in|op|hier|daar)\b'
+    - '\b(?:speel|zet)\b.*\b(?:twee|meerdere)\s+(?:kamers|speakers)\b'
+  # "Broadcast." and nothing to say yet: the next thing said is the message.
+  broadcast_empty:
+    - '^(?:omroepen|omroep|broadcast|doe\s+een\s+omroep|maak\s+een\s+aankondiging|iets\s+omroepen)$'
+  # Asking for an announcement, in any wording, and the assistant asking what to say.
+  broadcast_word:
+    - '\b(?:omroepen|omroep|aankondiging|aankondigen|broadcast)\b'
+  # Taking that back instead of giving the message.
+  broadcast_cancel:
+    - '^(?:nee[,\s]+)?(?:laat\s+maar|vergeet\s+het|annuleer|annuleren|niets|stop)$'
+  # The assistant asking what to say to one person: the next thing said is the message.
+  message_asked:
+    - '^(?:wat\b|welk\s+bericht\b).*\b(?:zeggen|schrijven|sturen|versturen|bericht)\b'
+  # Correcting who a message is for: not itself a message.
+  message_correction:
+    - '^(?:nee[,\s]+)?niet\s+(?:aan|naar|voor)\b'
+  # A reply saying a message went out. "Already sent" stays out: it can be true.
+  message_sent_claim:
+    - '(?:^|[.!?,]\s+)ik\s+heb\s+(?!.*\b(?:niet|niets|geen|al)\b).*\b(?:gestuurd|verstuurd|verzonden)\b'
   this_room:
     - '\b(?:hier|deze\s+kamer)\b'
   # Words that exclude it: "everywhere except here".

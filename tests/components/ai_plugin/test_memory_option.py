@@ -125,7 +125,7 @@ async def test_memory_on_keeps_the_speaker_block() -> None:
     orch = _orch(True)
     known = await orch._build_volatile_block(None, "c1", speaker="Anna")
     unknown = await orch._build_volatile_block(None, "c1", speaker_checked=True)
-    assert "[USER FACTS] below are Anna's." in known
+    assert "The newest [USER FACTS] are Anna's." in known
     assert "Nothing can be saved to memory" in unknown
 
 

@@ -80,17 +80,36 @@ class PromptBlocksMixin:
         conversation_id: str,
         speaker: str | None = None,
         speaker_checked: bool = False,
+        signed_in: str | None = None,
+        system_prompt: str | None = None,
+        tool_tokens: int | None = None,
     ) -> str:
         """Per-turn context ([CURRENT TIME], [SPEAKER], [USER FACTS], [LAST ACTION]).
 
         Injected as a system message directly before the newest user turn
         so the static prompt head above stays cache-stable. [SPEAKER] is
         present only when voice recognition named the speaker.
+
+        These blocks stay in history for the prompt cache, so [USER FACTS] goes
+        in only when the model can't already see those same facts: repeated every
+        turn, 96 facts added about 2,300 tokens per turn (2026-11-08). It comes
+        back after a change, another speaker, or a summary that replaced it.
         """
+        facts = await self._build_user_facts_block(user_id)
+        if (
+            facts
+            and system_prompt is not None
+            and await self._context_mgr.newest_block_is(
+                conversation_id, _FACTS_MARKER, facts, system_prompt, tool_tokens
+            )
+        ):
+            facts = ""
         parts = [
             self._build_time_block(),
-            _speaker_block(speaker, speaker_checked, self._memory_enabled()),
-            await self._build_user_facts_block(user_id),
+            _speaker_block(
+                speaker, speaker_checked, self._memory_enabled(), signed_in=signed_in
+            ),
+            facts,
         ]
         last = self._last_entities.get(conversation_id)
         if last:
@@ -150,7 +169,7 @@ class PromptBlocksMixin:
         # conversion example is what made the difference, a general rule in
         # the system prompt alone did not.
         return (
-            "[USER FACTS]\n"
+            f"{_FACTS_MARKER}"
             "Facts previously saved by the user. Use them when answering "
             "questions about who they are. Preferences among them (units, "
             "language, style) apply to EVERY answer, whatever the topic: if "
@@ -211,18 +230,36 @@ class PromptBlocksMixin:
         )
 
 
-def _speaker_block(speaker: str | None, checked: bool, memory: bool = True) -> str:
+_FACTS_MARKER = "[USER FACTS]\n"
+
+
+def _speaker_block(
+    speaker: str | None,
+    checked: bool,
+    memory: bool = True,
+    signed_in: str | None = None,
+) -> str:
     """[SPEAKER] for this turn. Explicit about who speaks NOW: with the name
     in history from an earlier turn, the model kept telling the second
     speaker the first speaker's name although their voice had been
-    recognised (2026-10-24)."""
+    recognised (2026-10-24).
+
+    In the Companion app or the Assist panel the voice is not checked, because
+    the login already says who it is. Without saying so here, "send a message
+    to the other person" was answered with "to Ben or Anna?" (2026-11-08)."""
+    if signed_in and not speaker and not checked:
+        return (
+            "[SPEAKER]\n"
+            f"The person speaking now is signed in on this device as {signed_in}. "
+            f"Treat them as {signed_in} unless they say they are someone else."
+        )
     if speaker:
         return (
             "[SPEAKER]\n"
             f"The person speaking now was recognised by voice as {speaker}. "
             f"Treat them as {speaker}, even if earlier turns of this conversation "
             f"were someone else."
-            + (f" [USER FACTS] below are {speaker}'s." if memory else "")
+            + (f" The newest [USER FACTS] are {speaker}'s." if memory else "")
         )
     if checked:
         # "Not recognised" alone read as "never enrolled": an enrolled user who

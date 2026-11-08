@@ -65,6 +65,35 @@ def satellite_in_area(hass, raw: str) -> str | None:
     return None
 
 
+def announcing_satellites(hass, *, besides: str | None = None) -> list[str]:
+    """The device of every satellite that can announce, except ``besides``.
+
+    The same choice HA's HassBroadcast makes, phones on a VoIP line included:
+    those would have to be rung."""
+    from homeassistant.components.assist_satellite import (  # noqa: PLC0415
+        AssistSatelliteEntityFeature,
+    )
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    devices = []
+    for entry in er.async_get(hass).entities.values():
+        if (
+            not entry.entity_id.startswith("assist_satellite.")
+            or not entry.device_id
+            or entry.device_id == besides
+            or not (entry.supported_features or 0) & AssistSatelliteEntityFeature.ANNOUNCE
+        ):
+            continue
+        config = (
+            hass.config_entries.async_get_entry(entry.config_entry_id)
+            if entry.config_entry_id else None
+        )
+        if config is not None and config.domain == "voip":
+            continue
+        devices.append(entry.device_id)
+    return devices
+
+
 def satellite_pipeline(hass, device_id: str, lang: str | None = None):
     """The Assist pipeline this satellite runs (its "Assistant" select,
     "preferred" meaning HA's preferred pipeline), or None.

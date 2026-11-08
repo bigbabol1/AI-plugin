@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 
+from ..i18n import SUPPORTED_LANGS, L
+
 # Trigger phrases for questions that MUST be grounded in list_entities.
 # "any X on", "which X are off", "welche X sind an", etc. — used by the
 # grounding verifier to detect when the model answered from memory instead
@@ -56,7 +58,7 @@ _MEDIA_TOOL_NAMES = ("play_music", "media_command", "move_music")
 # Nothing shows that they worked, so their confirmation is always spoken.
 _SCHEDULE_WRITE_TOOL_NAMES = (
     "set_alarm", "set_reminder", "schedule_action", "cancel_scheduled",
-    "add_calendar_event", "tell",
+    "add_calendar_event", "tell", "HassBroadcast",
 )
 
 def _any_media_status_call(tool_msgs: list[dict]) -> bool:
@@ -234,6 +236,59 @@ _ACTION_PROMISE_RE = re.compile(
 def _is_action_promise(text: str) -> bool:
     """True when the reply claims an action that no tool actually performed."""
     return bool(text) and bool(_ACTION_PROMISE_RE.search(text))
+
+def claims_action_done(reply: str) -> bool:
+    """True when a reply says something was done: "I have moved the music"."""
+    lowered = (reply or "").strip().lower()
+    return any(
+        rx.search(lowered)
+        for code in SUPPORTED_LANGS
+        for rx in L.pattern_list("action_done_claim", code)
+    )
+
+def _no_write_landed(tool_msgs: list[dict]) -> bool:
+    """True when no tool ran, or when every write that ran failed.
+
+    A turn with only other tools stays out: a look-up or a tool the user brought
+    may back the claim, and a true reply replaced is as bad as a false one kept.
+    """
+    if not tool_msgs:
+        return True
+    results = _tool_results(
+        tool_msgs,
+        (
+            *_ACTUATOR_TOOL_NAMES, *_LIST_WRITE_TOOL_NAMES,
+            *_TIMER_WRITE_TOOL_NAMES, *_SCHEDULE_WRITE_TOOL_NAMES,
+        ),
+    )
+    return bool(results) and all(r.lstrip().startswith("[") for r in results)
+
+def _claims_undone_action(message: str, reply: str, tool_msgs: list[dict]) -> bool:
+    """True when a reply says something was done and nothing backs it.
+
+    "Did you turn it off?" can be answered from history, so questions stay out.
+    "I have moved the music" with no move, and "I've removed eggs" with the list
+    unchanged, were both said on real satellites (2026-11-07 and 2026-11-08).
+    """
+    if "?" in (message or "") or _QUESTION_INTENT_RE.search(message or ""):
+        return False
+    return _no_write_landed(tool_msgs) and claims_action_done(reply)
+
+def _claims_unsent_message(message: str, reply: str, tool_msgs: list[dict]) -> bool:
+    """True when a reply says a message went out and nothing backs it.
+
+    "I've sent the message to Anna" came with no call and no notification, twice
+    in a row, on a real phone (2026-11-08). Only the start of the turn can make it
+    a question, because a message itself says "is" or "ist": "Dinner is ready".
+    """
+    if "?" in (message or "") or _QUESTION_INTENT_RE.match((message or "").strip()):
+        return False
+    lowered = (reply or "").strip().lower()
+    return _no_write_landed(tool_msgs) and any(
+        rx.search(lowered)
+        for code in SUPPORTED_LANGS
+        for rx in L.pattern_list("message_sent_claim", code)
+    )
 
 def _is_action_command(text: str) -> bool:
     """True when the user message is a short imperative action.

@@ -2,6 +2,12 @@
 
 Home Assistant's own HassBroadcast speaks everywhere at once, so "tell the
 kitchen dinner is ready" and "send Anna a message" had nowhere to go.
+
+HassBroadcast itself is answered here as well. Home Assistant plays it on each
+satellite's own speaker, which is not the one people hear when Mic to
+MediaPlayer routes that satellite's replies elsewhere. Through MCP it also
+doesn't know which satellite asked, so it interrupts the turn on that satellite
+too, and the question is left without a reply.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from ..i18n import L
 _LOGGER = logging.getLogger(__name__)
 
 TOOL_NAME = "tell"
+BROADCAST_TOOL_NAME = "HassBroadcast"
 
 TOOL_SCHEMA: dict[str, Any] = {
     "type": "function",
@@ -41,6 +48,39 @@ TOOL_SCHEMA: dict[str, Any] = {
         },
     },
 }
+
+
+async def async_broadcast(
+    hass,
+    arguments: dict[str, Any],
+    *,
+    language: str | None,
+    device_id: str | None = None,
+) -> str:
+    """Speak the message in every other room. Never raises; errors go back to
+    the model. The room that asked hears the reply instead."""
+    lang = (language or "en").split("-")[0].lower()
+    message = str(arguments.get("message") or "").strip()
+    if not message:
+        return "[Not said: 'message' must say what to announce.]"
+    try:
+        devices = satellite_speech.announcing_satellites(hass, besides=device_id)
+        if not devices:
+            return "[Not said: there is no other satellite to hear it. Tell the user.]"
+        spoken = 0
+        for device in devices:
+            if await satellite_speech.async_announce(
+                hass, device, "scheduled_say", lang, label=message
+            ):
+                spoken += 1
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.exception("AI Plugin: broadcast failed")
+        return f"[Not said: {exc}]"
+    if not spoken:
+        return "[Not said: no satellite could play it. Tell the user.]"
+    if spoken < len(devices):
+        return f"Said on {spoken} of {len(devices)} satellites: {message}"
+    return f"Said in every other room: {message}"
 
 
 async def async_tell(

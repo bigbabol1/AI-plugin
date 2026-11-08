@@ -98,16 +98,42 @@ _KEPT_TYPOGRAPHY = frozenset("–—…«»„“”‘’‚‹›¿¡·•§�
 _WORD_RE = re.compile(r"(?:(?<=\s)|^)\S+(?=\s|$)")
 
 
-def _has_non_latin_letter(text: str) -> bool:
-    return any(ch.isalpha() and ord(ch) > 0x24F for ch in text)
+# Letters shaped for one position in a word ("ﮩ" in "٩(◕ᗜ◕̤)ﮩ", gemma-4 2026-11-08).
+# Arabic text doesn't use them, it's written with the plain letters, so finding
+# one is what a face looks like. It also counted as a letter of a foreign reply,
+# which switched the whole clean-up off, and each reply left "٩ﮩ" behind for the
+# next one to copy.
+_POSITIONAL_FORMS = ("<initial>", "<medial>", "<final>", "<isolated>")
+
+
+def _is_positional_form(ch: str) -> bool:
+    return unicodedata.decomposition(ch).startswith(_POSITIONAL_FORMS)
+
+
+def _is_latin_letter(ch: str) -> bool:
+    return ch.isalpha() and ord(ch) <= 0x24F
+
+
+def _mostly_latin(text: str) -> bool:
+    """True unless the reply is written in another script. A quoted foreign word
+    doesn't change that: "Hello in Arabic is مرحبا"."""
+    letters = [ch for ch in text if ch.isalpha() and not _is_positional_form(ch)]
+    latin = sum(_is_latin_letter(ch) for ch in letters)
+    return latin * 2 >= len(letters)
+
+
+def _is_face_part(ch: str) -> bool:
+    return not ch.isascii() and (unicodedata.category(ch) == "Nd" or _is_positional_form(ch))
 
 
 def _is_stray_glyph_word(word: str) -> bool:
-    return all(
-        not ch.isascii()
-        and ch not in _KEPT_TYPOGRAPHY
-        and unicodedata.category(ch) in _STRAY_GLYPH_CATEGORIES
-        for ch in word
+    word = word.strip(".,!?:;")
+    if not word or any(
+        ch.isascii() or ch in _KEPT_TYPOGRAPHY or _is_latin_letter(ch) for ch in word
+    ):
+        return False
+    return any(_is_face_part(ch) for ch in word) or all(
+        unicodedata.category(ch) in _STRAY_GLYPH_CATEGORIES for ch in word
     )
 
 
@@ -119,10 +145,12 @@ def _strip_emoji(text: str) -> str:
     cleaned = _KAOMOJI_GROUP_RE.sub("", cleaned)
     cleaned = _KAOMOJI_CHAR_RE.sub("", cleaned)
     cleaned = _KAOMOJI_FACE_RE.sub("", cleaned)
-    if not _has_non_latin_letter(cleaned):
+    if _mostly_latin(cleaned):
         cleaned = _WORD_RE.sub(
             lambda m: "" if _is_stray_glyph_word(m.group()) else m.group(), cleaned
         )
+        # The same glyphs joined to a word: "today?٩ﮩ".
+        cleaned = "".join(ch for ch in cleaned if not _is_face_part(ch))
     # Collapse residual double-spaces introduced by stripped glyphs.
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()

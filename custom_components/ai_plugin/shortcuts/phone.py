@@ -169,11 +169,16 @@ async def async_notify_person(hass: HomeAssistant, person_id: str, title: str, t
     """Send a plain notification to a person's phones; True if one took it."""
     sent = False
     for phone in phones_of(hass, person_id):
+        payload: dict[str, Any] = {"title": title, "message": text}
+        if not phone.apple:
+            # At normal priority Android holds a push back while the phone is
+            # idle: messages arrived well after they were sent (2026-11-08).
+            payload["data"] = {"ttl": 0, "priority": "high"}
         try:
             await hass.services.async_call(
                 "notify",
                 phone.service,
-                {"title": title, "message": text},
+                payload,
                 blocking=True,
                 context=Context(),
             )

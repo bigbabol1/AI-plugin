@@ -43,7 +43,7 @@ from .exceptions import OrchestratorError
 from .i18n import L
 from .music_ducking import room_players
 from .orchestrator import Orchestrator
-from .satellite_speech import satellite_entity
+from .satellite_speech import mic2mp_for, satellite_entity
 from .shortcuts import looks_like_command
 
 _LOGGER = logging.getLogger(__name__)
@@ -266,6 +266,34 @@ def _reply_playback_started(
     except Exception:  # noqa: BLE001 — never let this block the follow-up
         _LOGGER.debug("reply playback start check failed", exc_info=True)
     return False
+
+
+def _routed_speaker(hass: HomeAssistant, satellite: str) -> str | None:
+    """The speaker Mic to MediaPlayer plays this satellite's replies on, if any."""
+    try:
+        return getattr(mic2mp_for(hass, satellite), "media_player_entity_id", None)
+    except Exception:  # noqa: BLE001 — never let this block the follow-up
+        _LOGGER.debug("routed speaker lookup failed", exc_info=True)
+        return None
+
+
+def _routed_speaker_started(
+    hass: HomeAssistant, speaker: str | None, reply_age: float
+) -> bool:
+    """False while the speaker that carries the reply has not begun it.
+
+    The satellite's own player can finish before that speaker starts. Measured
+    2026-11-08: the satellite was idle at 39.30 and the speaker played from 39.94
+    to 41.90. That gap read as a quiet room, the microphone opened at 40.65 and
+    recorded the end of the question as part of the answer. A speaker already
+    playing counts as started: it is the reply, or music that would hide it.
+    """
+    if not speaker:
+        return True
+    state = hass.states.get(speaker)
+    if state is None or state.state not in _PLAYBACK_IDLE_STATES:
+        return True
+    return (dt_util.utcnow() - state.last_changed).total_seconds() <= reply_age
 
 
 def _reply_audio_active(
@@ -573,8 +601,11 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             # the microphone into the answer. Bounded, so a reply we never see
             # play (no media_player for the audio) falls back to the estimate.
             started = False
+            speaker = _routed_speaker(hass, satellite)
             while elapsed < _PLAYBACK_START_WAIT_S:
-                if _reply_playback_started(hass, device_id, elapsed):
+                if _reply_playback_started(
+                    hass, device_id, elapsed
+                ) and _routed_speaker_started(hass, speaker, elapsed):
                     started = True
                     break
                 await asyncio.sleep(_PLAYBACK_POLL_S)
