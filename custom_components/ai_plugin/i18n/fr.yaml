@@ -62,8 +62,12 @@ templates:
   broadcast_cancelled: "D'accord, pas d'annonce."
   message_sent_to: "Envoyé à {name} : {label}"
   message_not_sent: "Je n'ai pas pu l'envoyer."
+  calendar_not_removed: "Je n'ai rien supprimé. De quel rendez-vous parles-tu ?"
+  diary_forgotten: "J'ai oublié nos conversations précédentes."
+  diary_forgotten_none: "Rien n'était gardé des conversations précédentes."
   message_cancelled: "D'accord, rien d'envoyé."
   schedule_not_changed: "Je n'ai rien changé. Dis-moi la nouvelle heure et je la règle."
+  schedule_switched_off: "Je ne peux pas régler d'alarmes ni de rappels ici, donc rien n'a été réglé."
 keywords:
   time_now:      ["quelle heure est-il", "quelle heure il est", "l'heure actuelle"]
   sun_set:       ["coucher du soleil", "se couche le soleil", "à quelle heure se couche le soleil"]
@@ -73,6 +77,10 @@ keywords:
   narration:     ["je vérifie", "je cherche", "je regarde", "je consulte", "je recherche", "je vais vérifier", "je vais chercher", "je vais regarder"]
 
 patterns:
+  # Forgetting the conversation diary, not a saved fact.
+  diary_forget:
+    - '\boublie\s+(?:toutes\s+)?(?:nos|mes|les|ces)\s+(?:anciennes\s+)?(?:conversations?|discussions?)\b'
+    - '\b(?:efface|supprime|vide)\s+(?:toutes\s+)?(?:nos|mes|les)\s+(?:conversations?|discussions?|historique)\b'
   narration_full: []
   action_on:
     - '^(?:allume|allumer|allumez|active|activer)\s+(?:le|la|les|l''|l’|un|une)?\s*(?P<name>.+?)$'

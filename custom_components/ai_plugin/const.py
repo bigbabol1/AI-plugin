@@ -109,6 +109,62 @@ def ends_with_question(text: str | None) -> bool:
 # once the room is actually quiet — the fix for satellites whose TTS plays
 # on separate speakers they cannot see the end of.
 CONF_FOLLOW_UP_DELAY = "follow_up_delay"
+# How long a voice satellite keeps its conversation between turns, in minutes.
+# Capped at the 6 h after which idle histories are dropped anyway.
+CONF_CONVERSATION_MEMORY = "conversation_memory_minutes"
+DEFAULT_CONVERSATION_MEMORY = 15
+MAX_CONVERSATION_MEMORY = 360
+# Conversation diary: notes about earlier conversations, recalled on any device.
+CONF_DIARY_ENABLED = "diary_enabled"
+DEFAULT_DIARY_ENABLED = True
+CONF_DIARY_DAYS = "diary_days"
+DEFAULT_DIARY_DAYS = 30
+MAX_DIARY_DAYS = 365
+# Off: each person sees their own notes and those of unrecognised voices.
+CONF_DIARY_SHARE = "diary_share"
+DEFAULT_DIARY_SHARE = False
+# Built-in features that can be switched off (Configure -> Tools), for homes
+# that bring their own timers, alarms or announcements. All on by default.
+# Off, a feature's tools leave the tool list, its rules leave the prompt, its
+# shortcuts stand down, and a call by that name goes to an MCP server that has
+# one (2026-11-12, asked for on the simon42 forum: "Weck mich in einer Stunde"
+# never reached the user's own alarm script).
+CONF_TOOL_TIMERS = "tool_timers"
+CONF_TOOL_ALARMS = "tool_alarms"
+CONF_TOOL_CALENDAR = "tool_calendar"
+CONF_TOOL_MESSAGES = "tool_messages"
+CONF_TOOL_BROADCAST = "tool_broadcast"
+CONF_TOOL_MOVE_MUSIC = "tool_move_music"
+CONF_TOOL_FIND_PHONE = "tool_find_phone"
+FEATURE_TOOLS: dict[str, frozenset[str]] = {
+    CONF_TOOL_TIMERS: frozenset({
+        "start_timer", "cancel_timer", "pause_timer", "unpause_timer",
+        "increase_timer", "decrease_timer", "timer_status",
+    }),
+    CONF_TOOL_ALARMS: frozenset({
+        "set_alarm", "set_reminder", "schedule_action", "list_scheduled",
+        "cancel_scheduled",
+    }),
+    CONF_TOOL_CALENDAR: frozenset({"add_calendar_event", "remove_calendar_event"}),
+    CONF_TOOL_MESSAGES: frozenset({"tell"}),
+    # Home Assistant's own announcement tool, which the plugin answers itself.
+    # Off, it is left out too, so an announcement goes to the user's own tool.
+    CONF_TOOL_BROADCAST: frozenset({"HassBroadcast"}),
+    CONF_TOOL_MOVE_MUSIC: frozenset({"move_music"}),
+    CONF_TOOL_FIND_PHONE: frozenset({"ring_phone"}),
+}
+
+
+def features_off(options) -> frozenset[str]:
+    """The features switched off in an entry's options."""
+    return frozenset(key for key in FEATURE_TOOLS if options.get(key, True) is False)
+
+
+def tools_off(options) -> frozenset[str]:
+    """The names of the tools of every feature switched off."""
+    return frozenset().union(*(FEATURE_TOOLS[key] for key in features_off(options)))
+
+
 CONF_MAX_TOOL_ITERATIONS = "max_tool_iterations"
 CONF_RESPONSE_TIMEOUT = "response_timeout"
 CONF_ENABLE_THINKING = "enable_thinking"
@@ -235,7 +291,7 @@ _SCHEDULE_RULES = (
     "- 'move the music to the bedroom', 'take this to the kitchen': move_music(area: 'bedroom').\n"
     "- 'turn off the lights in 30 minutes': schedule_action(command: 'turn off the lights', in_minutes: 30). 'at 10 dim the lights': schedule_action(command: 'dim the lights', at: '22:00'). Never do it now and never start a timer for it.\n"
     "- 'what alarms do I have': list_scheduled. 'cancel my alarm': cancel_scheduled(kind: 'alarm').\n"
-    "- 'put the dentist on my calendar for Friday at 10': add_calendar_event(summary: 'Dentist', day: 'friday', at: '10:00'). 'note the birthday of Anna on 1 October': add_calendar_event(summary: 'Birthday of Anna', day: that date as YYYY-MM-DD); it repeats every year on its own.\n"
+    "- 'put the dentist on my calendar for Friday at 10': add_calendar_event(summary: 'Dentist', day: 'friday', at: '10:00'). 'note the birthday of Anna on 1 October': add_calendar_event(summary: 'Birthday of Anna', day: that date as YYYY-MM-DD); it repeats every year on its own. 'cancel the dentist on Friday': remove_calendar_event(summary: 'Dentist', day: 'friday').\n"
     "- Say what these tools answered in one sentence. Only say it is set after the tool answered so.\n"
 )
 

@@ -22,6 +22,31 @@ from .lights import _SWEEP_ALL_KEYWORDS
 _LOGGER = logging.getLogger(__name__)
 
 
+
+# Device classes behind the made-up domains a model asks for.
+_OPENING_CLASSES: dict[str, frozenset[str]] = {
+    "door": frozenset({"door", "garage_door", "garage", "gate"}),
+    "doors": frozenset({"door", "garage_door", "garage", "gate"}),
+    "window": frozenset({"window"}),
+    "windows": frozenset({"window"}),
+    "garage_door": frozenset({"garage_door", "garage"}),
+    "opening": frozenset({"opening", "door", "window", "garage_door", "garage", "gate"}),
+    "openings": frozenset({"opening", "door", "window", "garage_door", "garage", "gate"}),
+}
+_ALL_OPENING_CLASSES = frozenset({"opening", "door", "window", "garage_door"})
+
+
+def _opening_class(hass, entity_id: str, entry) -> str | None:
+    """Device class of a binary sensor or cover, else None."""
+    if not entity_id.startswith(("binary_sensor.", "cover.")):
+        return None
+    state = hass.states.get(entity_id)
+    return (
+        (state.attributes.get("device_class") if state else None)
+        or getattr(entry, "device_class", None)
+        or getattr(entry, "original_device_class", None)
+    )
+
 class EntityToolsMixin:
     """list_areas / list_entities / get_entity / search_entities."""
 
@@ -46,6 +71,13 @@ class EntityToolsMixin:
 
         target_domain = domain.lower().strip(".") if domain else None
         target_state = state.lower().strip() if state else None
+        # "door" and "window" are no domains: they are binary sensors (and
+        # covers) of that device class. list_entities(domain: 'door',
+        # state: 'open') matched nothing, and "are all doors and windows
+        # closed?" was answered yes with a window open (replay, 2026-11-11).
+        opening = _OPENING_CLASSES.get(target_domain or "")
+        if opening is not None:
+            target_domain = None
 
         # Alias-aware, like every other area resolver in this module —
         # list_entities(area='wohnzimmer') must work when 'wohnzimmer' is
@@ -68,16 +100,27 @@ class EntityToolsMixin:
             return area_id, (_s(a.name) if a else None)
 
         rows: list[tuple[str, str, str, str]] = []
+        seen = 0
         for entity_id, entry in ent_reg.entities.items():
             if target_domain and not entity_id.startswith(f"{target_domain}."):
+                continue
+            if opening is not None and _opening_class(hass, entity_id, entry) not in opening:
                 continue
             if exposed_only and not self._is_exposed(entity_id):
                 continue
             a_id, a_name = _area_of(entry)
             if target_area_entry is not None and a_id != target_area_entry.id:
                 continue
+            seen += 1
             ent_state = hass.states.get(entity_id)
             state_val = ent_state.state if ent_state else "unknown"
+            # A door or window sensor says on/off; say open/closed, and let
+            # state 'open' or 'closed' find it.
+            if (
+                entity_id.startswith("binary_sensor.")
+                and _opening_class(hass, entity_id, entry) in _ALL_OPENING_CLASSES
+            ):
+                state_val = {"on": "open", "off": "closed"}.get(state_val, state_val)
             if target_state and state_val.lower() != target_state:
                 continue
             friendly = _s(ent_state.attributes.get("friendly_name")) if ent_state else ""
@@ -92,6 +135,14 @@ class EntityToolsMixin:
                 f"{k}={v}" for k, v in [("area", area), ("domain", domain), ("state", state)] if v
             )
             exp_note = "" if not exposed_only else ", exposed only"
+            if opening is not None and not seen:
+                return (
+                    f"No {domain} sensor is available ({filt}{exp_note}), so "
+                    f"whether any {domain} is open is UNKNOWN. Say so; never "
+                    "say they are closed."
+                )
+            if opening is not None:
+                return f"None of the {seen} {domain} sensor(s) is {state} ({filt}{exp_note})."
             return f"No entities match ({filt or 'no filter'}{exp_note})."
 
         rows.sort(key=lambda r: (r[2], r[0]))

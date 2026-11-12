@@ -4,6 +4,62 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v1.2.0 — remembers earlier conversations, Home Assistant's tools built in
+
+### Heads-up when updating
+
+- **Home Assistant's own tools are built in.** Devices, sensors, exposed scripts, to-do
+  lists and calendar reads work without the *Model Context Protocol Server* integration
+  and without a long-lived token. A configured MCP server pointing at this Home Assistant
+  is skipped (the MCP list marks it as not used) and can be removed. If that integration
+  is set up, its choice of APIs and its read-only switch are still used.
+- **The diary is on by default.** Notes are private per person unless *Share
+  conversations between people* is turned on. The search model (about 40 MB) is downloaded
+  once from this repository; until it is there, notes are found by their words.
+- **New menu step Memory.** *Long-term memory* moved there from Advanced, together with
+  how long a satellite keeps its conversation (default 15 minutes, as before).
+
+### Added
+
+- **A diary of earlier conversations.** Ten minutes after a conversation goes quiet, the
+  model writes a few short notes about it. A follow-up on another device or days later,
+  such as "About the stir-fry you suggested, how do I start?", is answered from them, in
+  any of the plugin's languages. Device commands and small talk are left out. "Forget our
+  conversations" deletes the speaker's own notes; notes are deleted after 30 days.
+- **Configure → Tools: built-in features can be switched off** one by one: timers, alarms
+  and reminders, calendar entries, messages, announcements, moving music and finding a
+  phone. Use it when your home already does one of them another way, for example with a
+  script exposed to Assist. The plugin's tools and prompt rules for it go, and your own
+  tool gets the call.
+- **Calendar events can be removed by voice.** "Delete the dentist on Friday" removes it.
+  If the name was misheard or matches more than one event, the assistant lists them and
+  asks; "the one at 10" then picks by time.
+- **Doors and windows.** "Are all doors and windows closed?" reads the door and window
+  sensors and says when a room has none, instead of answering "yes".
+- **"Except" for rooms.** "Close all blinds except the bedroom" leaves the bedroom alone.
+
+### Fixed
+
+- **A fan command with no room named switched every fan in the home.** "Set the air
+  purifier to 30%" now changes the one in the satellite's room, unless "all" or
+  "everywhere" was said. The same holds for on, off, toggle and blind positions.
+- **After a fan speed or a blind position was changed, the model was asked again**
+  as if nothing had happened.
+- **"Close the blinds" missed covers of another kind.** Blinds, shutters, shades and
+  curtains now count as one, and awnings, garage doors and gates are left out of a
+  room-wide command.
+- **"Delete the test appointment" also matched "Test 2",** because "appointment" counted
+  as part of the name.
+
+### Known issues
+
+- **A diary note can leave out a detail of an answer,** such as a figure, and the model
+  may then say it never mentioned it.
+- **A conversation not yet written to the diary is lost when Home Assistant restarts**
+  within ten minutes of it.
+- **Once, a question about the calendar created an event.** It happened on the first turn
+  after a restart and did not happen again in five repeats; the cause is not known yet.
+
 ## v1.1.2 — broadcasts, messages and fewer repeated facts
 
 ### Heads-up when updating

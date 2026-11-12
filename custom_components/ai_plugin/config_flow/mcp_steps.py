@@ -17,7 +17,7 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from ..const import CONF_MCP_SERVERS, ERROR_INVALID_URL
-from .schemas import _get_ha_url, _is_valid_url
+from .schemas import _is_valid_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,16 +92,17 @@ class MCPServerStepsMixin:
             return "stdio: " + " ".join(p for p in parts if p)
         url = s.get("url", "")
         token_hint = " (token set)" if s.get("token") else ""
+        from .. import _own_hosts  # noqa: PLC0415
+        from ..tools.mcp_client import is_own_ha_mcp  # noqa: PLC0415
+
+        if is_own_ha_mcp(s, _own_hosts(self.hass)):
+            token_hint += " (not used: Home Assistant's own tools are built in)"
         return f"http: {url}{token_hint}"
 
     def _mcp_servers_description(self) -> str:
         """Build a numbered list of configured MCP servers for the form description."""
         if not self._pending_mcp:
-            return (
-                "No servers configured yet.\n"
-                "Tip: Add Home Assistant's built-in MCP server to let the assistant read "
-                "your sensors and control devices."
-            )
+            return "No servers configured yet."
         lines = [f"{i}. {self._mcp_server_label(s)}" for i, s in enumerate(self._pending_mcp, 1)]
         return "\n".join(lines)
 
@@ -111,8 +112,6 @@ class MCPServerStepsMixin:
         """MCP server management — action selector with live server list."""
         if user_input is not None:
             action = user_input["mcp_action"]
-            if action == "add_ha":
-                return await self.async_step_mcp_add_ha()
             if action == "add_preset":
                 return await self.async_step_mcp_add_preset()
             if action == "add_http":
@@ -128,7 +127,6 @@ class MCPServerStepsMixin:
             return self.async_create_entry(title="", data=self._options)
 
         action_options: list[dict[str, str]] = [
-            {"value": "add_ha", "label": "Add Home Assistant built-in MCP server"},
             {"value": "add_preset", "label": "Add a popular MCP server"},
             {"value": "add_http", "label": "Add other HTTP server"},
             {"value": "add_stdio", "label": "Add custom stdio server"},
@@ -171,35 +169,6 @@ class MCPServerStepsMixin:
         )
 
     # ── Add ───────────────────────────────────────────────────────────────────
-
-    async def async_step_mcp_add_ha(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.FlowResult:
-        """Quick-add HA's built-in MCP server — only asks for the token."""
-        if user_input is not None:
-            token = user_input.get("ha_mcp_token", "").strip()
-            ha_url = _get_ha_url(self.hass)
-            entry: dict[str, Any] = {
-                "transport": "sse",
-                "url": f"{ha_url}/mcp_server/sse",
-            }
-            if token:
-                entry["token"] = token
-            self._pending_mcp.append(entry)
-            return await self.async_step_mcp_servers()
-
-        ha_url = _get_ha_url(self.hass)
-        return self.async_show_form(
-            step_id="mcp_add_ha",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
-                        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-                    ),
-                }
-            ),
-            description_placeholders={"ha_mcp_url": f"{ha_url}/mcp_server/sse"},
-        )
 
     async def async_step_mcp_add_preset(
         self, user_input: dict[str, Any] | None = None

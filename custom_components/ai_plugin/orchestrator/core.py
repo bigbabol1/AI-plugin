@@ -22,11 +22,12 @@ web?), toolcalls (which schemas, and malformed calls back), textproc
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextvars
 import logging
 import re
 import time
-from datetime import date as _date
+from datetime import date as _date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
@@ -39,21 +40,35 @@ from homeassistant.helpers import (
 
 from ..const import (
     CONF_CONTEXT_WINDOW,
+    CONF_DIARY_DAYS,
+    CONF_DIARY_ENABLED,
+    CONF_DIARY_SHARE,
     CONF_ENABLE_THINKING,
     CONF_MODEL,
     CONF_MAX_TOOL_ITERATIONS,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_SUMMARIZATION_ENABLED,
+    CONF_TOOL_ALARMS,
+    CONF_TOOL_BROADCAST,
+    CONF_TOOL_FIND_PHONE,
+    CONF_TOOL_MESSAGES,
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_DIARY_DAYS,
+    DEFAULT_DIARY_ENABLED,
+    DEFAULT_DIARY_SHARE,
     DEFAULT_ENABLE_THINKING,
     DEFAULT_MAX_TOOL_ITERATIONS,
     DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_SUMMARIZATION_ENABLED,
     DOMAIN,
+    features_off,
+    tools_off,
 )
 from ..context_manager import ContextManager
+from ..diary import BLOCK_MARKER as DIARY_MARKER, format_block as format_diary_block
+from ..diary.writer import build_prompt as diary_prompt, parse_notes as diary_notes
 from ..i18n import L, SUPPORTED_LANGS
 from ..providers.openai_compat import OpenAICompatProvider
 from ..shortcuts import (
@@ -74,8 +89,12 @@ from ..shortcuts.phone import (
 from ..shortcuts.registry import _caller_area_id
 from ..tools.ha_local import HALocalToolRegistry
 from ..tools.ha_local.formatting import _s
-from ..tools.ha_local.lights import is_generic_lights_command
-from ..tools.ha_local.lights import hass_light_set_args
+from ..tools.ha_local.lights import _USER_SAID_ALL_RE, is_generic_lights_command
+from ..tools.ha_local.lights import (
+    WINDOW_COVERINGS,
+    hass_light_set_args,
+    widen_cover_classes,
+)
 from ..scheduler import (
     asks_for_phrase_routine,
     TOOL_NAMES as SCHEDULER_TOOL_NAMES,
@@ -90,7 +109,10 @@ from ..scheduler import (
 from ..tools.calendar_events import (
     TOOL_NAME as CALENDAR_TOOL,
     TOOL_SCHEMA as CALENDAR_SCHEMA,
+    REMOVE_TOOL_NAME as CALENDAR_REMOVE_TOOL,
+    REMOVE_TOOL_SCHEMA as CALENDAR_REMOVE_SCHEMA,
     async_add_event,
+    async_remove_event,
 )
 from ..tools.ha_local.schemas import MOVE_MUSIC_SCHEMA, TOOLS_THE_PLUGIN_COVERS
 from ..tools.tell import (
@@ -99,6 +121,7 @@ from ..tools.tell import (
     TOOL_SCHEMA as TELL_SCHEMA,
     async_broadcast,
     async_tell,
+    tell_schema,
 )
 from ..tools.memory import (
     asks_to_remember,
@@ -210,6 +233,45 @@ class _WaitLine:
 _IN_SCHEDULED_RUN: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "ai_plugin_in_scheduled_run", default=False
 )
+# The reply before this turn's message, set where the turn starts.
+_PREVIOUS_REPLY: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "ai_plugin_previous_reply", default=""
+)
+
+
+# The diary writes a conversation's notes once it has been quiet this long.
+DIARY_QUIET_S = 600.0
+DIARY_TICK_S = 60.0
+
+
+def _new_diary_conv() -> dict:
+    return {"turns": [], "owner": None, "mixed": False, "language": "en",
+            "last": 0.0, "when": None, "known": set()}
+
+
+def _answers_from_notes(reply: str | None, notes: list[str]) -> bool:
+    """True when the reply repeats details of a recalled note (two or more of
+    its longer words), so it was answered from the diary, not from training."""
+    if not reply or not notes:
+        return False
+    said = {w for w in re.findall(r"\w{4,}", reply.lower())}
+    return any(
+        len(said & {w for w in re.findall(r"\w{4,}", note.lower())}) >= 2
+        for note in notes
+    )
+
+
+def asks_to_forget_diary(message: str, lang: str) -> bool:
+    """True for "Forget our conversations": the diary, not a saved fact."""
+    text = (message or "").strip().lower()
+    return any(rx.search(text) for rx in L.pattern_list("diary_forget", lang))
+
+
+# Home Assistant intents that switch whatever matches. Given nothing to match
+# but a domain or device class, they reach every room.
+_ROOM_FREE_INTENTS = frozenset({
+    "HassTurnOn", "HassTurnOff", "HassToggle", "HassFanSetSpeed", "HassSetPosition",
+})
 
 
 def says_this_room(message: str) -> bool:
@@ -246,6 +308,11 @@ def asks_for_second_room(message: str, lang: str) -> bool:
 
 # How long the next thing said on a satellite counts as the message to announce.
 _BROADCAST_ANSWER_S = 60.0
+# Tools of Home Assistant's own MCP server that are neither intents (Hass*)
+# nor scripts the user exposed.
+_HOME_ASSISTANT_BUILTIN_TOOLS = frozenset({
+    "GetLiveContext", "GetDateTime", "todo_get_items", "calendar_get_events",
+})
 
 
 def _broadcast_words(message: str) -> str:
@@ -405,6 +472,29 @@ class Orchestrator(
         # if message history is unavailable.
         self._last_entities: dict[str, str] = {}
 
+        # Conversation diary: notes written after a conversation goes quiet,
+        # recalled on later turns from any device (see diary/__init__.py).
+        self._diary = (
+            entry_data.get("diary")
+            if opts.get(CONF_DIARY_ENABLED, DEFAULT_DIARY_ENABLED)
+            else None
+        )
+        self._diary_share = bool(opts.get(CONF_DIARY_SHARE, DEFAULT_DIARY_SHARE))
+        self._diary_days = float(opts.get(CONF_DIARY_DAYS, DEFAULT_DIARY_DAYS))
+        self._diary_convs: dict[str, dict] = {}
+        self._diary_pruned = 0.0
+        if self._diary is not None and hass is not None:
+            from homeassistant.helpers.event import (  # noqa: PLC0415
+                async_track_time_interval,
+            )
+
+            entry.async_on_unload(
+                async_track_time_interval(
+                    hass, self._async_diary_tick, timedelta(seconds=DIARY_TICK_S)
+                )
+            )
+            hass.async_create_task(self._diary.async_ensure_model())
+
     def _get_conv_lock(self, conv_id: str) -> asyncio.Lock:
         if not hasattr(self, "_conv_locks"):
             self._conv_locks = {}
@@ -474,9 +564,25 @@ class Orchestrator(
         # tool placed next to set_area_state left a repeated light command
         # uncalled (12 of 12 replays, 2026-10-29).
         if getattr(self, "_scheduler", None) is not None:
+            hass = getattr(self, "_hass", None)
+            tell = (
+                tell_schema(people_with_phones(hass).values())
+                if hass is not None else TELL_SCHEMA
+            )
+            if not self._feature_on(CONF_TOOL_BROADCAST):
+                tell = copy.deepcopy(tell)
+                tell["function"]["description"] = tell["function"]["description"].replace(
+                    " For every room use HassBroadcast.", ""
+                )
             tool_schemas = [
-                *tool_schemas, *SCHEDULER_TOOL_SCHEMAS, CALENDAR_SCHEMA, TELL_SCHEMA,
+                *tool_schemas, *SCHEDULER_TOOL_SCHEMAS, CALENDAR_SCHEMA,
+                CALENDAR_REMOVE_SCHEMA, tell,
                 MOVE_MUSIC_SCHEMA,
+            ]
+        off = self._tools_off()
+        if off:
+            tool_schemas = [
+                s for s in tool_schemas if s.get("function", {}).get("name") not in off
             ]
         return tool_schemas
 
@@ -576,6 +682,17 @@ class Orchestrator(
         # Serialise concurrent requests for the same conversation to prevent
         # interleaved history and summarisation races.
         async with self._get_conv_lock(conversation_id):
+            # What was said to the user last, so a "yes" can confirm what it
+            # named (removing a calendar event goes only then).
+            _PREVIOUS_REPLY.set(next(
+                (
+                    m["content"]
+                    for m in reversed(self._context_mgr.get_history(conversation_id))
+                    if m.get("role") == "assistant" and isinstance(m.get("content"), str)
+                    and m["content"]
+                ),
+                "",
+            ))
             # 1. Add user turn to history.
             await self._context_mgr.add_turn(conversation_id, "user", message)
 
@@ -804,6 +921,18 @@ class Orchestrator(
                     self._turn_speakers[device_id] = None
                 else:
                     self._turn_speakers.pop(device_id, None)
+            diary = getattr(self, "_diary", None)
+            diary_owner = (
+                self._speaking_person(device_id, user_id) if diary is not None else None
+            )
+            if diary is not None and asks_to_forget_diary(message, lang):
+                gone = await diary.async_forget(diary_owner)
+                self._diary_convs.pop(conversation_id, None)
+                forgot = L.template(
+                    "diary_forgotten" if gone else "diary_forgotten_none", lang
+                )
+                await self._context_mgr.add_turn(conversation_id, "assistant", forgot)
+                return forgot
             volatile = await self._build_volatile_block(
                 user_id,
                 conversation_id,
@@ -813,6 +942,11 @@ class Orchestrator(
                 system_prompt=system_prompt,
                 tool_tokens=schema_tokens,
             )
+            notes, diary_texts = await self._diary_recall_block(
+                message, conversation_id, diary_owner, system_prompt, schema_tokens
+            )
+            volatile = "\n\n".join(p for p in (volatile, notes) if p)
+            self._diary_note(conversation_id, "user", message, diary_owner, lang)
             reserved_tokens = schema_tokens + self._context_mgr.estimate_tokens(volatile)
 
             # 4. The volatile block goes into history directly before the
@@ -979,6 +1113,9 @@ class Orchestrator(
             # (the weather entity, the to-do list), it did not answer from
             # training data, and the forced search replaced a grounded answer
             # with other cities' results (2026-10-27, 10-28).
+            # Not when the reply came from a diary note: "Which film did I pick
+            # last weekend?" was answered "Arrival" from the note, and the
+            # search forced by "last weekend" would only bury it (2026-11-10).
             _needs_search = (
                 self._web_search is not None
                 and readonly_schemas
@@ -987,6 +1124,7 @@ class Orchestrator(
                     _is_online_query(message)
                     or _is_online_followup(message, tool_msgs)
                 )
+                and not _answers_from_notes(reply, diary_texts)
             )
             if _needs_search:
                 _LOGGER.info(
@@ -1041,6 +1179,9 @@ class Orchestrator(
                 tool_schemas
                 and _is_action_command(message)
                 and not _any_actuator_call(tool_msgs)
+                and not self._brought_tool_ran(tool_msgs)
+                # Only schedule_action can do it later, and it is switched off.
+                and not (later and not self._feature_on(CONF_TOOL_ALARMS))
             ):
                 _LOGGER.info(
                     "AI Plugin: action-command grounding retry — %r had no actuator call",
@@ -1182,17 +1323,32 @@ class Orchestrator(
                     "AI Plugin: reply claimed an action, but none was done: %r",
                     stored_reply[:120],
                 )
-                stored_reply = reply = L.template("err_action_failed", lang)
+                # "Name the device or the room" made no sense for a calendar
+                # entry that was not found: the event is named in English and
+                # the request was German (replay 3 of 3, 2026-11-10).
+                stored_reply = reply = L.template(
+                    "calendar_not_removed"
+                    if _any_tool_call(tool_msgs, CALENDAR_REMOVE_TOOL)
+                    else "err_action_failed",
+                    lang,
+                )
             # What the jobs did this turn decides, not which tools were called:
             # a refused call changes nothing either.
             if jobs_before is not None:
                 if {job.id for job in self._scheduler.jobs()} == jobs_before:
-                    if claims_schedule_changed(stored_reply):
+                    if claims_schedule_changed(stored_reply) and not self._brought_tool_ran(
+                        tool_msgs
+                    ):
                         _LOGGER.info(
                             "AI Plugin: reply claimed a schedule change, but none was made: %r",
                             stored_reply[:120],
                         )
-                        stored_reply = reply = L.template("schedule_not_changed", lang)
+                        stored_reply = reply = L.template(
+                            "schedule_not_changed"
+                            if self._feature_on(CONF_TOOL_ALARMS)
+                            else "schedule_switched_off",
+                            lang,
+                        )
                 else:
                     try:
                         replaced = await async_drop_replaced(
@@ -1239,6 +1395,7 @@ class Orchestrator(
             gate.flush_final(stored_reply)
 
             await self._context_mgr.add_turn(conversation_id, "assistant", history_reply)
+            self._diary_note(conversation_id, "assistant", history_reply)
             await self._announce_thinking_refused()
 
             # Track last-controlled entities for explicit context injection.
@@ -1270,8 +1427,10 @@ class Orchestrator(
 
         # "Broadcast something for me." comes in many wordings, and the model
         # asks what to say to them all. The answer then needs the same handling.
-        if asks_what_to_broadcast(message, stored_reply, lang) and not _any_tool_call(
-            tool_msgs, BROADCAST_TOOL_NAME
+        if (
+            self._feature_on(CONF_TOOL_BROADCAST)
+            and asks_what_to_broadcast(message, stored_reply, lang)
+            and not _any_tool_call(tool_msgs, BROADCAST_TOOL_NAME)
         ):
             self.__dict__.setdefault("_broadcast_asked", {})[
                 device_id or conversation_id
@@ -1316,7 +1475,10 @@ class Orchestrator(
         return (
             name not in MEMORY_TOOL_NAMES
             and name not in SCHEDULER_TOOL_NAMES
-            and name not in (VOICE_ENROLL_TOOL, CALENDAR_TOOL, TELL_TOOL, "move_music")
+            and name not in (
+                VOICE_ENROLL_TOOL, CALENDAR_TOOL, CALENDAR_REMOVE_TOOL, TELL_TOOL,
+                "move_music",
+            )
         )
 
     def _lookup_key(self, name: str, arguments: object) -> str | None:
@@ -1616,6 +1778,18 @@ class Orchestrator(
         after a success went on to lamps in other rooms (5 of 16). Returns the
         arguments to use, and a refusal when the named device is in another room.
         """
+        if (
+            name in _ROOM_FREE_INTENTS
+            and not any(_s(arguments.get(k)).strip() for k in ("name", "area", "floor"))
+            and not _USER_SAID_ALL_RE.search(user_message or "")
+        ):
+            # Home Assistant prefers the satellite's room only between devices
+            # of the same name: with no name, area or floor at all, its intent
+            # switches every match in the home. "Set the air purifier to 30%"
+            # in the living room set both air purifiers (2026-11-12).
+            room = self._this_room(device_id, user_message)
+            if room is not None:
+                return {**arguments, "area": room}, None
         if name not in _ACTUATOR_TOOL_NAMES or not (
             says_this_room(user_message) or is_generic_lights_command(user_message)
         ):
@@ -1643,7 +1817,7 @@ class Orchestrator(
         Kept per satellite, because the answer can arrive after a new wake word
         in a new conversation."""
         hass = getattr(self, "_hass", None)
-        if hass is None:
+        if hass is None or not self._feature_on(CONF_TOOL_BROADCAST):
             return None
         asked = self.__dict__.setdefault("_broadcast_asked", {})
         key = device_id or conversation_id
@@ -1673,7 +1847,11 @@ class Orchestrator(
     ) -> None:
         """Remember that the model asked what to say to someone."""
         hass = getattr(self, "_hass", None)
-        if hass is None or _any_tool_call(tool_msgs, TELL_TOOL):
+        if (
+            hass is None
+            or _any_tool_call(tool_msgs, TELL_TOOL)
+            or not self._feature_on(CONF_TOOL_MESSAGES)
+        ):
             return
         person = person_asked_about(reply, lang, people_with_phones(hass).values())
         if person is not None:
@@ -1730,7 +1908,7 @@ class Orchestrator(
     def _this_room(self, device_id: str | None, user_message: str) -> str | None:
         """The satellite's room, unless the message names a different one, as in
         "turn off the kitchen light from here"."""
-        if self._hass is None or not device_id:
+        if not device_id or getattr(self, "_hass", None) is None:
             return None
         area_id = _caller_area_id(self._hass, device_id)
         if not area_id:
@@ -1789,7 +1967,22 @@ class Orchestrator(
         )
         if refused:
             return refused
-        if self._ha_local is not None and name in self._ha_local.tool_names:
+        # A tool switched off under Configure -> Tools goes to an MCP server
+        # that has one by that name, and is unknown otherwise.
+        builtin = name not in self._tools_off()
+        if (
+            not builtin
+            and name.startswith("Hass")
+            and self._mcp is not None
+            and self._mcp.is_home_assistant_tool(name)
+        ):
+            # Home Assistant's own announcement tool: left out with the feature,
+            # so the user's own tool does it.
+            return (
+                f"[{name} is switched off in this assistant's settings. Use another "
+                "tool for this, or tell the user it cannot be done here.]"
+            )
+        if builtin and self._ha_local is not None and name in self._ha_local.tool_names:
             return await self._ha_local.call_tool(
                 name, arguments,
                 device_id=device_id,
@@ -1800,7 +1993,7 @@ class Orchestrator(
             )
         if name == VOICE_ENROLL_TOOL and self._voice_id is not None:
             return self._start_voice_enrollment(arguments, device_id, language)
-        if name == RING_PHONE_TOOL and self._can_ring_phones():
+        if builtin and name == RING_PHONE_TOOL and self._can_ring_phones():
             return await self._ring_phone_tool(arguments, user_id, device_id, language)
         # A command that has come due is carried out now; putting it off again
         # could go on forever. The tool list stays the same: a different one
@@ -1809,7 +2002,7 @@ class Orchestrator(
             name in SCHEDULER_WRITE_TOOL_NAMES or name in _TIMER_WRITE_TOOL_NAMES
         ):
             return "[This is due now. Carry out the command now with the device tools.]"
-        if name in SCHEDULER_TOOL_NAMES and getattr(self, "_scheduler", None) is not None:
+        if builtin and name in SCHEDULER_TOOL_NAMES and getattr(self, "_scheduler", None) is not None:
             return await async_call_scheduler_tool(
                 self._scheduler,
                 self._hass,
@@ -1822,7 +2015,7 @@ class Orchestrator(
                 user_message=user_message,
                 resolve_person=self._resolve_person,
             )
-        if name == TELL_TOOL and getattr(self, "_scheduler", None) is not None:
+        if builtin and name == TELL_TOOL and getattr(self, "_scheduler", None) is not None:
             speaker = self._speaking_person(device_id, user_id)
             state = self._hass.states.get(speaker) if speaker else None
             return await async_tell(
@@ -1832,17 +2025,22 @@ class Orchestrator(
                 resolve_person=self._resolve_person,
                 sender_name=state.attributes.get("friendly_name") if state else None,
             )
-        if name == BROADCAST_TOOL_NAME and self._hass is not None:
+        if builtin and name == BROADCAST_TOOL_NAME and self._hass is not None:
             return await async_broadcast(
                 self._hass, arguments, language=language, device_id=device_id
             )
-        if name == "move_music" and self._ha_local is not None:
+        if builtin and name == "move_music" and self._ha_local is not None:
             area = self._move_destination(arguments.get("area") or "", user_message, device_id)
             return await self._ha_local.move_music(area, device_id)
-        if name == CALENDAR_TOOL and getattr(self, "_scheduler", None) is not None:
+        if builtin and name == CALENDAR_TOOL and getattr(self, "_scheduler", None) is not None:
             return await async_add_event(
                 self._hass, arguments, self._scheduler.now(),
                 user_message=user_message, language=language,
+            )
+        if builtin and name == CALENDAR_REMOVE_TOOL and getattr(self, "_scheduler", None) is not None:
+            return await async_remove_event(
+                self._hass, arguments, self._scheduler.now(),
+                user_message=user_message, previous_reply=_PREVIOUS_REPLY.get(),
             )
         if name in MEMORY_TOOL_NAMES and self._memory is not None:
             if name in MEMORY_WRITE_TOOLS and self._speaker_unrecognised(device_id):
@@ -1903,10 +2101,23 @@ class Orchestrator(
                 if len(items) > 1:
                     # One entry per item, so each can be ticked off alone.
                     return "\n".join([
-                        await self._mcp.call_tool(name, {**arguments, "item": one})
+                        await self._mcp.call_tool(
+                            name, {**arguments, "item": one},
+                            device_id=device_id, user_id=user_id,
+                        )
                         for one in items
                     ])
-            return await self._mcp.call_tool(name, arguments)
+            arguments = widen_cover_classes(name, arguments)
+            result = await self._mcp.call_tool(
+                name, arguments, device_id=device_id, user_id=user_id
+            )
+            if result.lstrip().startswith("[") and set(
+                arguments.get("device_class") or ()
+            ) & WINDOW_COVERINGS:
+                fallback = await self._cover_fallback(name, arguments, device_id)
+                if fallback is not None:
+                    return fallback
+            return result
         return f"[Tool {name!r} unavailable — no handler configured]"
 
 
@@ -1915,6 +2126,143 @@ class Orchestrator(
         return resolve_owner(
             self._hass, name, speaker_person=None, find_person=self._find_person
         ) if name else None
+
+    async def _cover_fallback(
+        self, name: str, arguments: dict, device_id: str | None
+    ) -> str | None:
+        """Window coverings by the plugin's own code, when Home Assistant's
+        intent matched none: a cover with no device class at all is never
+        matched by a class. Only by area: a named device was meant by name."""
+        ha_local = getattr(self, "_ha_local", None)
+        if ha_local is None or arguments.get("name"):
+            return None
+        area = arguments.get("area") or None
+        if area is None and not device_id:
+            return None  # no room to keep it to: never every cover in the home
+        try:
+            if name == "HassSetPosition" and arguments.get("position") is not None:
+                return await ha_local._set_cover_position(area, arguments["position"])
+            if name in ("HassTurnOn", "HassTurnOff"):
+                return await ha_local._set_area_state(
+                    area, "cover", "turn_on" if name == "HassTurnOn" else "turn_off",
+                    device_id=device_id,
+                )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: cover fallback failed", exc_info=True)
+        return None
+
+    # ── conversation diary ──────────────────────────────────────────────────
+
+    async def _diary_recall_block(
+        self,
+        message: str,
+        conversation_id: str,
+        owner: str | None,
+        system_prompt: str,
+        tool_tokens: int | None,
+    ) -> tuple[str, list[str]]:
+        """[EARLIER CONVERSATIONS] for this turn, or "", and the notes it holds.
+
+        Device commands and two-word turns ("Thank you.") go without: nothing
+        earlier helps them, and each note costs prompt time on every turn.
+        """
+        diary = getattr(self, "_diary", None)
+        if diary is None or _is_action_command(message) or len(message.split()) < 3:
+            return "", []
+        try:
+            entries = diary.recall(message, owner, getattr(self, "_diary_share", False))
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin diary: recall failed", exc_info=True)
+            return "", []
+        if not entries:
+            return "", []
+        meta = self.__dict__.setdefault("_diary_convs", {}).setdefault(
+            conversation_id, _new_diary_conv()
+        )
+        meta["known"].update(e["text"] for e in entries)
+        block = format_diary_block(entries, self._local_tz(), "someone in the home")
+        texts = [e["text"] for e in entries]
+        # Kept in history for the prompt cache: the same notes are not repeated.
+        if await self._context_mgr.newest_block_is(
+            conversation_id, DIARY_MARKER, block, system_prompt, tool_tokens
+        ):
+            return "", texts
+        return block, texts
+
+    def _diary_note(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        owner: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        """Keep the turn for the diary writer (history itself gets summarised)."""
+        if getattr(self, "_diary", None) is None or not content:
+            return
+        meta = self.__dict__.setdefault("_diary_convs", {}).setdefault(
+            conversation_id, _new_diary_conv()
+        )
+        if role == "user":
+            if meta["turns"] and meta["owner"] != owner:
+                meta["mixed"] = True
+            meta["owner"] = owner
+            meta["language"] = (language or "en").split("-")[0]
+        meta["turns"].append({"role": role, "content": content})
+        meta["last"] = time.monotonic()
+        meta["when"] = datetime.now(timezone.utc)
+
+    async def _async_diary_tick(self, _now=None) -> None:
+        """Write the notes of conversations that went quiet; prune once a day."""
+        diary = getattr(self, "_diary", None)
+        if diary is None:
+            return
+        if any(lock.locked() for lock in self._conv_locks.values()):
+            return  # a turn is running: the model is busy with it
+        now = time.monotonic()
+        if now - self._diary_pruned > 86400:
+            self._diary_pruned = now
+            await diary.async_prune(self._diary_days)
+        for conv_id, meta in list(self._diary_convs.items()):
+            if now - meta["last"] < DIARY_QUIET_S or not meta["turns"]:
+                continue
+            self._diary_convs.pop(conv_id, None)
+            await self._async_write_diary(meta)
+            if any(lock.locked() for lock in self._conv_locks.values()):
+                return
+
+    async def _async_write_diary(self, meta: dict) -> None:
+        owner = None if meta.get("mixed") else meta.get("owner")
+        hass = getattr(self, "_hass", None)
+        state = hass.states.get(owner) if hass is not None and owner else None
+        name = state.attributes.get("friendly_name") if state else None
+        prompt = diary_prompt(
+            meta["turns"], name, sorted(meta["known"]), meta.get("language") or "en"
+        )
+        if prompt is None:
+            return
+        try:
+            reply = await asyncio.wait_for(self._provider.async_complete(prompt), 120)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.info("AI Plugin diary: writing notes failed: %s", exc)
+            return
+        notes = diary_notes(reply)
+        if notes:
+            added = await self._diary.async_add(
+                notes, owner=owner, owner_name=name,
+                language=meta.get("language") or "en", when=meta["when"],
+            )
+            _LOGGER.info("AI Plugin diary: %d note(s) written", len(added))
+
+    def _local_tz(self):
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        hass = getattr(self, "_hass", None)
+        name = (getattr(getattr(hass, "config", None), "time_zone", None) or "") if hass else ""
+        try:
+            return ZoneInfo(name) if name else datetime.now().astimezone().tzinfo
+        except Exception:  # noqa: BLE001
+            return timezone.utc
 
     def _signed_in_name(self, user_id: str | None) -> str | None:
         """The name of the person whose Home Assistant login this turn came in on."""
@@ -1943,7 +2291,45 @@ class Orchestrator(
             _IN_SCHEDULED_RUN.reset(token)
 
     def _can_ring_phones(self) -> bool:
-        return getattr(self, "_hass", None) is not None
+        return getattr(self, "_hass", None) is not None and self._feature_on(
+            CONF_TOOL_FIND_PHONE
+        )
+
+    def _feature_on(self, key: str) -> bool:
+        """False when the feature is switched off under Configure -> Tools."""
+        entry = getattr(self, "_entry", None)
+        return entry is None or key not in features_off(entry.options)
+
+    def _tools_off(self) -> frozenset[str]:
+        """The built-in tools switched off under Configure -> Tools."""
+        entry = getattr(self, "_entry", None)
+        return tools_off(entry.options) if entry is not None else frozenset()
+
+    def _brought_tool_ran(self, tool_msgs: list[dict]) -> bool:
+        """True when a tool the user brought ran this turn: a script exposed
+        through Home Assistant's MCP server, or another server's tool.
+
+        Such a tool may have done what the reply says, so the checks for an
+        unbacked claim and the action retry stay out. "Weck mich in einer
+        Stunde" ran the user's own alarm script, and the retry then made the
+        model call schedule_action as well (simon42 forum, 2026-11-11)."""
+        ha_local = getattr(self, "_ha_local", None)
+        own = {
+            *(ha_local.tool_names if ha_local is not None else ()),
+            *SCHEDULER_TOOL_NAMES, *MEMORY_TOOL_NAMES,
+            VOICE_ENROLL_TOOL, RING_PHONE_TOOL, CALENDAR_TOOL, CALENDAR_REMOVE_TOOL,
+            TELL_TOOL, "move_music", "web_search", "browse_url",
+        } - self._tools_off()
+        for m in tool_msgs:
+            for tc in m.get("tool_calls") or []:
+                name = tc.get("function", {}).get("name") or ""
+                if (
+                    name not in own
+                    and not name.startswith("Hass")
+                    and name not in _HOME_ASSISTANT_BUILTIN_TOOLS
+                ):
+                    return True
+        return False
 
     def _find_person(self, name: str) -> str | None:
         return self._voice_id.find_person(name) if self._voice_id is not None else None

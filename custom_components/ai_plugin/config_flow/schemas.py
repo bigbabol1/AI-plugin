@@ -24,6 +24,10 @@ from ..const import (
     CONF_CONTEXT_WINDOW,
     CONF_CONTINUE_CONVERSATION,
     CONF_FOLLOW_UP_DELAY,
+    CONF_CONVERSATION_MEMORY,
+    CONF_DIARY_DAYS,
+    CONF_DIARY_ENABLED,
+    CONF_DIARY_SHARE,
     CONF_ENABLE_THINKING,
     CONF_FEEDBACK_LOOP_DEVICES,
     CONF_LOCATION_BIAS,
@@ -45,8 +49,15 @@ from ..const import (
     CONF_VOICE_MODE,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
+    FEATURE_TOOLS,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_FOLLOW_UP_DELAY,
+    DEFAULT_CONVERSATION_MEMORY,
+    DEFAULT_DIARY_DAYS,
+    DEFAULT_DIARY_ENABLED,
+    DEFAULT_DIARY_SHARE,
+    MAX_DIARY_DAYS,
+    MAX_CONVERSATION_MEMORY,
     DEFAULT_ENABLE_THINKING,
     DEFAULT_LOCATION_BIAS,
     DEFAULT_MAX_RESULTS,
@@ -68,23 +79,6 @@ from ..const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-
-
-def _get_ha_url(hass: Any) -> str:
-    """Return the HA base URL for self-connections (MCP client inside HA).
-
-    Always uses localhost — the integration runs inside HA so localhost
-    is more reliable than the external/LAN IP which can fail on hairpin NAT.
-    """
-    try:
-        from homeassistant.helpers.network import get_url  # noqa: PLC0415
-        url = get_url(hass, allow_internal=True, allow_ip=True).rstrip("/")
-        parsed = urlparse(url)
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        return f"http://localhost:{port}"
-    except Exception:  # noqa: BLE001
-        return "http://localhost:8123"
 
 
 
@@ -157,6 +151,61 @@ def _web_search_schema(current: dict[str, Any]) -> vol.Schema:
         }
     )
 
+
+
+def _memory_schema(current: dict[str, Any]) -> vol.Schema:
+    """What the assistant remembers: saved facts, the conversation on a
+    satellite, and the diary of earlier conversations."""
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_MEMORY_ENABLED,
+                default=current.get(CONF_MEMORY_ENABLED, DEFAULT_MEMORY_ENABLED),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_CONVERSATION_MEMORY,
+                default=current.get(CONF_CONVERSATION_MEMORY, DEFAULT_CONVERSATION_MEMORY),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=MAX_CONVERSATION_MEMORY,
+                    step=1,
+                    unit_of_measurement="min",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_DIARY_ENABLED,
+                default=current.get(CONF_DIARY_ENABLED, DEFAULT_DIARY_ENABLED),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_DIARY_DAYS,
+                default=current.get(CONF_DIARY_DAYS, DEFAULT_DIARY_DAYS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=MAX_DIARY_DAYS,
+                    step=1,
+                    unit_of_measurement="d",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_DIARY_SHARE,
+                default=current.get(CONF_DIARY_SHARE, DEFAULT_DIARY_SHARE),
+            ): selector.BooleanSelector(),
+        }
+    )
+
+
+def _tools_schema(current: dict[str, Any]) -> vol.Schema:
+    """The built-in features, each one on or off (Configure -> Tools)."""
+    return vol.Schema(
+        {
+            vol.Optional(key, default=current.get(key, True)): selector.BooleanSelector()
+            for key in FEATURE_TOOLS
+        }
+    )
 
 
 def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
@@ -284,10 +333,6 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
             vol.Optional(
                 CONF_TIMER_ANNOUNCE,
                 default=current.get(CONF_TIMER_ANNOUNCE, DEFAULT_TIMER_ANNOUNCE),
-            ): selector.BooleanSelector(),
-            vol.Optional(
-                CONF_MEMORY_ENABLED,
-                default=current.get(CONF_MEMORY_ENABLED, DEFAULT_MEMORY_ENABLED),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_FEEDBACK_LOOP_DEVICES,

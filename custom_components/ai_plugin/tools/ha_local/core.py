@@ -22,6 +22,7 @@ through HA's built-in MCP server tools (HassTurnOn, HassClimateSetTemperature, e
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -47,6 +48,15 @@ _LOGGER = logging.getLogger(__name__)
 
 
 
+
+
+# Words that leave a room out: "all blinds except (in) the bedroom".
+_EXCEPT_RE = re.compile(
+    r"\b(?:except|apart\s+from|other\s+than|but\s+not|aside\s+from|"
+    r"au(?:ß|ss)er|bis\s+auf|sauf|excepto|salvo|menos|exceto|behalve|"
+    r"opr[óo]cz|poza|z\s+wyj[aą]tkiem)\b(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 class HALocalToolRegistry(
     EntityToolsMixin, LightToolsMixin, ClimateToolsMixin, MediaToolsMixin,
@@ -114,11 +124,22 @@ class HALocalToolRegistry(
             if name == "list_areas":
                 return self._list_areas()
             if name == "list_entities":
-                return self._list_entities(
-                    area=_s(arguments.get("area")).strip() or None,
-                    domain=_s(arguments.get("domain")).strip() or None,
-                    state=_s(arguments.get("state")).strip() or None,
-                    exposed_only=exposed_only,
+                # "Are all doors and windows closed?" came as one call with
+                # domain ['door', 'window']: answer each domain.
+                raw_domain = arguments.get("domain")
+                domains = (
+                    [_s(d).strip() for d in raw_domain if _s(d).strip()]
+                    if isinstance(raw_domain, list)
+                    else [_s(raw_domain).strip()]
+                ) or [""]
+                return "\n\n".join(
+                    self._list_entities(
+                        area=_s(arguments.get("area")).strip() or None,
+                        domain=one or None,
+                        state=_s(arguments.get("state")).strip() or None,
+                        exposed_only=exposed_only,
+                    )
+                    for one in domains
                 )
             if name == "get_entity":
                 return await self._get_entity(
@@ -181,6 +202,28 @@ class HALocalToolRegistry(
                 raw_area = arguments.get("area")
                 area_val = _s(raw_area).strip() if raw_area is not None else ""
                 said_all = bool(_USER_SAID_ALL_RE.search(user_message or ""))
+                # "... except (in) the bedroom": that room is left out, and is
+                # never the target, also when the model drops except_area.
+                raw_except = arguments.get("except_area")
+                excepts = [
+                    _s(x).strip()
+                    for x in (raw_except if isinstance(raw_except, list) else [raw_except])
+                    if x is not None and _s(x).strip()
+                ]
+                said = _EXCEPT_RE.search(user_message or "")
+                said_except = self._area_named_in_message(said.group(1)) if said else None
+                before_except = (user_message or "")[: said.start()] if said else (user_message or "")
+                if said_except:
+                    if not any(e.lower() == said_except.lower() for e in excepts):
+                        excepts.append(said_except)
+                    left = self._area_by_name(said_except)
+                    asked = self._area_by_name(area_val) if area_val else None
+                    if left is not None and asked is not None and asked.id == left.id:
+                        return (
+                            f"[Not done: the user asked to leave {left.name} out. "
+                            "Nothing is to change there; do not undo a sweep "
+                            "room by room.]"
+                        )
                 # Scope ladder for an OMITTED area. Small models drop the
                 # argument constantly, and defaulting straight to the
                 # calling satellite's room silently shrank whole-home
@@ -191,7 +234,7 @@ class HALocalToolRegistry(
                 #   3. neither                        → caller's room
                 #      (resolved in _set_area_state from device_id)
                 if not area_val:
-                    named_area = self._area_named_in_message(user_message or "")
+                    named_area = self._area_named_in_message(before_except)
                     if named_area:
                         area_val = named_area
                         _LOGGER.debug(
@@ -297,6 +340,7 @@ class HALocalToolRegistry(
                     action=_s(arguments.get("action")).strip(),
                     exposed_only=exposed_only,
                     device_id=device_id,
+                    except_areas=excepts or None,
                 )
             if name == "set_climate_mode":
                 return await self._set_climate_mode(

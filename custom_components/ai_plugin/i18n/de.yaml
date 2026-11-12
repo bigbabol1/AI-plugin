@@ -62,8 +62,12 @@ templates:
   broadcast_cancelled: "Okay, keine Durchsage."
   message_sent_to: "An {name} geschickt: {label}"
   message_not_sent: "Das konnte ich nicht senden."
+  calendar_not_removed: "Ich habe nichts gelöscht. Welchen Termin meinst du?"
+  diary_forgotten: "Ich habe unsere früheren Gespräche vergessen."
+  diary_forgotten_none: "Von früheren Gesprächen war nichts gespeichert."
   message_cancelled: "Okay, nichts gesendet."
   schedule_not_changed: "Ich habe nichts geändert. Sag mir die neue Zeit, dann stelle ich sie ein."
+  schedule_switched_off: "Wecker und Erinnerungen kann ich hier nicht stellen, es wurde also nichts gestellt."
 keywords:
   time_now:      ["wie spät ist es", "wie viel uhr ist es", "wieviel uhr ist es", "sag mir die uhrzeit", "wie spät"]
   sun_set:       ["sonnenuntergang", "wann geht die sonne unter", "wann ist sonnenuntergang"]
@@ -73,6 +77,10 @@ keywords:
   narration:     ["ich prüfe", "ich überprüfe", "ich checke", "ich suche nach", "ich schaue", "ich sehe nach", "ich frage"]
 
 patterns:
+  # Forgetting the conversation diary, not a saved fact.
+  diary_forget:
+    - '\bvergiss\s+(?:alle\s+)?(?:unsere|meine|die)\s+(?:früheren\s+|alten\s+|bisherigen\s+)?(?:gespräche|unterhaltungen|unterhaltung|chats?)\b'
+    - '\b(?:lösch|lösche|löschen|leere)\s+(?:alle\s+)?(?:unsere|meine|die)\s+(?:gespräche|unterhaltungen|chats?|gesprächsverlauf|tagebuch)\b'
   narration_full: []
   action_on:
     - '^(?:schalte|mach|stell|stelle|dreh|drehe)\s+(?:den|die|das|dem)?\s*(?P<name>.+?)\s+(?:ein|an)$'

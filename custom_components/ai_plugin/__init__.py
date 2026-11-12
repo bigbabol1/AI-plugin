@@ -15,8 +15,10 @@ from .const import (
     DOMAIN,
 )
 from .music_ducking import async_setup_listening_duck
+from .diary import DiaryManager
 from .scheduler import Scheduler
 from .tools.memory import MemoryTool
+from .tools.ha_llm import HassToolSource
 from .tools.mcp_client import MCPToolRegistry
 from .tools.ha_local import HALocalToolRegistry
 from .voice_id import VoiceIDManager
@@ -28,9 +30,13 @@ PLATFORMS = [Platform.CONVERSATION, Platform.AI_TASK, Platform.STT]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AI Plugin from a config entry."""
-    # Build and start the MCP tool registry (may be empty if no servers configured).
+    # Home Assistant's own tools (HassTurnOn, GetLiveContext, exposed scripts)
+    # come built in; this Home Assistant's MCP server, if configured, is
+    # skipped. Other MCP servers are connected as before.
     server_configs: list[dict] = entry.options.get(CONF_MCP_SERVERS, [])
-    mcp = MCPToolRegistry(server_configs)
+    mcp = MCPToolRegistry(
+        server_configs, builtin=HassToolSource(hass), own_hosts=_own_hosts(hass)
+    )
     await mcp.async_setup()
 
     # Native persistent memory tool (no external dependencies). Off is for
@@ -55,6 +61,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scheduler = Scheduler(hass, entry.entry_id)
     await scheduler.async_load()
 
+    # Notes about earlier conversations. Loaded even when the diary is off, so
+    # turning it back on finds the notes that are still within their days.
+    diary = DiaryManager(hass, entry.entry_id)
+    await diary.async_load()
+
     # Store in hass.data so Orchestrator can retrieve it.
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "mcp": mcp,
@@ -62,6 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "ha_local": ha_local,
         "voice_id": voice_id,
         "scheduler": scheduler,
+        "diary": diary,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -88,6 +100,35 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await mcp.async_teardown()
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+def _own_hosts(hass: HomeAssistant) -> frozenset[str]:
+    """The names this Home Assistant is reached by, to know its own MCP server
+    among the configured ones."""
+    hosts = {"localhost", "127.0.0.1", "::1", "homeassistant", "homeassistant.local"}
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    for url in (
+        getattr(hass.config, "internal_url", None),
+        getattr(hass.config, "external_url", None),
+    ):
+        if isinstance(url, str) and url:
+            hosts.add((urlparse(url).hostname or "").lower())
+    try:
+        from homeassistant.helpers.network import get_url  # noqa: PLC0415
+
+        for kwargs in ({"allow_external": False}, {"allow_internal": False}):
+            try:
+                hosts.add((urlparse(get_url(hass, **kwargs)).hostname or "").lower())
+            except Exception:  # noqa: BLE001 — NoURLAvailableError
+                pass
+    except ImportError:
+        pass
+    local_ip = getattr(getattr(hass.config, "api", None), "local_ip", None)
+    if isinstance(local_ip, str):
+        hosts.add(local_ip)
+    hosts.discard("")
+    return frozenset(hosts)
 
 
 def _schedule_pipeline_sync(hass: HomeAssistant, entry: ConfigEntry, voice_id) -> None:
@@ -190,6 +231,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await Scheduler(hass, entry.entry_id).async_remove_storage()
     except Exception:  # noqa: BLE001
         _LOGGER.warning("AI Plugin scheduler: cleanup on removal failed", exc_info=True)
+    try:
+        diary = DiaryManager(hass, entry.entry_id)
+        await diary.async_load()
+        await diary.async_remove_storage()
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("AI Plugin diary: cleanup on removal failed", exc_info=True)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -59,7 +59,7 @@ async def test_a_covered_tool_still_runs_if_the_model_calls_it() -> None:
     orch._mcp.call_tool = AsyncMock(return_value="done")
     result = await orch._dispatch_tool("HassSetVolume", {"volume_level": 40})
     assert result == "done"
-    orch._mcp.call_tool.assert_awaited_once_with("HassSetVolume", {"volume_level": 40})
+    orch._mcp.call_tool.assert_awaited_once_with("HassSetVolume", {"volume_level": 40}, device_id=None, user_id=None)
 
 
 def test_exposed_only_is_offered_only_where_the_rules_use_it() -> None:
@@ -131,7 +131,7 @@ async def test_a_room_copied_into_the_name_is_left_out(said, name) -> None:
     orch._hass = MagicMock()
     orch._mcp.call_tool = AsyncMock(return_value="done")
     await orch._dispatch_tool("HassTurnOn", {"name": said, "domain": ["switch"]})
-    orch._mcp.call_tool.assert_awaited_once_with("HassTurnOn", {"name": name, "domain": ["switch"]})
+    orch._mcp.call_tool.assert_awaited_once_with("HassTurnOn", {"name": name, "domain": ["switch"]}, device_id=None, user_id=None)
 
 
 def test_examples_are_written_the_way_the_model_writes_a_tool_call() -> None:

@@ -20,6 +20,8 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from ..const import (
+    CONF_CONVERSATION_MEMORY,
+    CONF_DIARY_DAYS,
     CONF_ENABLE_THINKING,
     BACKEND_SEARXNG,
     CONF_API_KEY,
@@ -57,7 +59,9 @@ from .mcp_steps import MCPServerStepsMixin
 from .voice_id_steps import VoiceIDStepsMixin
 from .schemas import (
     _advanced_schema,
+    _memory_schema,
     _is_valid_url,
+    _tools_schema,
     _validate_advanced_input,
     _web_search_schema,
 )
@@ -94,7 +98,10 @@ class AIPluginOptionsFlow(MCPServerStepsMixin, VoiceIDStepsMixin, config_entries
         """Show the top-level menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["provider_settings", "web_search", "advanced", "mcp_servers", "voice_id"],
+            menu_options=[
+                "provider_settings", "web_search", "memory", "tools", "advanced",
+                "mcp_servers", "voice_id",
+            ],
         )
 
     # ── Provider settings ────────────────────────────────────────────────────
@@ -236,6 +243,37 @@ class AIPluginOptionsFlow(MCPServerStepsMixin, VoiceIDStepsMixin, config_entries
                 }
             ),
             errors=errors,
+        )
+
+    # ── Memory ───────────────────────────────────────────────────────────────
+
+    async def async_step_memory(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Saved facts, the conversation on a satellite, and the diary."""
+        if user_input is not None:
+            for key in (CONF_CONVERSATION_MEMORY, CONF_DIARY_DAYS):
+                if key in user_input:
+                    user_input[key] = int(user_input[key])
+            self._options = {**self._options, **user_input}
+            return self.async_create_entry(title="", data=self._options)
+        return self.async_show_form(
+            step_id="memory",
+            data_schema=_memory_schema(self._options),
+        )
+
+    # ── Tools ────────────────────────────────────────────────────────────────
+
+    async def async_step_tools(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """The built-in features, each one on or off."""
+        if user_input is not None:
+            self._options = {**self._options, **user_input}
+            return self.async_create_entry(title="", data=self._options)
+        return self.async_show_form(
+            step_id="tools",
+            data_schema=_tools_schema(self._options),
         )
 
     # ── Advanced ─────────────────────────────────────────────────────────────

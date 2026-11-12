@@ -35,7 +35,7 @@ def test_split_list_items_ignores_a_missing_item() -> None:
 
 def _orch_with_mcp():
     orch = _baseline_orch()
-    orch._mcp = MagicMock(call_tool=AsyncMock(side_effect=lambda n, a: f"added {a['item']}"))
+    orch._mcp = MagicMock(call_tool=AsyncMock(side_effect=lambda n, a, **_: f"added {a['item']}"))
     orch._mcp.is_home_assistant_tool = MagicMock(return_value=True)
     orch._ha_local = None
     return orch
@@ -62,5 +62,5 @@ async def test_one_item_is_added_as_it_was() -> None:
     await orch._dispatch_tool("HassListAddItem", {"item": "Greek yogurt", "name": "x"}, None)
 
     orch._mcp.call_tool.assert_awaited_once_with(
-        "HassListAddItem", {"item": "Greek yogurt", "name": "x"}
+        "HassListAddItem", {"item": "Greek yogurt", "name": "x"}, device_id=None, user_id=None
     )

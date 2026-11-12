@@ -39,8 +39,9 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
 - Self-echo filtering for satellites whose replies play on a separate speaker.
 - First-class voice timers, with an optional announce mode for any speaker.
 - **Alarms, reminders and things to do later**: "Wake me up at 7", "Remind me to take out the trash tomorrow at 6", "Turn off the lights in 30 minutes". They survive a restart.
-- **A conversation lasts 15 minutes** on a satellite, so "and the bedroom?" still knows what it follows.
-- **Calendar entries by voice**: "Put the dentist on my calendar for Friday at 10".
+- **A conversation lasts 15 minutes** on a satellite (adjustable under Memory), so "and the bedroom?" still knows what it follows.
+- **Calendar entries by voice**: "Put the dentist on my calendar for Friday at 10", and "Delete the dentist on Friday". It asks before removing anything you didn't name.
+- **Doors, windows and blinds**: "Are all windows closed?" reads the sensors, "Close all blinds except the bedroom" leaves the bedroom and the awning alone.
 - **Messages and moving music**: "Tell Anna dinner is ready", "Tell the kitchen…", "Move the music to the bedroom".
 - **Voice recognition** *(optional)*: knows who is speaking, so each person gets their own memory. It runs inside Home Assistant, with no add-on and no cloud.
 - **Find my phone**: "Where is my phone?" rings it loudly, even on silent.
@@ -61,9 +62,11 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
 
 **🧩 Extensible**
 - Web search via DuckDuckGo (zero config), Brave, Tavily or SearXNG, plus `browse_url` for reading one page.
-- MCP servers over HTTP and stdio, including Home Assistant's own MCP server.
+- Home Assistant's own Assist tools built in: devices, sensors, exposed scripts, to-do lists and calendars work right after setup, with no MCP server or token to set up.
+- More tools from MCP servers over HTTP and stdio.
 - An `ai_task` entity so automations can use the same model.
 - Per-user long-term memory (`remember` / `recall` / `forget`).
+- A diary of earlier conversations, recalled on any device days later; per person, private by default.
 - **7 languages**: English, German, French, Spanish, Portuguese, Polish and Dutch. A new language is a single YAML file.
 
 > [!NOTE]
@@ -287,9 +290,28 @@ The assistant remembers facts across conversations and across restarts:
 
 **Preferences apply everywhere.** A saved preference such as *"always use metric units"* applies to every answer, whatever the topic, not only to questions about you.
 
-**Bring your own memory.** Turn off *Long-term memory* under Advanced to remove the three tools, the `[USER FACTS]` block and the memory rules from the prompt, for example when an MCP server provides the memory. Saved facts stay on disk and return when you turn it on again. With voice recognition on, the assistant still knows who is speaking, but nothing is stored per person.
+**Bring your own memory.** Turn off *Long-term memory* under Memory to remove the three tools, the `[USER FACTS]` block and the memory rules from the prompt, for example when an MCP server provides the memory. Saved facts stay on disk and return when you turn it on again. With voice recognition on, the assistant still knows who is speaking, but nothing is stored per person.
 
 **`forget` won't delete the wrong fact.** It removes by the fact's number first and falls back to a fuzzy match. If the fact isn't stored, it says so instead of guessing.
+
+### Remembering earlier conversations
+
+Home Assistant keeps a conversation for a few minutes and only on the device it started on. The diary keeps what was talked about across devices, restarts and days:
+
+- *"What should I cook tonight?"* in the app, then twenty minutes later on a satellite: *"About the stir-fry you suggested, how do I start?"* → answered from the earlier conversation
+- *"Which film did I pick last weekend?"* → *"Arrival."*
+
+**How it works.** Ten minutes after a conversation goes quiet, the model writes up to three short notes about it: what was asked and the details it gave, such as steps, amounts, names, places and plans. Device commands, greetings and small talk are left out. On later turns that are not device commands, the three notes closest to what was said are added to the prompt, marked as notes that may have nothing to do with it, and the model decides whether one fits. In replay on gemma-4-12B, unrelated turns never brought up a note (0 of 50) and tool calls were unchanged, while follow-ups were answered from the right note 104 of 110 times when it was attached.
+
+**Search.** Notes are found by meaning, in any of the plugin's languages: an English question finds a German note. The search model, a cut-down [potion-multilingual-128M](https://huggingface.co/minishlab/potion-multilingual-128M) (MIT, about 40 MB, see `memory_model/`), is downloaded once and runs inside Home Assistant in well under a millisecond per turn. Until it is there, notes are found by their words.
+
+**Whose notes.** Each note records whose conversation it was: the person recognised by [voice](#voice-recognition), or the person signed in to the app. With *Share conversations between people* off (the default), everyone is shown only their own notes and those of voices that were not recognised. With it on, everyone's notes can come up in every conversation, always marked with whose conversation it was.
+
+**Privacy.** Notes stay in `<config>/.storage/ai_plugin_diary.<entry>` and are deleted after *Keep diary notes for* days (default 30). *"Forget our conversations"* deletes the speaker's own notes. Turning the diary off stops writing and recalling; notes still within their days come back when it is turned on again.
+
+### Switching built-in features off
+
+Configure → **Tools** lists what the assistant does itself besides controlling devices: timers, alarms and reminders, calendar entries, messages, announcements, moving music and finding a phone. All are on by default. Switch one off if your home already does it another way, for example with a script exposed to Assist or an MCP server. Its tools and prompt rules go, its shortcuts stand down, and a tool of the same name on an MCP server gets the call. With announcements off, Home Assistant's own `HassBroadcast` is left out too, so your own announcement script is the one the model sees. When the model says it did something and only one of your own tools ran, the reply is believed: no "I haven't changed anything" over it, and no retry that would set a second alarm. Alarms and reminders already set still ring after the switch.
 
 ### AI Tasks for automations
 
@@ -318,7 +340,9 @@ To read one specific page, the model uses `browse_url`. It fetches through **Jin
 
 ### MCP servers
 
-You can add any MCP tool server over HTTP or stdio. Presets are included for HA's built-in MCP server (recommended: it provides `HassTurnOn` / `HassClimateSetTemperature`-style intents), time, fetch, SQLite and more. MCP calls are capped at 15 s, so a hung server cannot stall a voice reply.
+Home Assistant's own tools (`HassTurnOn`, `HassClimateSetTemperature`, `GetLiveContext`, exposed scripts, to-do lists, calendar reads) are built in. They are the tools Home Assistant's MCP server offers, called inside Home Assistant the way its own conversation agents call them, so the *Model Context Protocol Server* integration and a long-lived token are not needed. Each call also knows which satellite and which person it is for. If that integration is set up, its choice of APIs and its read-only switch are used. A configured server pointing at this Home Assistant's own MCP server is skipped (the MCP list marks it as not used) and can be removed.
+
+You can add any other MCP tool server over HTTP or stdio. Presets are included for time, fetch, SQLite and more. Tool calls are capped at 15 s, so a hung server cannot stall a voice reply.
 
 ## How it stays fast
 
@@ -358,6 +382,11 @@ On a 7–12B model, latency is won or lost in three places:
 | Prune tool schemas | off | Per-message schema pruning. Defeats the prefix cache, so leave it off. |
 | Announce timers | off | Timer completions play on a media player instead of the on-device ring |
 | Long-term memory | on | `remember` / `recall` / `forget` and the saved facts. Off if you bring your own memory; saved facts are kept (see [Long-term memory](#long-term-memory)) |
+| Remember a satellite's conversation | `15` min | How long a satellite keeps its conversation between turns (0–360). 0 starts over with each new Home Assistant conversation |
+| Remember earlier conversations | on | The diary (see [Remembering earlier conversations](#remembering-earlier-conversations)) |
+| Keep diary notes for | `30` days | Older notes are deleted |
+| Share conversations between people | off | Off: each person sees their own notes and those of unrecognised voices |
+| Tools | all on | Timers, alarms and reminders, calendar, messages, announcements, moving music, find my phone, each one on or off (see [Switching built-in features off](#switching-built-in-features-off)) |
 | Recognise voices | off | Speaker recognition for per-person memory (see [Voice recognition](#voice-recognition)) |
 | Allow starting enrollment by voice | on | "Learn my voice, I am Anna" starts enrollment on that satellite |
 | Minimum match score | `0.35` | Higher means fewer wrong names and more "unknown" |

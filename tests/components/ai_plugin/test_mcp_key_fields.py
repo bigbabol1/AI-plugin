@@ -24,7 +24,6 @@ def _load_mcp_steps():
     package = types.ModuleType(name)
     package.__path__ = []
     schemas = types.ModuleType(f"{name}.schemas")
-    schemas._get_ha_url = lambda hass: "http://ha:8123"
     schemas._is_valid_url = lambda url: url.startswith("http")
     sys.modules[name] = package
     sys.modules[f"{name}.schemas"] = schemas

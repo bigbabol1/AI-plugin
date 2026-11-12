@@ -27,9 +27,12 @@ from homeassistant.util import dt as dt_util, ulid as ulid_util
 from .const import (
     CONF_FEEDBACK_LOOP_DEVICES,
     CONF_FOLLOW_UP_DELAY,
+    CONF_CONVERSATION_MEMORY,
     CONF_SELF_ECHO_FILTER,
     CONVERSATION_CLOSE_PHRASES,
     DEFAULT_FOLLOW_UP_DELAY,
+    DEFAULT_CONVERSATION_MEMORY,
+    MAX_CONVERSATION_MEMORY,
     DEFAULT_SELF_ECHO_FILTER,
     DOMAIN,
     ECHO_MATCH_THRESHOLD,
@@ -110,7 +113,6 @@ _REOPEN_SETTLE_S = 0.3
 # A delayed follow-up arrives as a NEW HA conversation, so the history key is
 # remapped back to the conversation it continues for this long.
 _FOLLOW_UP_CONTINUITY_S = 120.0
-_SATELLITE_MEMORY_S = 15 * 60.0
 
 
 # Playback-overlap echo. Satellites that mirror their TTS to other speakers
@@ -715,7 +717,8 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         conversation_id: str,
         language: str | None = None,
     ) -> str:
-        """Keep a satellite's conversation for 15 minutes between turns.
+        """Keep a satellite's conversation between turns: 15 minutes, or what
+        the "Remember a satellite's conversation" option says.
 
         HA mints a new conversation after a few minutes of quiet, which took
         "and the bedroom?" away from what it followed. Only for satellites: an
@@ -734,7 +737,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         now = time.monotonic()
         lang = (language or "en").split("-")[0].lower()
         last = store.get(device_id)
-        if last is None or now - last[0] > _SATELLITE_MEMORY_S:
+        if last is None or now - last[0] > self._conversation_memory_s():
             history_id = conversation_id
         elif last[2] == lang:
             history_id = last[1]
@@ -742,6 +745,16 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             history_id = f"{conversation_id}:{lang}"
         store[device_id] = (now, history_id, lang)
         return history_id
+
+    def _conversation_memory_s(self) -> float:
+        """The option in seconds; 0 leaves it to Home Assistant's own conversation."""
+        try:
+            minutes = float(
+                self._entry.options.get(CONF_CONVERSATION_MEMORY, DEFAULT_CONVERSATION_MEMORY)
+            )
+        except (TypeError, ValueError):
+            minutes = DEFAULT_CONVERSATION_MEMORY
+        return max(0.0, min(minutes, MAX_CONVERSATION_MEMORY)) * 60.0
 
     def _continued_conversation_id(
         self, device_id: str | None, conversation_id: str

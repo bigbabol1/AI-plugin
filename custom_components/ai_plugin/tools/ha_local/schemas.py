@@ -84,7 +84,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Optional HA domain to filter by (light, switch, "
-                            "sensor, climate, media_player, cover, etc.)."
+                            "sensor, climate, media_player, cover, etc.). For "
+                            "doors and windows ('Türen und Fenster') use 'door' "
+                            "and 'window' with state 'open'; 'cover' is blinds."
                         ),
                     },
                     "state": {
@@ -163,7 +165,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "'everywhere' or 'whole house' ('all lights off' → "
                 "area: 'all'). Pass the room name when the user names one. "
                 "OMIT area ONLY when the user named neither — the plugin "
-                "then defaults to the calling satellite's room."
+                "then defaults to the calling satellite's room. 'All blinds "
+                "down except in the bedroom' is ONE call: area: 'all', "
+                "except_area: 'bedroom'. Covers: only window coverings move; "
+                "an awning or garage door is switched by name."
             ),
             "parameters": {
                 "type": "object",
@@ -186,6 +191,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "action": {
                         "type": "string",
                         "enum": ["turn_on", "turn_off", "toggle"],
+                    },
+                    "except_area": {
+                        "type": "string",
+                        "description": "A room to leave out, when the user says 'except'.",
                     },
                 },
                 "required": ["domain", "action"],

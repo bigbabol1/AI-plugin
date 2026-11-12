@@ -62,8 +62,12 @@ templates:
   broadcast_cancelled: "Dobrze, bez ogłoszenia."
   message_sent_to: "Wysłano do {name}: {label}"
   message_not_sent: "Nie udało mi się tego wysłać."
+  calendar_not_removed: "Niczego nie usunąłem. Które wydarzenie masz na myśli?"
+  diary_forgotten: "Zapomniałem naszych wcześniejszych rozmów."
+  diary_forgotten_none: "Nic nie zostało zapisane z wcześniejszych rozmów."
   message_cancelled: "Dobrze, nic nie wysłano."
   schedule_not_changed: "Niczego nie zmieniłem. Podaj nową godzinę, a ją ustawię."
+  schedule_switched_off: "Nie mogę tu ustawiać budzików ani przypomnień, więc nic nie zostało ustawione."
 keywords:
   time_now:      ["która jest godzina", "ktora jest godzina", "podaj godzinę"]
   sun_set:       ["zachód słońca", "kiedy zachodzi słońce", "o której zachodzi słońce"]
@@ -73,6 +77,10 @@ keywords:
   narration:     ["sprawdzam", "szukam", "patrzę", "zaraz sprawdzę", "zaraz poszukam"]
 
 patterns:
+  # Forgetting the conversation diary, not a saved fact.
+  diary_forget:
+    - '\bzapomnij\s+(?:o\s+)?(?:nasze|naszych|moje|moich|wszystkie|wszystkich)\s+(?:wcześniejsze\s+|wcześniejszych\s+)?rozmow(?:y|ach)\b'
+    - '\busuń\s+(?:nasze|moje|wszystkie)\s+rozmowy\b'
   narration_full: []
   action_on:
     - '^(?:włącz|wlacz|włączyć|wlaczyc|uruchom)\s+(?P<name>.+?)$'

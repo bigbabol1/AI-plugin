@@ -58,7 +58,7 @@ _MEDIA_TOOL_NAMES = ("play_music", "media_command", "move_music")
 # Nothing shows that they worked, so their confirmation is always spoken.
 _SCHEDULE_WRITE_TOOL_NAMES = (
     "set_alarm", "set_reminder", "schedule_action", "cancel_scheduled",
-    "add_calendar_event", "tell", "HassBroadcast",
+    "add_calendar_event", "remove_calendar_event", "tell", "HassBroadcast",
 )
 
 def _any_media_status_call(tool_msgs: list[dict]) -> bool:
@@ -113,7 +113,8 @@ def _any_media_success(tool_msgs: list[dict]) -> bool:
 # is a "["-bracketed result (mcp_client brackets transport errors and
 # isError results); any other non-empty result means the intent ran.
 _INTENT_ACTUATOR_NAMES = (
-    "HassTurnOn", "HassTurnOff", "HassLightSet",
+    "HassTurnOn", "HassTurnOff", "HassToggle", "HassLightSet",
+    "HassFanSetSpeed", "HassSetPosition",
     "HassClimateSetTemperature", "HassClimateSetMode",
     "HassMediaPause", "HassMediaUnpause", "HassMediaNext",
     "HassMediaPrevious",
@@ -202,7 +203,8 @@ _QUESTION_INTENT_RE = re.compile(
 # Tool names whose invocation = action taken.
 _ACTUATOR_TOOL_NAMES = (
     "set_area_state", "set_brightness", "set_climate_mode", "HassTurnOn",
-    "HassTurnOff", "HassLightSet", "HassClimateSetTemperature",
+    "HassTurnOff", "HassToggle", "HassLightSet", "HassFanSetSpeed",
+    "HassSetPosition", "HassClimateSetTemperature",
     "HassClimateSetMode", "HassMediaPause", "HassMediaUnpause",
     "HassMediaNext", "HassMediaPrevious",
     "play_music", "media_command", "move_music",

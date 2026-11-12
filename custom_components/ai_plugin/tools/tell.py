@@ -13,6 +13,7 @@ too, and the question is left without a reply.
 from __future__ import annotations
 
 from collections.abc import Callable
+import copy
 import logging
 from typing import Any
 
@@ -48,6 +49,25 @@ TOOL_SCHEMA: dict[str, Any] = {
         },
     },
 }
+
+
+def tell_schema(names) -> dict[str, Any]:
+    """TOOL_SCHEMA, naming the people a message can reach.
+
+    Nothing else told the model who lives in the home. "To Ben ??" typed in
+    the Companion app got "I'm not sure who Ben is", with no call, from a
+    home where Ben has a phone (2026-11-09; replay 3 of 4).
+    """
+    names = sorted(n for n in names if n)
+    if not names:
+        return TOOL_SCHEMA
+    schema = copy.deepcopy(TOOL_SCHEMA)
+    schema["function"]["parameters"]["properties"]["person"]["description"] = (
+        "Name of the person, for their phone. People with a phone: "
+        + ", ".join(names) + ". If the user names one of them but not the "
+        "message, ask: 'What should I tell " + names[0] + "?'"
+    )
+    return schema
 
 
 async def async_broadcast(

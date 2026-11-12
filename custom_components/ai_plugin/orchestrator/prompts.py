@@ -15,11 +15,17 @@ import re
 from ..const import (
     CONF_MEMORY_ENABLED,
     CONF_SYSTEM_PROMPT,
+    CONF_TOOL_ALARMS,
+    CONF_TOOL_BROADCAST,
+    CONF_TOOL_MESSAGES,
+    CONF_TOOL_TIMERS,
     DEFAULT_MEMORY_ENABLED,
+    FEATURE_TOOLS,
     FOLLOW_UP_AUTO,
     FOLLOW_UP_AUTO_RULE,
     SYSTEM_PROMPT_DEFAULT,
     SYSTEM_PROMPT_VOICE,
+    features_off,
     follow_up_mode,
 )
 
@@ -38,6 +44,47 @@ MEMORY_OFF_RULE = (
     "or forget something and no tool does it, say in their language that you cannot save it. Never say "
     "it was noted, saved, remembered or removed, in any language.\n\n"
 )
+
+
+# The timer section of each prompt, up to the blank line that ends it.
+_TIMER_RULES_RE = re.compile(r"(?:\[TIMERS\]|Timers:)\n.*?\n\n", re.S)
+_SCHEDULE_HEADS = ("[ALARMS, REMINDERS, LATER]", "Alarms, reminders, later:")
+_SCHEDULE_INTRO = "- A timer counts down a length of time and then only rings."
+_SCHEDULE_CLOSING = "- Say what these tools answered"
+_BROADCAST_EXAMPLE = " 'tell everyone', 'announce': HassBroadcast."
+
+
+def prune_feature_rules(prompt: str, off: frozenset[str]) -> str:
+    """The prompt without the rules of features switched off (Configure -> Tools).
+
+    Rules for a tool the model does not have make it call that tool anyway, or
+    say it did. With every feature on, the prompt is returned unchanged.
+    """
+    if not off:
+        return prompt
+    if CONF_TOOL_TIMERS in off:
+        prompt = _TIMER_RULES_RE.sub("", prompt)
+    gone = frozenset().union(*(FEATURE_TOOLS[key] for key in off))
+    kept: list[str] = []
+    for line in prompt.split("\n"):
+        if _BROADCAST_EXAMPLE in line:
+            # One line holds both messages and announcements.
+            if CONF_TOOL_BROADCAST in off:
+                line = line.replace(_BROADCAST_EXAMPLE, "")
+            elif CONF_TOOL_MESSAGES in off:
+                line = "-" + _BROADCAST_EXAMPLE
+        if line.startswith("- ") and (
+            any(f"{name}(" in line for name in gone)
+            or (CONF_TOOL_ALARMS in off and line.startswith(_SCHEDULE_INTRO))
+        ):
+            continue
+        kept.append(line)
+    # A section left with nothing but its closing line goes as a whole.
+    for i in range(len(kept) - 1, 0, -1):
+        if kept[i].startswith(_SCHEDULE_CLOSING) and kept[i - 1] in _SCHEDULE_HEADS:
+            end = i + 2 if i + 1 < len(kept) and not kept[i + 1] else i + 1
+            del kept[i - 1:end]
+    return "\n".join(kept)
 
 
 class PromptBlocksMixin:
@@ -65,6 +112,7 @@ class PromptBlocksMixin:
         base = SYSTEM_PROMPT_VOICE if voice_mode else SYSTEM_PROMPT_DEFAULT
         if not self._memory_enabled():
             base = _MEMORY_RULES_RE.sub(lambda _: MEMORY_OFF_RULE, base)
+        base = prune_feature_rules(base, features_off(self._entry.options))
         location_block = await self._build_location_block()
         custom = self._entry.options.get(CONF_SYSTEM_PROMPT, "").strip()
         parts = [base, location_block]

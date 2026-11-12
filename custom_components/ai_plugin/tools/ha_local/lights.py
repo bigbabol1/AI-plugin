@@ -98,6 +98,30 @@ def hass_light_set_args(arguments: dict) -> dict:
     return out
 
 
+# Window coverings. Small models name one class for all of them: "Rollos"
+# came as device_class 'blind', "Jalousie" as 'shade' (replay 3 of 3 each,
+# 2026-11-11), and Home Assistant's intents keep only covers of exactly the
+# classes sent, so a Rollladen ('shutter') or a cover with no class was missed:
+# the "Rollo is mapped to Jalousie and hits nothing" of simon42's video.
+WINDOW_COVERINGS = frozenset({"blind", "shutter", "shade", "curtain"})
+# Covers that are not window coverings. "Close all the blinds" must not retract
+# the awning or shut the garage door; they are switched by name.
+NOT_WINDOW_COVERINGS = frozenset({"awning", "garage", "gate", "door", "damper", "water", "gas"})
+COVER_INTENTS = frozenset({"HassTurnOn", "HassTurnOff", "HassSetPosition", "HassGetState"})
+
+
+def widen_cover_classes(name: str, arguments: dict) -> dict:
+    """Any window-covering class asked for stands for all of them."""
+    if name not in COVER_INTENTS:
+        return arguments
+    classes = arguments.get("device_class")
+    if isinstance(classes, str):
+        classes = [classes]
+    if not isinstance(classes, list) or not WINDOW_COVERINGS & set(classes):
+        return arguments
+    return {**arguments, "device_class": sorted(WINDOW_COVERINGS | set(classes))}
+
+
 def _on_off_only(attrs) -> bool:
     """True for a light that has no brightness at all (colour mode onoff).
     A light that does not list its modes is given the benefit of the doubt."""
@@ -258,6 +282,61 @@ _DOMAIN_SERVICE_MAP: dict[str, dict[str, str]] = {
 class LightToolsMixin:
     """set_area_state / set_brightness."""
 
+    def _area_by_name(self, name: str):
+        """The area called ``name`` (or with it as an alias), or None."""
+        needle = _s(name).strip().lower()
+        for a in ar.async_get(self._hass).async_list_areas():
+            if _s(a.name).lower() == needle or any(
+                _s(al).lower() == needle for al in (getattr(a, "aliases", None) or ())
+            ):
+                return a
+        return None
+
+    def _cover_class(self, entity_id: str, entry) -> str | None:
+        state = self._hass.states.get(entity_id)
+        return (
+            (state.attributes.get("device_class") if state else None)
+            or getattr(entry, "device_class", None)
+            or getattr(entry, "original_device_class", None)
+        )
+
+    async def _set_cover_position(
+        self, area: str | None, position: int, exposed_only: bool = True
+    ) -> str:
+        """Window coverings of one area (or all) to a position; the fallback
+        when Home Assistant's own intent matched nothing."""
+        target = self._area_by_name(area) if area and area.lower() not in _SWEEP_ALL_KEYWORDS else None
+        if area and area.lower() not in _SWEEP_ALL_KEYWORDS and target is None:
+            return f"Unknown area {area!r}. Try list_areas."
+        ent_reg = er.async_get(self._hass)
+        dev_reg = dr.async_get(self._hass)
+        ids = []
+        for eid, entry in ent_reg.entities.items():
+            if not eid.startswith("cover.") or (exposed_only and not self._is_exposed(eid)):
+                continue
+            if self._cover_class(eid, entry) in NOT_WINDOW_COVERINGS:
+                continue
+            if target is not None:
+                area_id = entry.area_id
+                if not area_id and entry.device_id:
+                    dev = dev_reg.async_get(entry.device_id)
+                    area_id = dev.area_id if dev else None
+                if area_id != target.id:
+                    continue
+            ids.append(eid)
+        label = target.name if target is not None else "all areas"
+        if not ids:
+            return f"No window covering in {label}."
+        try:
+            await self._hass.services.async_call(
+                "cover", "set_cover_position",
+                {"position": max(0, min(100, int(position)))},
+                target={"entity_id": sorted(ids)}, blocking=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"[set_cover_position failed: {exc}]"
+        return f"OK — {len(ids)} cover(s) in {label} to {int(position)}%: {', '.join(sorted(ids)[:6])}"
+
     async def _set_area_state(
         self,
         area: str | None,
@@ -265,6 +344,7 @@ class LightToolsMixin:
         action: str,
         exposed_only: bool = True,
         device_id: str | None = None,
+        except_areas: list[str] | None = None,
     ) -> str:
         """Turn devices in an area on/off/toggle via a single service call.
 
@@ -319,6 +399,17 @@ class LightToolsMixin:
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("set_area_state device→area lookup failed", exc_info=True)
         sweep_all = needle in _SWEEP_ALL_KEYWORDS or needle == ""
+        # "All blinds except the bedroom": one sweep that leaves the room out.
+        # Left to the model it closed everything and then opened the bedroom
+        # again (replay 3 of 3, 2026-11-11), moving that blind twice.
+        skip_ids: set[str] = set()
+        skip_names: list[str] = []
+        for name in except_areas or []:
+            found = self._area_by_name(name)
+            if found is None:
+                return f"Unknown area {name!r} to leave out. Try list_areas."
+            skip_ids.add(found.id)
+            skip_names.append(found.name)
 
         target_area = None
         if not sweep_all:
@@ -338,22 +429,30 @@ class LightToolsMixin:
         dev_reg = dr.async_get(self._hass)
 
         ids: list[str] = []
+        left_out: list[str] = []
         for eid, entry in ent_reg.entities.items():
             if not eid.startswith(f"{domain}."):
                 continue
-            if not sweep_all:
-                area_id = entry.area_id
-                if not area_id and entry.device_id:
-                    dev = dev_reg.async_get(entry.device_id)
-                    if dev:
-                        area_id = dev.area_id
-                if area_id != target_area.id:
-                    continue
+            area_id = entry.area_id
+            if not area_id and entry.device_id:
+                dev = dev_reg.async_get(entry.device_id)
+                if dev:
+                    area_id = dev.area_id
+            if not sweep_all and area_id != target_area.id:
+                continue
+            if area_id in skip_ids:
+                continue
             if exposed_only and not self._is_exposed(eid):
+                continue
+            if domain == "cover" and self._cover_class(eid, entry) in NOT_WINDOW_COVERINGS:
+                state = self._hass.states.get(eid)
+                left_out.append(_s(state.attributes.get("friendly_name")) if state else eid)
                 continue
             ids.append(eid)
 
         scope_label = "all areas" if sweep_all else target_area.name
+        if skip_names:
+            scope_label += " except " + ", ".join(skip_names)
         if not ids:
             scope = "exposed " if exposed_only else ""
             return f"No {scope}{domain} in {scope_label}."
@@ -373,9 +472,13 @@ class LightToolsMixin:
 
         preview = ", ".join(ids[:6])
         more = f" (+{len(ids) - 6} more)" if len(ids) > 6 else ""
+        kept = (
+            f" Left as they are (not window coverings; switch them by name): "
+            f"{', '.join(left_out)}." if left_out else ""
+        )
         return (
             f"OK — {action} {len(ids)} {domain}(s) in {scope_label}: "
-            f"{preview}{more}"
+            f"{preview}{more}{kept}"
         )
 
     async def _set_brightness(

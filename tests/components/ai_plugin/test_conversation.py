@@ -229,7 +229,7 @@ async def test_tool_loop_single_tool_call() -> None:
     reply = await orch.async_process("What time is it?", "c", "en")
 
     assert reply == "It is 22:00."
-    mock_mcp.call_tool.assert_awaited_once_with("get_time", {})
+    mock_mcp.call_tool.assert_awaited_once_with("get_time", {}, device_id=None, user_id=None)
 
 
 async def test_process_with_summarization_enabled() -> None:
@@ -883,11 +883,11 @@ async def test_informative_reply_without_tool_call_is_kept() -> None:
     assert reply == "There is no device called kettle in the bedroom."
 
 
-# ── a satellite keeps its conversation for 15 minutes ────────────────────────
+# ── a satellite keeps its conversation for 15 minutes, or as set ─────────────
 
 
-def _satellite_entity(voice: bool = True):
-    entity = _entity_for_continue({})
+def _satellite_entity(voice: bool = True, options: dict | None = None):
+    entity = _entity_for_continue(options or {})
     entity._orchestrator.is_voice_device = MagicMock(return_value=voice)
     return entity
 
@@ -913,6 +913,61 @@ def test_after_15_quiet_minutes_a_satellite_starts_over() -> None:
     _at(entity, 0, "sat", "A")
     assert _at(entity, 901, "sat", "B") == "B"
     assert _at(entity, 902, "sat", "C") == "B"
+
+
+@pytest.mark.parametrize(("minutes", "kept", "lost"), [(60, 3599, 3601), (1, 59, 61)])
+def test_the_option_sets_how_long_a_satellite_remembers(minutes, kept, lost) -> None:
+    from custom_components.ai_plugin.const import CONF_CONVERSATION_MEMORY
+
+    entity = _satellite_entity(options={CONF_CONVERSATION_MEMORY: minutes})
+    _at(entity, 0, "sat", "A")
+    assert _at(entity, kept, "sat", "B") == "A"
+    assert _at(entity, kept + lost, "sat", "C") == "C"
+
+
+def test_zero_leaves_it_to_home_assistants_conversation() -> None:
+    from custom_components.ai_plugin.const import CONF_CONVERSATION_MEMORY
+
+    entity = _satellite_entity(options={CONF_CONVERSATION_MEMORY: 0})
+    assert _at(entity, 0, "sat", "A") == "A"
+    assert _at(entity, 1, "sat", "A") == "A"
+    assert _at(entity, 2, "sat", "B") == "B"
+
+
+@pytest.mark.parametrize(("value", "seconds"), [
+    (None, 900.0), ("abc", 900.0), (-5, 0.0), (10_000, 21_600.0), (30.0, 1800.0),
+])
+def test_an_odd_option_value_is_kept_in_range(value, seconds) -> None:
+    from custom_components.ai_plugin.const import CONF_CONVERSATION_MEMORY
+
+    options = {} if value is None else {CONF_CONVERSATION_MEMORY: value}
+    assert _satellite_entity(options=options)._conversation_memory_s() == seconds
+
+
+def test_the_option_is_offered_in_the_memory_settings() -> None:
+    from custom_components.ai_plugin.const import CONF_CONVERSATION_MEMORY
+
+    from .test_memory_option import _load_schemas
+
+    def default(current):
+        schema = _load_schemas()._memory_schema(current).schema
+        return next(k for k in schema if str(k) == CONF_CONVERSATION_MEMORY).default()
+
+    assert default({}) == 15
+    assert default({CONF_CONVERSATION_MEMORY: 45}) == 45
+
+
+@pytest.mark.parametrize("name", ["strings.json", "translations/en.json"])
+def test_the_memory_option_has_a_label_and_a_description(name) -> None:
+    import json
+    from pathlib import Path
+
+    import custom_components.ai_plugin as integration
+
+    text = json.loads((Path(integration.__file__).parent / name).read_text())
+    step = text["options"]["step"]["memory"]
+    assert "minutes" in step["data"]["conversation_memory_minutes"]
+    assert "Default 15" in step["data_description"]["conversation_memory_minutes"]
 
 
 def test_switching_the_pipeline_language_starts_a_new_history() -> None:
@@ -1163,3 +1218,49 @@ def test_a_wider_or_named_request_is_left_alone(message) -> None:
     args, refused = orch._confine_to_this_room("set_area_state", call, message, "sat")
     assert args == call and refused is None
 
+
+
+@pytest.mark.parametrize(
+    ("tool", "call"),
+    [
+        ("HassFanSetSpeed", {"percentage": 30}),
+        ("HassTurnOff", {"domain": ["fan"]}),
+        ("HassSetPosition", {"device_class": ["blind"], "position": 0}),
+    ],
+)
+def test_a_home_assistant_intent_with_no_target_stays_in_this_room(tool, call) -> None:
+    """Home Assistant prefers the satellite's room only between devices of the
+    same name: "Set the air purifier to 30%" with no name set both of them."""
+    orch = _confining_orch()
+    args, refused = orch._confine_to_this_room(tool, call, "Set the air purifier to 30%.", "sat")
+    assert args == {**call, "area": "Living Room"} and refused is None
+
+
+@pytest.mark.parametrize(
+    ("call", "message", "room"),
+    [
+        ({"percentage": 30, "name": "Luftreiniger"}, "Set the Luftreiniger to 30%.", "Living Room"),
+        ({"percentage": 30, "area": "Bedroom"}, "Set the bedroom fan to 30%.", "Living Room"),
+        ({"percentage": 30, "floor": "Upstairs"}, "Set the fans upstairs to 30%.", "Living Room"),
+        ({"percentage": 30}, "Set all the fans to 30%.", "Living Room"),
+        ({"percentage": 30}, "Set the fan to 30%.", None),
+    ],
+)
+def test_a_targeted_or_whole_home_intent_is_left_alone(call, message, room) -> None:
+    orch = _confining_orch(room=room)
+    args, refused = orch._confine_to_this_room("HassFanSetSpeed", call, message, "sat")
+    assert args == call and refused is None
+
+
+def test_a_fan_speed_counts_as_an_action() -> None:
+    """Otherwise the action retry runs after it, with the fan still on offer."""
+    from custom_components.ai_plugin.orchestrator.grounding import (
+        _any_actuator_call,
+        _any_actuator_success,
+    )
+
+    msgs = [
+        {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "HassFanSetSpeed"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": '{"response_type": "action_done"}'},
+    ]
+    assert _any_actuator_call(msgs) and _any_actuator_success(msgs)

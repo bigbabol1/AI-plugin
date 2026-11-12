@@ -70,7 +70,6 @@
           "max_tool_iterations": "Tool call limit",
           "self_echo_filter": "Ignore the satellite hearing its own reply",
           "timer_announce": "Announce timers instead of on-device ring",
-          "memory_enabled": "Long-term memory",
           "feedback_loop_devices": "Force-end conversations on these satellites",
           "keep_alive": "Ollama keep-alive (e.g. 30m, -1)",
           "prune_tool_schemas": "Prune tool schemas per message",
@@ -79,9 +78,7 @@
           "top_p": "Top P",
           "max_tokens": "Max tokens (output)",
           "location_bias": "Bias web search to your home area",
-          "location_entity": "Live location entity (optional)",
-          "use_ha_mcp": "Connect to Home Assistant's built-in MCP server",
-          "ha_mcp_token": "Long-lived access token"
+          "location_entity": "Live location entity (optional)"
         },
         "data_description": {
           "system_prompt": "Optional instructions added to every conversation. Leave blank to use the default.",
@@ -94,7 +91,6 @@
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "self_echo_filter": "For satellites whose replies play through a separate speaker: drop voice turns that repeat part of the reply just spoken, and fragments of one to three words heard while a speaker in the room was still playing it (a command or a yes/no is kept), so a follow-up does not loop on the reply. Mostly needed with a quiet gap of 0: above 0, AI Plugin reopens the microphone only once the room is quiet.",
           "timer_announce": "Voice timers are announced through Mic to MediaPlayer (or assist_satellite.announce) at expiry instead of ringing on the satellite. For satellites whose own speaker is silenced. Note: the device shows no timer LEDs in this mode.",
-          "memory_enabled": "The remember, recall and forget tools and the saved facts the model reads each turn. Turn this off if you bring your own memory, for example through an MCP server. Saved facts are kept and come back when you turn it on again.",
           "feedback_loop_devices": "Satellites whose TTS plays through a separate speaker re-hear their own reply and re-trigger listening. Conversations on listed devices always end after one turn; all others honour the follow-up toggle.",
           "keep_alive": "How long Ollama keeps the model in VRAM after a request. Empty = server default (5m). Use -1 for always loaded.",
           "prune_tool_schemas": "Drop unlikely discovery tools per message. Saves a few hundred tokens but defeats Ollama's prompt caching — leave off for lower latency.",
@@ -103,9 +99,7 @@
           "top_p": "Nucleus sampling threshold. Leave blank to use the model’s default.",
           "max_tokens": "Maximum number of tokens in the AI’s response. 0 or blank = no limit.",
           "location_bias": "When the AI asks about local weather, nearby events, or restaurants here, the plugin scopes the web search to your home area instead of letting the model guess. Turn off to keep coordinates off the network.",
-          "location_entity": "Use this entity’s coordinates as your live location (zone, device tracker, or person). Leave blank to use Home Assistant’s home coordinates.",
-          "use_ha_mcp": "Gives AI Plugin access to your sensors, devices, and automations via HA’s built-in MCP server.",
-          "ha_mcp_token": "Create one in your HA profile → Long-lived access tokens (scroll to the bottom of the page)."
+          "location_entity": "Use this entity’s coordinates as your live location (zone, device tracker, or person). Leave blank to use Home Assistant’s home coordinates."
         }
       }
     },
@@ -130,6 +124,8 @@
         "menu_options": {
           "provider_settings": "Provider settings",
           "web_search": "Web search",
+          "memory": "Memory",
+          "tools": "Tools",
           "advanced": "Advanced",
           "mcp_servers": "MCP servers",
           "voice_id": "Voice recognition"
@@ -194,7 +190,6 @@
           "max_tool_iterations": "Tool call limit",
           "self_echo_filter": "Ignore the satellite hearing its own reply",
           "timer_announce": "Announce timers instead of on-device ring",
-          "memory_enabled": "Long-term memory",
           "feedback_loop_devices": "Force-end conversations on these satellites",
           "keep_alive": "Ollama keep-alive (e.g. 30m, -1)",
           "prune_tool_schemas": "Prune tool schemas per message",
@@ -216,7 +211,6 @@
           "max_tool_iterations": "Maximum tool uses per response (default: 10).",
           "self_echo_filter": "For satellites whose replies play through a separate speaker: drop voice turns that repeat part of the reply just spoken, and fragments of one to three words heard while a speaker in the room was still playing it (a command or a yes/no is kept), so a follow-up does not loop on the reply. Mostly needed with a quiet gap of 0: above 0, AI Plugin reopens the microphone only once the room is quiet.",
           "timer_announce": "Voice timers are announced through Mic to MediaPlayer (or assist_satellite.announce) at expiry instead of ringing on the satellite. For satellites whose own speaker is silenced. Note: the device shows no timer LEDs in this mode.",
-          "memory_enabled": "The remember, recall and forget tools and the saved facts the model reads each turn. Turn this off if you bring your own memory, for example through an MCP server. Saved facts are kept and come back when you turn it on again.",
           "feedback_loop_devices": "Satellites whose TTS plays through a separate speaker re-hear their own reply and re-trigger listening. Conversations on listed devices always end after one turn; all others honour the follow-up toggle.",
           "keep_alive": "How long Ollama keeps the model in VRAM after a request. Empty = server default (5m). Use -1 for always loaded.",
           "prune_tool_schemas": "Drop unlikely discovery tools per message. Saves a few hundred tokens but defeats Ollama's prompt caching — leave off for lower latency.",
@@ -230,22 +224,12 @@
       },
       "mcp_servers": {
         "title": "MCP Servers",
-        "description": "Connect AI Plugin to external tools via the Model Context Protocol (MCP). Add Home Assistant's built-in MCP server to let the assistant read sensors and control devices.\n\nConfigured servers:\n{servers}",
+        "description": "Connect AI Plugin to more tools via the Model Context Protocol (MCP), for example time, web pages or a memory of your own. Home Assistant's own tools (devices, sensors, exposed scripts, to-do lists) are built in and need no server here.\n\nConfigured servers:\n{servers}",
         "data": {
           "mcp_action": "What would you like to do?"
         },
         "data_description": {
           "mcp_action": "Changes are only saved when you choose Save and close."
-        }
-      },
-      "mcp_add_ha": {
-        "title": "Add Home Assistant MCP Server",
-        "description": "Detected HA URL: {ha_mcp_url}\n\nCreate a Long-lived access token in your HA profile (Settings → scroll to the bottom of your profile page).",
-        "data": {
-          "ha_mcp_token": "Long-lived access token"
-        },
-        "data_description": {
-          "ha_mcp_token": "Required. Paste the token from your HA profile here."
         }
       },
       "mcp_add_preset": {
@@ -367,6 +351,46 @@
         "description": "Removes every stored voice fingerprint of this person. Their memory is kept.",
         "data": {
           "person": "Person"
+        }
+      },
+      "memory": {
+        "title": "Memory",
+        "description": "What the assistant remembers: facts you ask it to keep, the conversation on a satellite between turns, and a diary of earlier conversations that it can recall later on any device.",
+        "data": {
+          "memory_enabled": "Long-term memory",
+          "conversation_memory_minutes": "Remember a satellite's conversation for (minutes)",
+          "diary_enabled": "Remember earlier conversations (diary)",
+          "diary_days": "Keep diary notes for (days)",
+          "diary_share": "Share conversations between people"
+        },
+        "data_description": {
+          "memory_enabled": "The remember, recall and forget tools and the saved facts the model reads each turn. Turn this off if you bring your own memory, for example through an MCP server. Saved facts are kept and come back when you turn it on again.",
+          "conversation_memory_minutes": "How long a voice satellite remembers what was said, counted from the last turn. Within this time a follow-up such as \"and in the bedroom?\" still knows what it belongs to; after it, the next request starts a new conversation. 0 starts over whenever Home Assistant starts a new conversation, after a few minutes of quiet. Longer memory means longer prompts, which are summarized when they grow too long. Only for voice satellites: the Companion app and the Assist panel keep Home Assistant's own conversations. Default 15.",
+          "diary_enabled": "Ten minutes after a conversation goes quiet, the model writes a few short notes about it: what was asked and the details it gave, such as recipe steps, amounts, names or plans. Device commands, greetings and small talk are left out. On later turns the notes closest to what is said are added to the prompt, so \"how do I start the stir-fry again?\" works hours or days later, from any satellite or the app. A small search model (about 40 MB) is downloaded once; until then notes are found by their words. Notes stay in the Home Assistant configuration folder. Say \"forget our conversations\" to delete your own.",
+          "diary_days": "Older notes are deleted. Default 30.",
+          "diary_share": "Each note records whose conversation it was: the person recognised by voice, or the person signed in to the app. Off: everyone is shown only their own notes and those of voices that were not recognised. On: everyone's notes can come up in every conversation, always marked with whose conversation it was."
+        }
+      },
+      "tools": {
+        "title": "Tools",
+        "description": "What the assistant does itself besides controlling devices. Switch a feature off if you bring your own, for example a script or an MCP server for timers, alarms or announcements: its tools and rules leave the prompt, its shortcuts stand down, and a tool of the same name on an MCP server gets the call. Web search, long-term memory and voice recognition have their own pages.",
+        "data": {
+          "tool_timers": "Timers",
+          "tool_alarms": "Alarms, reminders and commands for later",
+          "tool_calendar": "Calendar entries",
+          "tool_messages": "Messages to phones and rooms",
+          "tool_broadcast": "Announcements",
+          "tool_move_music": "Move music to another room",
+          "tool_find_phone": "Find my phone"
+        },
+        "data_description": {
+          "tool_timers": "\"Set a timer for 10 minutes\": a voice timer on the satellite, with pause, add time and \"how long left\".",
+          "tool_alarms": "\"Wake me up at 7\", \"remind me tomorrow at 6 to take out the trash\", \"turn off the light in 30 minutes\". Kept across restarts; a reminder also goes to the phone of the person it is for. Alarms and reminders already set still ring when this is off.",
+          "tool_calendar": "\"Put the dentist on my calendar for Friday at 10\" and \"cancel the dentist on Friday\", in a calendar exposed to Assist.",
+          "tool_messages": "\"Tell Anna dinner is ready\" goes to Anna's phone; \"tell the kitchen ...\" is spoken on the satellite there.",
+          "tool_broadcast": "\"Announce that dinner is ready\" is spoken on the satellites in all other rooms. Off, Home Assistant's own announcement tool is left out too, so your own announcement script gets the request.",
+          "tool_move_music": "\"Move the music to the bedroom\". Needs Music Assistant.",
+          "tool_find_phone": "\"Where is my phone?\" rings the phone of the person asking."
         }
       }
     },

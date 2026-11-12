@@ -237,6 +237,7 @@ async def test_registry_disconnected_server_excluded_from_schemas() -> None:
     registry = MCPToolRegistry([])
     conn = MagicMock()
     conn.state = _State.FAILED  # not CONNECTED
+    conn.connected = False
     conn.tools = [_mock_tool("hidden_tool")]
     registry._servers = [conn]
     registry._rebuild_tool_index()
@@ -257,7 +258,7 @@ async def test_registry_call_tool_routes_to_correct_server() -> None:
 
     result = await registry.call_tool("get_time", {})
     assert result == "12:00"
-    conn.call_tool.assert_awaited_once_with("get_time", {})
+    conn.call_tool.assert_awaited_once_with("get_time", {}, device_id=None, user_id=None)
 
 
 async def test_registry_call_unknown_tool_returns_error() -> None:
@@ -702,10 +703,10 @@ async def test_namespaced_tools_are_shown_bare_and_called_by_real_name() -> None
     assert names == ["HassTurnOn", "HassListAddItem", "get_time"]
 
     await registry.call_tool("HassListAddItem", {"item": "butter"})
-    conn.call_tool.assert_awaited_once_with("todo__HassListAddItem", {"item": "butter"})
+    conn.call_tool.assert_awaited_once_with("todo__HassListAddItem", {"item": "butter"}, device_id=None, user_id=None)
     # The real name still routes.
     await registry.call_tool("intent__HassTurnOn", {})
-    conn.call_tool.assert_awaited_with("intent__HassTurnOn", {})
+    conn.call_tool.assert_awaited_with("intent__HassTurnOn", {}, device_id=None, user_id=None)
 
 
 async def test_clashing_bare_names_keep_their_namespace() -> None:

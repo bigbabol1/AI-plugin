@@ -23,7 +23,12 @@ from custom_components.ai_plugin.orchestrator.grounding import (
 )
 from custom_components.ai_plugin.providers import ChatResponse, ToolCall
 from custom_components.ai_plugin.tools.ha_local import HALocalToolRegistry, media
-from custom_components.ai_plugin.tools.tell import async_broadcast, async_tell
+from custom_components.ai_plugin.tools.tell import (
+    TOOL_SCHEMA,
+    async_broadcast,
+    async_tell,
+    tell_schema,
+)
 
 PHONE = SimpleNamespace(service="mobile_app_anna", name="Anna", apple=True)
 PHONES = "custom_components.ai_plugin.shortcuts.phone.phones_of"
@@ -205,6 +210,39 @@ def test_a_move_is_silent_only_if_it_worked() -> None:
     """The music moving is the confirmation; a failure has to be heard."""
     assert _any_media_success(_moved("OK — moved"))
     assert not _any_media_success(_moved("[Nothing is playing]"))
+
+
+def _person_description(schema) -> str:
+    return schema["function"]["parameters"]["properties"]["person"]["description"]
+
+
+def test_the_tool_names_the_people_with_a_phone() -> None:
+    """Nothing else told the model who lives here: "To Ben ??" got "I'm not
+    sure who Ben is" (2026-11-09)."""
+    text = _person_description(tell_schema(["Ben", "Anna"]))
+    assert "People with a phone: Anna, Ben." in text
+    assert "What should I tell Anna?" in text
+    assert "People with a phone" not in _person_description(TOOL_SCHEMA)
+
+
+def test_with_nobody_to_name_the_tool_stays_as_it_is() -> None:
+    assert tell_schema([]) is TOOL_SCHEMA
+    assert tell_schema(["", None]) is TOOL_SCHEMA
+
+
+def test_the_orchestrator_sends_the_tool_with_the_names() -> None:
+    orch = _voice_orch_with_intent("HassLightSet", "")
+    orch._mcp = orch._web_search = orch._browse_url = orch._memory = orch._ha_local = None
+    orch._prune_schemas = False
+    orch._scheduler = MagicMock()
+    orch._hass = MagicMock()
+    with patch.object(core, "people_with_phones", return_value={"person.ben": "Ben"}):
+        schemas = orch._tool_schemas_for("hi", False, None)
+    (tell,) = [s for s in schemas if s["function"]["name"] == "tell"]
+    assert "People with a phone: Ben." in _person_description(tell)
+    orch._hass = None
+    (tell,) = [s for s in orch._tool_schemas_for("hi", False, None) if s["function"]["name"] == "tell"]
+    assert tell is TOOL_SCHEMA
 
 
 async def test_the_orchestrator_reaches_both_tools() -> None:
@@ -898,3 +936,22 @@ async def test_android_gets_a_message_at_once_and_ios_is_left_as_it_is() -> None
     sent = {call.args[1]: call.args[2] for call in hass.services.async_call.await_args_list}
     assert sent["mobile_app_ben"]["data"] == {"ttl": 0, "priority": "high"}
     assert "data" not in sent["mobile_app_anna"]
+
+
+async def test_a_false_removal_claim_asks_which_event() -> None:
+    """German request, English event name: the model said it was deleted."""
+    orch = _voice_orch_with_intent("HassLightSet", "")
+    orch._hass = None
+    orch._scheduler = MagicMock()
+    orch._scheduler.async_handle_spoken = AsyncMock(return_value=None)
+    orch._scheduler.now = MagicMock()
+    orch._provider.async_chat = AsyncMock(side_effect=[
+        ChatResponse(content=None, tool_calls=[
+            ToolCall(id="c1", name="remove_calendar_event", arguments={"summary": "Hausbesichtigung"}),
+        ]),
+        ChatResponse(content="Ich habe die Hausbesichtigung für heute gelöscht.", tool_calls=[]),
+    ])
+    with patch.object(core, "async_remove_event", AsyncMock(return_value="[Not removed: nothing called 'Hausbesichtigung'.]")):
+        reply = await orch.async_process("Lösch die Hausbesichtigung heute.", "c-rm", "de")
+    assert reply == L.template("calendar_not_removed", "de")
+    assert reply.endswith("?")

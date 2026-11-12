@@ -40,6 +40,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -277,6 +278,15 @@ class _MCPServerConnection:
         return self._state
 
     @property
+    def connected(self) -> bool:
+        return self._state == _State.CONNECTED
+
+    @property
+    def is_home_assistant(self) -> bool:
+        """Home Assistant's own MCP server: device actions and state reads."""
+        return _is_ha_mcp_path(str(self._config.get("url") or ""))
+
+    @property
     def tools(self) -> list[Any]:
         return list(self._tools)
 
@@ -328,7 +338,7 @@ class _MCPServerConnection:
             except (TimeoutError, asyncio.CancelledError):
                 self._task.cancel()
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+    async def call_tool(self, name: str, arguments: dict[str, Any], **_context: Any) -> str:
         """Call a tool by name. Returns result text or an error description.
 
         Never raises — returns an error string instead so the LLM can relay
@@ -519,19 +529,55 @@ class _MCPServerConnection:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _is_ha_mcp_path(url: str) -> bool:
+    """A URL of Home Assistant's MCP server: /api/mcp, or /mcp_server/sse
+    from before Home Assistant 2025.2."""
+    path = urlparse(url).path.rstrip("/")
+    return path.endswith("/api/mcp") or path.endswith("/mcp_server/sse")
+
+
+def is_own_ha_mcp(config: dict[str, Any], own_hosts: frozenset[str]) -> bool:
+    """True for this Home Assistant's own MCP server, which the built-in tools
+    replace. Another Home Assistant's server stays a server of its own."""
+    url = str(config.get("url") or "")
+    if config.get("transport") == "stdio" or not _is_ha_mcp_path(url):
+        return False
+    return (urlparse(url).hostname or "").lower() in own_hosts
+
+
 class MCPToolRegistry:
     """Manages all MCP server connections for a single config entry.
 
     Created by async_setup_entry, torn down by async_unload_entry.
     The Orchestrator calls get_tool_schemas() and call_tool() per request.
+
+    ``builtin`` is Home Assistant's own tool source (tools/ha_llm.py). It takes
+    the place of this Home Assistant's MCP server in the list, so the tools
+    keep their order; with no such server configured it comes first. If it
+    cannot read Home Assistant's tools at setup, the configured server is
+    used as before.
     """
 
-    def __init__(self, server_configs: list[dict[str, Any]]) -> None:
-        self._servers: list[_MCPServerConnection] = [
-            _MCPServerConnection(cfg) for cfg in server_configs
-        ]
+    def __init__(
+        self,
+        server_configs: list[dict[str, Any]],
+        builtin: Any = None,
+        own_hosts: frozenset[str] = frozenset(),
+    ) -> None:
+        self._builtin = builtin
+        self._replaced: list[dict[str, Any]] = []
+        self._servers: list[Any] = []
+        for cfg in server_configs:
+            if builtin is not None and is_own_ha_mcp(cfg, own_hosts):
+                if not self._replaced:
+                    self._servers.append(builtin)
+                self._replaced.append(cfg)
+                continue
+            self._servers.append(_MCPServerConnection(cfg))
+        if builtin is not None and not self._replaced:
+            self._servers.insert(0, builtin)
         # model-facing or real name → (server, real name) for routing
-        self._tool_index: dict[str, tuple[_MCPServerConnection, str]] = {}
+        self._tool_index: dict[str, tuple[Any, str]] = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -544,6 +590,23 @@ class MCPToolRegistry:
         """
         for server in self._servers:
             await server.async_start()
+        if self._builtin is not None:
+            if not self._builtin.ok and self._replaced:
+                _LOGGER.warning(
+                    "AI Plugin: using the configured Home Assistant MCP server, "
+                    "because Home Assistant's own tools could not be read"
+                )
+                at = self._servers.index(self._builtin)
+                fallback = [_MCPServerConnection(cfg) for cfg in self._replaced]
+                self._servers[at:at + 1] = fallback
+                for server in fallback:
+                    await server.async_start()
+            elif self._replaced:
+                _LOGGER.info(
+                    "AI Plugin: Home Assistant's tools are built in; the configured "
+                    "Home Assistant MCP server is no longer used"
+                )
+            self._rebuild_tool_index()
 
     async def async_teardown(self) -> None:
         """Disconnect all servers and kill stdio subprocesses.
@@ -576,7 +639,7 @@ class MCPToolRegistry:
         names = self._model_names()
         schemas = []
         for server in self._servers:
-            if server.state == _State.CONNECTED:
+            if server.connected:
                 for tool in _distinct(server.tools):
                     schema = openai_tool_schema(tool)
                     schema["function"]["name"] = names.get(tool.name, tool.name)
@@ -587,10 +650,7 @@ class MCPToolRegistry:
         """True for a tool of Home Assistant's own MCP server (/api/mcp):
         device actions and state reads, not look-ups on the internet."""
         route = self._tool_index.get(name)
-        if route is None:
-            return False
-        url = str(route[0]._config.get("url") or "")
-        return url.rstrip("/").endswith("/api/mcp")
+        return route is not None and bool(route[0].is_home_assistant)
 
     def estimate_schema_tokens(self) -> int:
         """Estimate the token cost of all current tool schemas.
@@ -604,8 +664,18 @@ class MCPToolRegistry:
         raw = json.dumps(schemas)
         return ContextManager.estimate_tokens(raw)
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        device_id: str | None = None,
+        user_id: str | None = None,
+    ) -> str:
         """Route a tool call to the owning server and return the result.
+
+        The device and user reach Home Assistant's built-in tools only; an MCP
+        server has no way to receive them.
 
         Rebuilds the tool index if the named tool is not found (handles
         the case where a server reconnected and refreshed its tool list).
@@ -619,7 +689,9 @@ class MCPToolRegistry:
         if route is None:
             return f"[Unknown tool: {name!r}]"
         server, real_name = route
-        return await server.call_tool(real_name, arguments)
+        return await server.call_tool(
+            real_name, arguments, device_id=device_id, user_id=user_id
+        )
 
     # ── private ───────────────────────────────────────────────────────────────
 

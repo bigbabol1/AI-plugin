@@ -62,8 +62,12 @@ templates:
   broadcast_cancelled: "Vale, no anuncio nada."
   message_sent_to: "Enviado a {name}: {label}"
   message_not_sent: "No he podido enviarlo."
+  calendar_not_removed: "No he borrado nada. ¿Qué cita quieres decir?"
+  diary_forgotten: "He olvidado nuestras conversaciones anteriores."
+  diary_forgotten_none: "No había nada guardado de conversaciones anteriores."
   message_cancelled: "Vale, no envío nada."
   schedule_not_changed: "No he cambiado nada. Dime la nueva hora y la pongo."
+  schedule_switched_off: "Aquí no puedo poner alarmas ni recordatorios, así que no se ha puesto nada."
 keywords:
   time_now:      ["qué hora es", "que hora es", "dime la hora"]
   sun_set:       ["puesta de sol", "cuándo se pone el sol", "a qué hora se pone el sol"]
@@ -73,6 +77,10 @@ keywords:
   narration:     ["estoy verificando", "estoy comprobando", "estoy buscando", "voy a verificar", "voy a comprobar"]
 
 patterns:
+  # Forgetting the conversation diary, not a saved fact.
+  diary_forget:
+    - '\bolvida\s+(?:todas\s+)?(?:nuestras|mis|las|esas)\s+(?:conversaciones|charlas)\b'
+    - '\b(?:borra|elimina)\s+(?:todas\s+)?(?:nuestras|mis|las)\s+(?:conversaciones|charlas|historial)\b'
   narration_full: []
   action_on:
     - '^(?:enciende|encender|prende|prender|activa|activar)\s+(?:el|la|los|las|un|una)?\s*(?P<name>.+?)$'

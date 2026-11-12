@@ -713,9 +713,10 @@ async def test_the_new_tools_come_last(track) -> None:
     """This model reacts to its neighbours in the list."""
     orch, _ = _wired()
     names = _names(orch)
-    assert names[-8:] == [
+    assert names[-9:] == [
         "set_alarm", "set_reminder", "schedule_action", "list_scheduled",
-        "cancel_scheduled", "add_calendar_event", "tell", "move_music",
+        "cancel_scheduled", "add_calendar_event", "remove_calendar_event", "tell",
+        "move_music",
     ]
 
 

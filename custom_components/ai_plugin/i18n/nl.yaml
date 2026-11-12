@@ -69,8 +69,12 @@ templates:
   broadcast_cancelled: "Oké, niets omgeroepen."
   message_sent_to: "Naar {name} gestuurd: {label}"
   message_not_sent: "Ik kon dat niet versturen."
+  calendar_not_removed: "Ik heb niets verwijderd. Welke afspraak bedoel je?"
+  diary_forgotten: "Ik ben onze eerdere gesprekken vergeten."
+  diary_forgotten_none: "Er was niets bewaard van eerdere gesprekken."
   message_cancelled: "Oké, niets verstuurd."
   schedule_not_changed: "Ik heb niets gewijzigd. Zeg de nieuwe tijd en ik stel hem in."
+  schedule_switched_off: "Wekkers en herinneringen kan ik hier niet instellen, er is dus niets ingesteld."
 keywords:
   time_now:      ["hoe laat is het", "wat is de tijd", "zeg me de tijd", "hoe laat"]
   sun_set:       ["zonsondergang", "wanneer gaat de zon onder", "hoe laat gaat de zon onder", "wanneer is zonsondergang", "wanneer wordt het donker"]
@@ -80,6 +84,10 @@ keywords:
   narration:     ["ik controleer", "ik kijk even", "ik ga kijken", "ik ga controleren", "even kijken", "ik zoek"]
 
 patterns:
+  # Forgetting the conversation diary, not a saved fact.
+  diary_forget:
+    - '\bvergeet\s+(?:al\s+)?(?:onze|mijn|de|die)\s+(?:eerdere\s+|oude\s+)?(?:gesprekken|gesprek)\b'
+    - '\b(?:wis|verwijder)\s+(?:al\s+)?(?:onze|mijn|de)\s+(?:gesprekken|gespreksgeschiedenis|dagboek)\b'
   narration_full: []
   action_on:
     - '^(?:doe|zet|schakel|draai)\s+(?:de\s+|het\s+|een\s+)?(?P<name>.+?)\s+(?:aan|in)$'

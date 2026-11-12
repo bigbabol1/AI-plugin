@@ -34,7 +34,6 @@ from ..const import (
     CONF_MAX_RESULTS,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_ITERATIONS,
-    CONF_MCP_SERVERS,
     CONF_MODEL,
     CONF_PROVIDER,
     CONF_RESPONSE_TIMEOUT,
@@ -64,7 +63,6 @@ from ..providers.openai_compat import (
 from .options import AIPluginOptionsFlow
 from .schemas import (
     _advanced_schema,
-    _get_ha_url,
     _is_valid_url,
     _validate_advanced_input,
     _web_search_schema,
@@ -330,18 +328,6 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 schema = vol.Schema(
                     {
                         **_advanced_schema(user_input, self.hass).schema,
-                        vol.Optional(
-                            "use_ha_mcp",
-                            default=bool(user_input.get("use_ha_mcp", False)),
-                        ): selector.BooleanSelector(),
-                        vol.Optional(
-                            "ha_mcp_token",
-                            default=str(user_input.get("ha_mcp_token", "")),
-                        ): selector.TextSelector(
-                            selector.TextSelectorConfig(
-                                type=selector.TextSelectorType.PASSWORD
-                            )
-                        ),
                     }
                 )
                 return self.async_show_form(
@@ -357,31 +343,11 @@ class AIPluginConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             for key in (CONF_TEMPERATURE, CONF_TOP_P):
                 if key in user_input:
                     user_input[key] = float(user_input[key])
-            # HA MCP quick-connect: build the server entry and append to mcp_servers
-            use_ha_mcp = bool(user_input.pop("use_ha_mcp", False))
-            ha_mcp_token = str(user_input.pop("ha_mcp_token", "")).strip()
-            if use_ha_mcp:
-                ha_url = _get_ha_url(self.hass)
-                mcp_entry: dict[str, Any] = {
-                    "transport": "sse",
-                    "url": f"{ha_url}/mcp_server/sse",
-                }
-                if ha_mcp_token:
-                    mcp_entry["token"] = ha_mcp_token
-                self._options.setdefault(CONF_MCP_SERVERS, []).append(mcp_entry)
             self._options.update(user_input)
             return self._create_entry()
 
-        # Merge the standard advanced schema with the HA MCP quick-connect fields.
-        schema = vol.Schema(
-            {
-                **_advanced_schema(self._options, self.hass).schema,
-                vol.Optional("use_ha_mcp", default=False): selector.BooleanSelector(),
-                vol.Optional("ha_mcp_token", default=""): selector.TextSelector(
-                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-                ),
-            }
-        )
+        # Home Assistant's own tools are built in: no MCP server, no token.
+        schema = _advanced_schema(self._options, self.hass)
 
         return self.async_show_form(
             step_id="advanced",

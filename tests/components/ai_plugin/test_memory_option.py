@@ -153,7 +153,7 @@ async def test_memory_off_hands_a_tool_of_the_same_name_to_its_mcp_server() -> N
 
 def test_the_option_is_on_by_default_and_keeps_its_value() -> None:
     def default(current):
-        schema = _load_schemas()._advanced_schema(current, MagicMock()).schema
+        schema = _load_schemas()._memory_schema(current).schema
         key = next(k for k in schema if str(k) == CONF_MEMORY_ENABLED)
         return key.default()
 
@@ -165,10 +165,12 @@ def test_the_option_is_on_by_default_and_keeps_its_value() -> None:
 def test_the_option_has_a_label_and_a_description(name) -> None:
     path = Path(integration.__file__).parent / name
     strings = json.loads(path.read_text(encoding="utf-8"))
+    step = strings["options"]["step"]["memory"]
+    assert step["data"][CONF_MEMORY_ENABLED]
+    assert step["data_description"][CONF_MEMORY_ENABLED]
+    assert "memory" in strings["options"]["step"]["init"]["menu_options"]
     for flow in ("config", "options"):
-        step = strings[flow]["step"]["advanced"]
-        assert step["data"][CONF_MEMORY_ENABLED]
-        assert step["data_description"][CONF_MEMORY_ENABLED]
+        assert CONF_MEMORY_ENABLED not in strings[flow]["step"]["advanced"]["data"]
 
 
 @pytest.mark.parametrize(
