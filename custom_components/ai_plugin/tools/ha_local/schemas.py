@@ -233,11 +233,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "area": {
                         "type": "string",
                         "description": (
-                            "Area name when the user explicitly names a "
-                            "room (e.g. 'kitchen', 'living room', "
-                            "'wohnzimmer'). OMIT when the user did not "
-                            "specify a room — the plugin defaults to "
-                            "the calling satellite's own area."
+                            "Area or speaker name when the user explicitly "
+                            "names a room or speaker (e.g. 'kitchen', 'living "
+                            "room', 'wohnzimmer', or a speaker group like 'all "
+                            "speakers', 'Alle'). OMIT when the user did not "
+                            "specify one — the plugin defaults to the calling "
+                            "satellite's own area."
                         ),
                     },
                     "from_taste": {

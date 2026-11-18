@@ -554,6 +554,18 @@ def test_strip_emoji_removes_kaomoji() -> None:
     assert _strip_emoji("Hello there! ٩ه") == "Hello there!"
 
 
+def test_strip_emoji_removes_faces_whose_glyph_is_an_emoji() -> None:
+    """gemma-4 replays, 2026-11-13: the emoji pass took the "⌐" first and
+    "(‿ wed)" or "(‿c)" was spoken."""
+    from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
+
+    for face in ("(⌐‿ wed)", "(⌐‿⌓c)", "(⌐‿_⌐)", "(‘～`)", "ヽ(°o°l)o", "(⌐■_■)", "(｡•‿•｡)", "(🙂)", "(°o°)"):
+        assert _strip_emoji(f"The walk is still on your calendar. {face}") == "The walk is still on your calendar.", face
+    assert _strip_emoji("It is 21°C (feels like 18°C) today.") == "It is 21°C (feels like 18°C) today."
+    assert _strip_emoji("Your tree (the big one 🎄 in the hall, by the window) is lit.") == "Your tree (the big one in the hall, by the window) is lit."
+    assert _strip_emoji("猫は「ネコ」と読みます～ (ツ)") == "猫は「ネコ」と読みます～ (ツ)"
+
+
 def test_strip_emoji_keeps_other_scripts() -> None:
     from custom_components.ai_plugin.orchestrator.textproc import _strip_emoji
 

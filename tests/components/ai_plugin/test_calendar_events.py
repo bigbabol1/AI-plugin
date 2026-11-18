@@ -202,3 +202,54 @@ async def test_a_calendar_gone_from_home_assistant_says_so(exposed) -> None:
     hass.data["calendar"] = SimpleNamespace(get_entity=lambda _: None)
     result = await async_add_event(hass, {"summary": "x", "day": "today"}, NOW)
     assert result == "[Not added: Home is not available right now.]"
+
+
+THURSDAY = datetime(2026, 11, 12, 18, 54, tzinfo=TZ)
+
+
+@pytest.mark.parametrize("day", ["2026-11-13", "tomorrow", "friday"])
+async def test_the_weekday_the_user_said_wins_over_a_miscounted_date(exposed, day) -> None:
+    """"On Saturday" said on a Thursday was stored on Friday (2026-11-12)."""
+    hass = _home()
+    result = await async_add_event(
+        hass, {"summary": "Going for a walk", "day": day}, THURSDAY,
+        user_message="Add to my calendar an appointment on Saturday. Going for a walk.",
+    )
+    assert result == "Added to Home: Going for a walk, Saturday 2026-11-14, all day."
+
+
+@pytest.mark.parametrize(
+    ("message", "day", "expected"),
+    [
+        # The week the model meant is kept: the Saturday nearest its date.
+        ("Put the party on Saturday next week", "2026-11-20", date(2026, 11, 21)),
+        ("Trag den Zahnarzt am Samstag ein", "2026-11-13", date(2026, 11, 14)),
+        ("Ajoute le dentiste samedi", "2026-11-13", date(2026, 11, 14)),
+        ("Dodaj dentystę w sobotę", "2026-11-13", date(2026, 11, 14)),
+        ("Zet de tandarts op zaterdag", "2026-11-13", date(2026, 11, 14)),
+        # Never before today: Wednesday said on a Thursday is next week's.
+        ("Dentist on Wednesday", "2026-11-12", date(2026, 11, 18)),
+    ],
+)
+async def test_weekdays_in_every_language(exposed, message, day, expected) -> None:
+    hass = _home()
+    await async_add_event(hass, {"summary": "Dentist", "day": day}, THURSDAY, user_message=message)
+    assert _created(hass)["dtstart"] == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "summary"),
+    [
+        # Two weekdays: which one is the date is the model's call.
+        ("I'm busy on Friday, put the dentist on Monday", "Dentist"),
+        # A weekday inside the name is not the date.
+        ("Add Sunday brunch tomorrow", "Sunday brunch"),
+        # "segunda" alone is also "second".
+        ("Adiciona a segunda consulta amanhã", "Consulta"),
+        ("Add the dentist tomorrow", "Dentist"),
+    ],
+)
+async def test_the_date_stays_when_no_single_weekday_was_said(exposed, message, summary) -> None:
+    hass = _home()
+    await async_add_event(hass, {"summary": summary, "day": "tomorrow"}, THURSDAY, user_message=message)
+    assert _created(hass)["dtstart"] == date(2026, 11, 13)

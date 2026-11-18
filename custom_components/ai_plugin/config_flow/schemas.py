@@ -38,6 +38,7 @@ from ..const import (
     CONF_KEEP_ALIVE,
     CONF_PRUNE_TOOL_SCHEMAS,
     CONF_RESPONSE_TIMEOUT,
+    CONF_OFFLINE_FALLBACK,
     CONF_SELF_ECHO_FILTER,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
@@ -65,6 +66,7 @@ from ..const import (
     DEFAULT_KEEP_ALIVE,
     DEFAULT_PRUNE_TOOL_SCHEMAS,
     DEFAULT_RESPONSE_TIMEOUT,
+    DEFAULT_OFFLINE_FALLBACK,
     DEFAULT_SELF_ECHO_FILTER,
     DEFAULT_TIMER_ANNOUNCE,
     DEFAULT_MEMORY_ENABLED,
@@ -329,6 +331,10 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
             vol.Optional(
                 CONF_SELF_ECHO_FILTER,
                 default=current.get(CONF_SELF_ECHO_FILTER, DEFAULT_SELF_ECHO_FILTER),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_OFFLINE_FALLBACK,
+                default=current.get(CONF_OFFLINE_FALLBACK, DEFAULT_OFFLINE_FALLBACK),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_TIMER_ANNOUNCE,

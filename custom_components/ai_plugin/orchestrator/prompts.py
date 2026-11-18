@@ -235,8 +235,10 @@ class PromptBlocksMixin:
         The block is informational only — it does NOT instruct the model
         to inject the city into queries; that is handled deterministically
         in ``web_search.async_search`` based on the ``near_user`` flag and
-        a locality regex. The block tells the model where the user lives
-        so it can answer "where am I?" accurately.
+        a locality regex. The block tells the model where the home is; where
+        someone is now comes from their person entity: answered from this
+        block, "What's my current location?" got "at home in Berlin" while
+        the user was out (2026-11-16).
 
         Renders only fields that resolved. When nothing resolves (no
         coords, no country, no entity, network offline) the block is
@@ -272,6 +274,7 @@ class PromptBlocksMixin:
         return (
             "[HOME LOCATION]\n"
             f"- {joined}\n"
+            "- This is where the home is, not where anyone is now.\n"
             "- For questions about the user's immediate area, set "
             "near_user: true on web_search. The plugin will scope the "
             "query to this area; do not invent a city name."

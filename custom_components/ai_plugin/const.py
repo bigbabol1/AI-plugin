@@ -54,6 +54,13 @@ TIMER_DONE_SENTINEL = "AI_PLUGIN_TIMER_DONE"
 # the session so the loop can't continue. This makes 'Listen for follow-up'
 # usable on TTS-rerouted setups without muting anything.
 CONF_SELF_ECHO_FILTER = "self_echo_filter"
+# When the model server cannot be reached, hand the turn to Home Assistant's
+# built-in Assist agent so lights and timers still work by voice.
+CONF_OFFLINE_FALLBACK = "offline_fallback"
+DEFAULT_OFFLINE_FALLBACK = True
+# After a failed connection, later turns go straight to Assist for this long
+# instead of waiting for the server again.
+OFFLINE_RETRY_S = 60.0
 DEFAULT_SELF_ECHO_FILTER = True
 
 # An utterance must have at least this many tokens to be considered echo —
@@ -323,7 +330,7 @@ SYSTEM_PROMPT_DEFAULT = (
     "- Proper-named devices like 'Gustav', 'Dora', 'mood light', 'stehlampe', 'flurlicht' are ENTITY names, NOT areas. Call get_entity or search_entities to resolve them.\n"
     "- DEVICE-NOUN commands ('air purifier', 'humidifier', 'kettle', 'air filter', 'luftreiniger', 'luftbefeuchter', 'wasserkocher', 'wasserkocher', 'fan', 'reading lamp', 'mood light', 'TV', 'speaker') refer to a SPECIFIC device, NOT an area or a domain category. For these you MUST: (1) CALL search_entities with the device noun as query, (2) read the returned list, pick the most likely match, (3) CALL HassTurnOn / HassTurnOff with the returned entity_id. NEVER use set_area_state for these — set_area_state is only for plural-domain commands ('lights', 'fans', 'covers' as a category) or whole-home/whole-room sweeps.\n"
     "- Areas are ROOMS only ('kitchen', 'bedroom', 'living room', 'hallway'). If a tool says 'area X doesn't exist', the user named an entity — retry via get_entity / search_entities instead of giving up.\n"
-    "- To answer where a household member is ('where is Anna', 'is my wife home', 'who is home'): each member is a person entity whose state says where they are. Turn a relation ('my wife', 'my husband') into the name from [USER FACTS] first, then CALL list_entities(domain: 'person') and answer from that person's row: [home] = at home, [not_home] = away from home, any other state = the place they are at; a last address in the row is where they were last seen. Never say you lack location information without calling it.\n"
+    "- To answer where a household member is ('where is Anna', 'is my wife home', 'who is home', and 'where am I', 'what's my location' for the speaker named in [SPEAKER]): each member is a person entity whose state says where they are. Turn a relation ('my wife', 'my husband') into the name from [USER FACTS] first, then CALL list_entities(domain: 'person') and answer from that person's row: [home] = at home, [not_home] = away from home, any other state = the place they are at; a last address in the row is where they were last seen. Never say you lack location information without calling it.\n"
     "- Never invent entity_ids, area names, or states. If a discovery tool returns empty, say so plainly; do not fabricate.\n"
     "- Discovery tools default to entities exposed to the conversation assistant. To inspect hidden or diagnostic entities, pass exposed_only: false.\n"
     "\n"
@@ -412,6 +419,8 @@ SYSTEM_PROMPT_DEFAULT = (
     "[MEDIA PLAYBACK — STRICT]\n"
     "- ANY media-control utterance ('pause', 'next', 'skip', 'next track', 'previous', 'resume', 'continue', 'stop the music', 'play X in Y') is a TOOL ACTION. You MUST invoke a tool. NEVER answer with prose like 'Skipping to the next track' or 'Music is paused' without first calling the tool — that is a hallucination and the user gets no actual playback change.\n"
     "- 'play some music', 'play music I like', 'play something else', with nothing named: give the genres of their taste in [USER FACTS], comma separated, and from_taste: true: play_music(query: 'jazz, soul', from_taste: true). No taste there: ask what they would like to hear. Never send just 'music'.\n"
+    "- a radio station by name ('play RTL radio', 'play Radio Eins', 'spiel WDR 2'): play_music(query: <the station name>, media_type: 'radio'). 'play radio' with no station named: ask which station. When you asked which station, the answer is the station's name, even if it sounds odd: play it.\n"
+    "- a speaker or speaker group by name ('on all speakers', 'auf allen Lautsprechern', 'on the big speaker'): pass its name as area: play_music(query: ..., area: 'all speakers'). Groups play on every speaker in them.\n"
     "- play music in an area ('play music in hobby room', 'play Enya in the kitchen', 'shuffle my workout playlist in the living room'): CALL play_music(query: ..., area: ...). Do NOT call set_area_state on a media_player — media_player is no longer supported there. radio_mode auto-activates for single tracks so the queue continues after the song ends; it stays off for albums/artists/playlists. To force one song only, pass radio_mode: false.\n"
     "- pause / resume / skip / previous / stop:\n"
     "    'pause' / 'pause the music' → media_command(command: 'pause')\n"
@@ -491,7 +500,8 @@ SYSTEM_PROMPT_VOICE = (
     "search_entities('TV') → HassTurnOn(entity_id).\n"
     "- \"Which rooms\": list_areas. \"What's in X\": list_entities(area: X).\n"
     "- \"Any lights on\", \"are any lights on\", \"which lights are on\", \"what's on\", \"any windows open\": list_entities(domain: ..., state: \"on\"/\"off\"/\"open\"). Never answer from memory; never check just one device; never report one light and claim the rest are off — list EVERY row returned.\n"
-    "- People: \"where is <person>\", \"is <person> home\", \"who is home\", \"where's my wife\". "
+    "- People: \"where is <person>\", \"is <person> home\", \"who is home\", \"where's my wife\", "
+    "\"where am I\", \"what's my location\" (that person is the speaker, named in [SPEAKER]). "
     "Each household member is a person entity whose state says where they are. Turn a relation "
     "(\"my wife\", \"my husband\") into the name from [USER FACTS] first. CALL "
     "list_entities(domain: \"person\") and answer from that person's row: [home] = at home, "
@@ -544,6 +554,8 @@ SYSTEM_PROMPT_VOICE = (
     "Music playback (tool calls required):\n"
     "- Any playback request is a tool action: you MUST call the tool. Prose alone means nothing happened.\n"
     "- 'play some music', 'play music I like', 'play something else', with nothing named: give the genres of their taste in [USER FACTS], comma separated, and from_taste: true: play_music(query: 'jazz, soul', from_taste: true). No taste there: ask what they would like to hear. Never send just 'music'.\n"
+    "- a radio station by name ('play RTL radio', 'play Radio Eins', 'spiel WDR 2'): play_music(query: <the station name>, media_type: 'radio'). 'play radio' with no station named: ask which station. When you asked which station, the answer is the station's name, even if it sounds odd: play it.\n"
+    "- a speaker or speaker group by name ('on all speakers', 'auf allen Lautsprechern', 'on the big speaker'): pass its name as area: play_music(query: ..., area: 'all speakers'). Groups play on every speaker in them.\n"
     "- 'continue', 'resume': media_command('resume'). 'turn it down', 'turn it up' with no light named: media_command('volume_down'/'volume_up').\n"
     "- DO speak (one short sentence) for media QUESTIONS — answer 'what is playing' from the media_command('status') result — or when tool result starts with '['."
 )

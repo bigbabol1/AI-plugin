@@ -202,3 +202,34 @@ def test_an_alarm_request_that_names_a_time_passes(message, lang) -> None:
     from custom_components.ai_plugin.scheduler.tools import _names_no_alarm_time
 
     assert not _names_no_alarm_time(message, lang)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What were your thoughts again about Portugal?",
+        "What did I tell you about Portugal?",
+        "Did we talk about Japan?",
+        "Do you remember what I said about Berlin?",
+        "Was habe ich dir über Italien erzählt?",
+        "Erinnerst du dich an Spanien?",
+        "Was war deine Meinung zu Portugal?",
+    ],
+)
+def test_a_question_about_an_earlier_conversation_forces_no_search(text: str) -> None:
+    """The diary and the saved facts answer these. A forced search for "What
+    were your thoughts again about Portugal?" brought back a stranger's travel
+    review, read out as the user's own trip (2026-11-16)."""
+    assert not _is_online_query(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What happened in Portugal this week?",
+        "What is going on in Berlin today?",
+        "Who won the election in Brazil yesterday?",
+    ],
+)
+def test_news_about_a_place_still_forces_a_search(text: str) -> None:
+    assert _is_online_query(text)

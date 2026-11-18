@@ -18,6 +18,9 @@ labels:
   switches: "prises"
 
 templates:
+  # The reply to leaving.
+  farewell: "À plus tard."
+  play_station: "Joue la station de radio {name}."
   attr_state:        "La {label} est de {val}{unit}."
   attr_pct:          "La {label} est à {val}%."
   attr_humidity_fb:  "La {label} est de {val}%."
@@ -77,6 +80,9 @@ keywords:
   narration:     ["je vérifie", "je cherche", "je regarde", "je consulte", "je recherche", "je vais vérifier", "je vais chercher", "je vais regarder"]
 
 patterns:
+  # The user saying they are leaving: a short goodbye, never a fact to keep.
+  leaving:
+    - '^(?:(?:bon|bon\s+ben|allez|ok)\s+)?je\s+(?:pars|m[\x27’]en\s+vais|sors|file|y\s+vais)(?:\s+maintenant)?$'
   # Forgetting the conversation diary, not a saved fact.
   diary_forget:
     - '\boublie\s+(?:toutes\s+)?(?:nos|mes|les|ces)\s+(?:anciennes\s+)?(?:conversations?|discussions?)\b'

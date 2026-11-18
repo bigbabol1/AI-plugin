@@ -51,3 +51,25 @@ def test_an_ordinary_state_change_does_not() -> None:
     _hass, on_state, timers = _setup()
     on_state(_event(object(), object()))
     assert timers == []
+
+
+async def test_the_tools_are_read_again_once_home_assistant_has_started() -> None:
+    """A tool can arrive with no entity changing: the calendar read was
+    missing from the list read at setup (2026-11-12)."""
+    hass = MagicMock()
+    hass.is_running = False
+    once = {}
+    hass.bus.async_listen_once = lambda event_type, cb: once.setdefault(event_type, cb)
+    mcp = MagicMock()
+    mcp.async_refresh_tools = AsyncMock()
+    _refresh_tools_on_entity_changes(hass, MagicMock(), mcp)
+    await once["homeassistant_started"](None)
+    mcp.async_refresh_tools.assert_awaited_once()
+
+
+def test_after_startup_nothing_waits_for_the_started_event() -> None:
+    hass = MagicMock()
+    hass.is_running = True
+    hass.bus.async_listen_once = MagicMock()
+    _refresh_tools_on_entity_changes(hass, MagicMock(), MagicMock())
+    hass.bus.async_listen_once.assert_not_called()

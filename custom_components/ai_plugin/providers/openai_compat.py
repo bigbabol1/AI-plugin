@@ -24,7 +24,7 @@ from typing import Any
 
 import aiohttp
 
-from ..exceptions import CannotConnect, OrchestratorError
+from ..exceptions import BackendUnreachable, CannotConnect, OrchestratorError
 from . import ChatResponse, normalize_tool_calls
 from .base import AbstractProvider
 
@@ -264,12 +264,12 @@ class OpenAICompatProvider(AbstractProvider):
                 )
         except OrchestratorError:
             raise
-        except aiohttp.ClientConnectorError as exc:
-            raise OrchestratorError(
+        except (aiohttp.ClientConnectorError, aiohttp.ServerDisconnectedError) as exc:
+            raise BackendUnreachable(
                 f"Cannot connect to {self._base_url}: {exc}"
             ) from exc
         except TimeoutError as exc:
-            raise OrchestratorError(
+            raise BackendUnreachable(
                 f"Request timed out after {self._timeout}s"
             ) from exc
         except aiohttp.ClientError as exc:
@@ -414,12 +414,12 @@ class OpenAICompatProvider(AbstractProvider):
                     )
         except OrchestratorError:
             raise
-        except aiohttp.ClientConnectorError as exc:
-            raise OrchestratorError(
+        except (aiohttp.ClientConnectorError, aiohttp.ServerDisconnectedError) as exc:
+            raise BackendUnreachable(
                 f"Cannot connect to {self._server_root}: {exc}"
             ) from exc
         except TimeoutError as exc:
-            raise OrchestratorError(
+            raise BackendUnreachable(
                 f"Request timed out after {self._timeout}s"
             ) from exc
         except aiohttp.ClientError as exc:

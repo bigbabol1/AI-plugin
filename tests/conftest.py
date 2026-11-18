@@ -67,7 +67,8 @@ class _Platform:
     STT = "stt"
 
 
-_make_module("homeassistant.const", Platform=_Platform, EVENT_STATE_CHANGED="state_changed")
+_make_module("homeassistant.const", Platform=_Platform, EVENT_STATE_CHANGED="state_changed",
+             EVENT_HOMEASSISTANT_STARTED="homeassistant_started")
 
 # ── homeassistant.exceptions ──────────────────────────────────────────────────
 

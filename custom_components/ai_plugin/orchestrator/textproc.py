@@ -88,6 +88,25 @@ _KAOMOJI_CHAR_RE = re.compile(r"[─-◿︰-﹏᐀-ᙿ]+|[ಠಥ]\s*_\s*[ಠಥ]
 # "(^o^)"). Maths such as "(5^2)" has no caret pair and survives.
 _KAOMOJI_FACE_RE = re.compile(r"[(（][^\s\w()（）]?[^\s()（）]_[^\s()（）][^\s\w()（）]?[)）]|[(（]\^.?\^[)）]")
 
+# Faces whose tell-tale glyph is an emoji-range symbol ("(⌐‿⌓c)", "(⌐■_■)"),
+# a tie ("‿"), a fullwidth tilde ("(‘～`)") or a katakana arm ("ヽ(…)ﾉ"). The
+# emoji pass used to run first and take the "⌐", which left "(‿c)" and
+# "(‿ wed)" to be spoken (gemma-4, 2026-11-13). Emoji are marked first, so a
+# short bracket group with a mark or one of these glyphs goes whole; a long one
+# is a sentence aside and keeps its words.
+_FACE_MARK = "\ue000"
+_FACE_GLYPHS = "\ue000\u203f\u2040\u2054\uff5e\uff61-\uff65\u30fd\u30fe\uff89\u30ce\u30c4"
+_SHORT_FACE_GROUP_RE = re.compile(
+    rf"[(（][^()（）\[\]]{{0,10}}[{_FACE_GLYPHS}][^()（）\[\]]{{0,10}}[)）]"
+)
+# "(°o°)": two degree signs and no digit is a face; "(21°C)" is not.
+_DEGREE_FACE_RE = re.compile(
+    r"[(（][^\d()（）\s]{0,4}°[^\d()（）\s]{0,4}°[^\d()（）\s]{0,4}[)）](?:[oOノﾉ](?=[\s.,!?]|$))?"
+)
+# The same glyphs left standing alone. Only in a reply in a Latin script:
+# Japanese uses "ノ", "ツ" and "～" as letters and punctuation.
+_FACE_GLYPH_CHAR_RE = re.compile(rf"[{_FACE_GLYPHS}]+")
+
 # What is left of a face once the part between its arms has gone: "٩۶", "٩ⅴ",
 # "⸜⸜". Gemma picks these from all over Unicode, so a list of them never ends
 # (2026-11-05, spoken to TTS): a word made only of foreign digits and
@@ -141,11 +160,17 @@ def _strip_emoji(text: str) -> str:
     """Remove emoji/pictographs/kaomoji. Safe for TTS and voice output."""
     if not text:
         return text
-    cleaned = _EMOJI_RE.sub("", text)
+    cleaned = _EMOJI_RE.sub(_FACE_MARK, text)
+    latin = _mostly_latin(cleaned)
+    if latin:
+        cleaned = _SHORT_FACE_GROUP_RE.sub("", cleaned)
+        cleaned = _DEGREE_FACE_RE.sub("", cleaned)
+    cleaned = cleaned.replace(_FACE_MARK, "")
     cleaned = _KAOMOJI_GROUP_RE.sub("", cleaned)
     cleaned = _KAOMOJI_CHAR_RE.sub("", cleaned)
     cleaned = _KAOMOJI_FACE_RE.sub("", cleaned)
-    if _mostly_latin(cleaned):
+    if latin:
+        cleaned = _FACE_GLYPH_CHAR_RE.sub("", cleaned)
         cleaned = _WORD_RE.sub(
             lambda m: "" if _is_stray_glyph_word(m.group()) else m.group(), cleaned
         )

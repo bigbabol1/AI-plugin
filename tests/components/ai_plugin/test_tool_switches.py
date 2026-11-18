@@ -239,3 +239,22 @@ async def test_broadcast_off_is_not_offered_or_carried_out() -> None:
         "For every room use HassBroadcast." in s["function"].get("description", "")
         for s in orch._tool_schemas_for("hi", True, None)
     )
+
+
+async def test_a_safeguard_that_changed_the_reply_is_logged_once(caplog) -> None:
+    """Every safeguard that changed a turn goes in one line with what was asked,
+    what the model said and what the user got, so each can be judged."""
+    import logging
+
+    orch = _scheduled_orch(_off(c.CONF_TOOL_ALARMS), [])
+    orch._provider.async_chat = AsyncMock(side_effect=[
+        _text("I've updated the reminder to 15:30."),
+    ])
+    with caplog.at_level(logging.INFO):
+        reply = await orch.async_process("It's at half past four.", "c-log", "en")
+    lines = [r.getMessage() for r in caplog.records if "AI Plugin safeguard:" in r.getMessage()]
+    assert len(lines) == 1
+    assert "schedule_claim" in lines[0]
+    assert "half past four" in lines[0]
+    assert "I've updated the reminder" in lines[0]
+    assert reply in lines[0]

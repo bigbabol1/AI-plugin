@@ -74,7 +74,19 @@ _META_CONVO_RE = re.compile(
     r"what\s+did\s+you\s+(?:say|tell|mean)|"
     r"repeat\s+(?:that|it|this|yourself)|"
     r"already\s+(?:said|told|mentioned)|"
+    # Earlier conversations and what was said in them: the diary and the
+    # saved facts answer these. "What were your thoughts again about
+    # Portugal?" forced a search, and a stranger's travel review came back
+    # as "You really enjoyed your trip to Portugal" (2026-11-16).
+    r"your\s+(?:thoughts|opinion|views?|take)|"
+    r"(?:did|have|had)\s+(?:i|we)\s+(?:ever\s+)?(?:tell|told|say|said|mention\w*|talk\w*|discuss\w*|speak|spoke|ask\w*|chat\w*)|"
+    r"(?:i|we)\s+(?:talked|spoke|discussed|chatted|told\s+you)|"
+    r"(?:do|did)\s+you\s+(?:still\s+)?remember|"
     # German
+    r"deine\s+(?:gedanken|meinung|ansicht)|"
+    r"(?:hab(?:e)?|hatte)\s+ich\s+(?:dir\s+)?(?:\w+\s+){0,3}(?:gesagt|erzählt|erzaehlt|erwähnt|erwaehnt|gefragt)|"
+    r"haben\s+wir\s+(?:\w+\s+){0,4}(?:gesprochen|geredet|besprochen)|"
+    r"erinnerst\s+du\s+dich|"
     r"du\s+(?:hast|sagtest)\s+(?:gerade|eben|vorhin)|"
     r"sagst?\s+(?:das|es)\s+(?:nochmal|noch\s+einmal)|"
     r"wiederhol(?:e|st)|"

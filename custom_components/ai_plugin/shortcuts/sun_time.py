@@ -20,6 +20,9 @@ _LOGGER = logging.getLogger(__name__)
 # web_search) can. Sensor questions legitimately use "in <area>", so this
 # guard applies only inside the time and sun shortcuts.
 _PLACE_TAIL_RE = re.compile(r"\bin\s+\w", re.IGNORECASE)
+_WORD_RE = re.compile(r"\w+")
+# "right now", "jetzt bitte": a couple of words may follow the time question.
+_MAX_WORDS_AFTER_TIME = 2
 
 def _try_sun_shortcut(hass: HomeAssistant, message: str, lang: str = "en") -> str | None:
     """Deterministic reply for sun/daylight questions, in the user's language.
@@ -100,7 +103,14 @@ def _try_time_shortcut(hass: HomeAssistant, message: str, lang: str) -> str | No
     LLM (localized weekday/month names aren't worth the i18n surface).
     """
     time_re = L.keyword_re("time_now", lang)
-    if time_re is None or not time_re.search(message.lower()):
+    match = time_re.search(message.lower()) if time_re is not None else None
+    if match is None:
+        return None
+    # The question is the clock only when little follows it: "what's the
+    # time now" is, "what's the time of my walk on Saturday" is not (a
+    # misheard calendar question got the clock on 2026-11-13). The model
+    # answers the longer ones.
+    if len(_WORD_RE.findall(message[match.end():])) > _MAX_WORDS_AFTER_TIME:
         return None
     if _PLACE_TAIL_RE.search(message.lower()):
         return None

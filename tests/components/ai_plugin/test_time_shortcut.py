@@ -96,3 +96,27 @@ def test_long_message_falls_through():
         "living room compared to yesterday evening"
     )
     assert try_shortcut(hass, msg, lang="en") is None
+
+
+def test_a_question_that_goes_on_after_the_time_goes_to_the_model() -> None:
+    """A misheard calendar question got the clock (2026-11-13)."""
+    hass = _hass()
+    for msg, lang in [
+        ("What's the time is my? Walk appointment on Saturday.", "en"),
+        ("what's the time of my walk on saturday", "en"),
+        ("wie spät ist mein Termin am Samstag", "de"),
+        ("hoe laat is mijn afspraak morgen", "nl"),
+    ]:
+        assert try_shortcut(hass, msg, lang=lang) is None, msg
+
+
+def test_a_word_or_two_after_the_time_question_still_gets_the_clock() -> None:
+    hass = _hass()
+    for msg, lang in [
+        ("what time is it right now?", "en"),
+        ("hey, what's the time please", "en"),
+        ("Wie spät ist es jetzt?", "de"),
+        ("hoe laat is het", "nl"),
+    ]:
+        reply = try_shortcut(hass, msg, lang=lang)
+        assert reply is not None and re.search(r"\d{1,2}:\d{2}", reply), msg

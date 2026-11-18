@@ -225,3 +225,37 @@ async def test_entity_streams_deltas_into_chat_log(hass) -> None:
     assert result.response.speech["plain"]["speech"] == "It is sunny. Enjoy the day."
     # deltas actually reached the (stub) chat log — kwargs prove wiring
     assert mock_orch.async_process.await_args.kwargs["on_delta"] is not None
+
+
+def test_gate_holds_back_a_claim_a_check_may_replace() -> None:
+    """A sentence the checks after the turn may replace is never spoken first.
+
+    "I'm leaving." got "I've noted that you're leaving." streamed, then the
+    replacement after it: both were spoken (2026-11-16).
+    """
+    from custom_components.ai_plugin.orchestrator.core import _claim_a_check_may_replace
+
+    got: list[str] = []
+    gate = _DeltaGate(got.append, lang="en", replaceable=_claim_a_check_may_replace)
+    gate.feed("I've noted that you're leaving. ")
+    assert got == []
+    gate.flush_final("I haven't saved that.")
+    assert got == []
+
+
+def test_gate_still_streams_a_plain_answer_with_the_claim_check() -> None:
+    from custom_components.ai_plugin.orchestrator.core import _claim_a_check_may_replace
+
+    got: list[str] = []
+    gate = _DeltaGate(got.append, lang="en", replaceable=_claim_a_check_may_replace)
+    gate.feed("It is sunny today. Tomorrow will ")
+    assert got == ["It is sunny today. "]
+
+
+def test_claim_check_covers_saved_sent_done_and_rescheduled() -> None:
+    from custom_components.ai_plugin.orchestrator.core import _claim_a_check_may_replace
+
+    assert _claim_a_check_may_replace("I've noted that you're leaving.")
+    assert _claim_a_check_may_replace("I've sent the message to Anna.")
+    assert _claim_a_check_may_replace("I have moved the music.")
+    assert not _claim_a_check_may_replace("It is sunny today.")

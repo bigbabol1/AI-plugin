@@ -18,6 +18,9 @@ labels:
   switches: "enchufes"
 
 templates:
+  # The reply to leaving.
+  farewell: "Hasta luego."
+  play_station: "Pon la emisora {name}."
   attr_state:        "La {label} es {val}{unit}."
   attr_pct:          "La {label} está al {val}%."
   attr_humidity_fb:  "La {label} es {val}%."
@@ -77,6 +80,9 @@ keywords:
   narration:     ["estoy verificando", "estoy comprobando", "estoy buscando", "voy a verificar", "voy a comprobar"]
 
 patterns:
+  # The user saying they are leaving: a short goodbye, never a fact to keep.
+  leaving:
+    - '^(?:(?:bueno|vale|ok)\s+)?(?:ya\s+)?(?:me\s+voy|me\s+marcho|salgo|me\s+tengo\s+que\s+ir)(?:\s+(?:ya|ahora))?$'
   # Forgetting the conversation diary, not a saved fact.
   diary_forget:
     - '\bolvida\s+(?:todas\s+)?(?:nuestras|mis|las|esas)\s+(?:conversaciones|charlas)\b'

@@ -5,12 +5,21 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 from ..i18n import SUPPORTED_LANGS, L
 from ..satellite_speech import satellite_in_area
 from .engine import KIND_ALARM, KIND_COMMAND, KIND_REMINDER, Scheduler
-from .when import REPEATS, WhenError, describe, resolve
+from .when import (
+    REPEATS,
+    WhenError,
+    describe,
+    on_weekday_said,
+    relative_day_said,
+    resolve,
+    weekday_said,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -269,6 +278,7 @@ async def _async_add(
         now, at=arguments.get("at"), day=arguments.get("day"),
         in_minutes=in_minutes, repeat=repeat,
     )
+    due = _on_the_weekday_said(due, now, arguments, user_message, in_minutes, repeat)
     when = describe(due, now)
     fields: dict[str, Any] = {
         "user_id": user_id,
@@ -311,6 +321,27 @@ async def _async_add(
     await scheduler.async_add(KIND_REMINDER, due, text=text, device_id=target, **fields)
     for_whom = f" for {for_name}" if someone_else else ""
     return f"Reminder set{for_whom} for {when}: {text}."
+
+
+def _on_the_weekday_said(due, now, arguments, user_message, in_minutes, repeat):
+    """The weekday the user named wins over the model's day, as for calendar
+    events (a walk said for Saturday was put on Friday, 2026-11-12).
+
+    Not for "in 10 minutes", a daily repeat, a weekday inside what is to be
+    said or done ("buy flowers for Sunday"), or when the user also said today
+    or tomorrow: then the weekday may be about something else.
+    """
+    if in_minutes not in (None, "") or repeat not in (None, "weekly", "biweekly"):
+        return due
+    said = weekday_said(user_message)
+    if said is None or due.weekday() == said or relative_day_said(user_message):
+        return due
+    payload = " ".join(str(arguments.get(k) or "") for k in ("text", "command", "label"))
+    if weekday_said(payload) is not None:
+        return due
+    day = on_weekday_said(due.date(), said, now.date())
+    moved = datetime.combine(day, due.time(), tzinfo=now.tzinfo)
+    return moved + timedelta(days=7) if moved <= now else moved
 
 
 def _matches_any_language(key: str, text: str) -> bool:

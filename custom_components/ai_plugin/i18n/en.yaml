@@ -18,6 +18,9 @@ labels:
   switches: "switches"
 
 templates:
+  # The reply to leaving.
+  farewell: "See you later."
+  play_station: "Play the radio station {name}."
   attr_state:        "The {label} is {val}{unit}."
   attr_pct:          "The {label} is {val}%."
   attr_humidity_fb:  "The {label} is {val}%."
@@ -77,6 +80,19 @@ keywords:
   narration:     ["i'm checking", "i am checking", "i'm looking", "i'm finding", "i'm searching"]
 
 patterns:
+  # Where a message's recipient is named; (?P<name>) is the word heard there.
+  message_target:
+    - '^(?:please\s+)?(?:send\s+(?:a\s+)?(?:message|text)\s+to|write\s+to|message|text|tell)\s+(?P<name>[a-z][\w\x27’]*)\b'
+  # A reply asking who a message is for.
+  asks_who:
+    - '\bwho\b[^?]*\b(?:tell|send|message|text|write|for)\b[^?]*\?\s*$'
+  # A reply asking which radio station to play.
+  asks_station:
+    - '\b(?:which|what)\b[^?]*\b(?:station|radio)\b[^?]*\?\s*$'
+  # The user saying they are leaving: a short goodbye, never a fact to keep.
+  leaving:
+    - '^(?:(?:ok(?:ay)?|so|well|right|alright)\s+)?(?:i[\x27’]?m|i\s+am)\s+(?:leaving|off|heading\s+out|heading\s+off|going\s+out|out\s+of\s+here|out)(?:\s+(?:now|then))?$'
+    - '^(?:(?:ok(?:ay)?|so|well|right|alright)\s+)?i(?:[\x27’]ve|\s+have)?\s+(?:got\s+to|gotta|have\s+to)\s+go(?:\s+now)?$'
   # Forgetting the conversation diary, not a saved fact.
   diary_forget:
     - '\bforget\s+(?:all\s+)?(?:of\s+)?(?:our|my|the|these)\s+(?:earlier\s+|old\s+|previous\s+)?(?:conversations?|chats?|talks?)\b'

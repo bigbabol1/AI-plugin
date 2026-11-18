@@ -285,8 +285,12 @@ def _claims_unsent_message(message: str, reply: str, tool_msgs: list[dict]) -> b
     """
     if "?" in (message or "") or _QUESTION_INTENT_RE.match((message or "").strip()):
         return False
+    return _no_write_landed(tool_msgs) and claims_message_sent(reply)
+
+def claims_message_sent(reply: str) -> bool:
+    """True when a reply says a message went out: "I've sent it to Anna"."""
     lowered = (reply or "").strip().lower()
-    return _no_write_landed(tool_msgs) and any(
+    return any(
         rx.search(lowered)
         for code in SUPPORTED_LANGS
         for rx in L.pattern_list("message_sent_claim", code)

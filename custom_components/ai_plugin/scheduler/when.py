@@ -46,6 +46,60 @@ def parse_clock(text: object) -> time:
     return time(hour, minute)
 
 
+# Weekday names in the plugin's languages, Monday first. Polish has the case
+# forms used after "w" ("w sobotę"); Portuguese only the unambiguous forms
+# ("segunda" alone is also "second").
+_SAID_WEEKDAYS = (
+    ("monday", "montag", "lundi", "lunes", "segunda-feira", "poniedziałek", "maandag"),
+    ("tuesday", "dienstag", "mardi", "martes", "terça-feira", "terca-feira", "wtorek", "dinsdag"),
+    ("wednesday", "mittwoch", "mercredi", "miércoles", "miercoles", "quarta-feira",
+     "środa", "środę", "sroda", "srode", "woensdag"),
+    ("thursday", "donnerstag", "jeudi", "jueves", "quinta-feira", "czwartek", "donderdag"),
+    ("friday", "freitag", "vendredi", "viernes", "sexta-feira", "piątek", "piatek", "vrijdag"),
+    ("saturday", "samstag", "sonnabend", "samedi", "sábado", "sabado", "sobota", "sobotę",
+     "sobote", "zaterdag"),
+    ("sunday", "sonntag", "dimanche", "domingo", "niedziela", "niedzielę", "niedziele", "zondag"),
+)
+_SAID_WEEKDAY_RE = re.compile(
+    r"(?<![\w-])(" + "|".join(sorted((w for names in _SAID_WEEKDAYS for w in names), key=len, reverse=True))
+    + r")(?![\w-])",
+    re.IGNORECASE,
+)
+
+
+def weekday_said(text: object) -> int | None:
+    """The weekday the user named (0 = Monday), when they named exactly one."""
+    found = {
+        next(i for i, names in enumerate(_SAID_WEEKDAYS) if m.group(1).lower() in names)
+        for m in _SAID_WEEKDAY_RE.finditer(str(text or ""))
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+# "Today" or "tomorrow" in the plugin's languages. Next to a weekday they
+# leave it unclear which one the time is for ("remind me tomorrow to buy
+# things for Sunday"). Some also mean "morning" ("Samstag morgen"); then
+# the day is left as the model gave it, as before.
+_SAID_RELATIVE_DAY_RE = re.compile(
+    r"(?<![\w-])(today|tonight|tomorrow|heute|morgen|übermorgen|aujourd'hui|ce soir|demain"
+    r"|hoy|mañana|manana|esta noche|hoje|amanhã|amanha|esta noite|dziś|dzis|dzisiaj"
+    r"|jutro|pojutrze|vandaag|vanavond|overmorgen)(?![\w-])",
+    re.IGNORECASE,
+)
+
+
+def relative_day_said(text: object) -> bool:
+    """True when the user said today, tonight or tomorrow."""
+    return _SAID_RELATIVE_DAY_RE.search(str(text or "")) is not None
+
+
+def on_weekday_said(day: date, weekday: int, today: date) -> date:
+    """``day`` moved to the weekday the user said, in the same week as the
+    model meant (the nearest such day), never before today."""
+    moved = day + timedelta(days=(weekday - day.weekday() + 3) % 7 - 3)
+    return moved + timedelta(days=7) if moved < today else moved
+
+
 def _weekday_index(word: str) -> int | None:
     for names in (_WEEKDAYS, _WEEKDAYS_DE):
         if word in names:

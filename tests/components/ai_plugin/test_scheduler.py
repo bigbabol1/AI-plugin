@@ -1006,3 +1006,47 @@ async def test_an_updated_claim_drops_the_old_reminder_end_to_end(track) -> None
     assert reply == "I've updated the reminder to 15:30."
     assert [j.text for j in sched.jobs()] == ["Dentist"]
     assert old.id not in {j.id for j in sched.jobs()}
+
+
+# ── the weekday the user said ────────────────────────────────────────────────
+
+THURSDAY = datetime(2026, 11, 12, 18, 54, tzinfo=TZ)
+
+
+@pytest.mark.parametrize(
+    ("name", "args", "message", "language", "due"),
+    [
+        # The model miscounts: a Saturday said, a Friday sent.
+        ("set_reminder", {"text": "call mum", "at": "09:00", "day": "friday"},
+         "remind me on Saturday at 9 to call mum", "en-US", datetime(2026, 11, 14, 9, 0)),
+        ("set_alarm", {"at": "07:00", "day": "2026-11-13"},
+         "wake me up on Saturday at 7", "en-US", datetime(2026, 11, 14, 7, 0)),
+        ("set_reminder", {"text": "Müll rausbringen", "at": "09:00", "day": "freitag"},
+         "Erinnere mich am Samstag um 9 an den Müll", "de-DE", datetime(2026, 11, 14, 9, 0)),
+        ("set_reminder", {"text": "water the plants", "at": "09:00", "day": "friday", "repeat": "weekly"},
+         "every Saturday at 9 remind me to water the plants", "en-US", datetime(2026, 11, 14, 9, 0)),
+        # Thursday 09:00 has passed: next Thursday.
+        ("set_reminder", {"text": "call mum", "at": "09:00", "day": "friday"},
+         "remind me on Thursday at 9 to call mum", "en-US", datetime(2026, 11, 19, 9, 0)),
+        # Left as the model gave it.
+        ("set_reminder", {"text": "buy things for the party", "at": "09:00", "day": "tomorrow"},
+         "remind me tomorrow at 9 to buy things for the party on Sunday", "en-US", datetime(2026, 11, 13, 9, 0)),
+        ("set_reminder", {"text": "the Sunday brunch", "at": "09:00", "day": "saturday"},
+         "remind me on the weekend at 9 about the Sunday brunch", "en-US", datetime(2026, 11, 14, 9, 0)),
+        ("set_alarm", {"at": "07:00", "repeat": "weekdays"},
+         "wake me at 7 on weekdays, not on Saturday", "en-US", datetime(2026, 11, 13, 7, 0)),
+    ],
+)
+async def test_the_weekday_the_user_said_wins(track, name, args, message, language, due) -> None:
+    scheduler = _scheduler(THURSDAY)
+    await _call(scheduler, name, args, message=message, language=language)
+    [job] = scheduler.jobs()
+    assert job.due == due.replace(tzinfo=TZ)
+
+
+async def test_a_weekday_said_does_not_move_in_minutes(track) -> None:
+    scheduler = _scheduler(THURSDAY)
+    await _call(scheduler, "set_reminder", {"text": "the walk", "in_minutes": 10},
+                message="remind me in 10 minutes about Saturday's walk")
+    [job] = scheduler.jobs()
+    assert job.due == THURSDAY + timedelta(minutes=10)

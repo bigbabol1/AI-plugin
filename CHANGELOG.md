@@ -4,6 +4,56 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v1.3.0 — radio stations, speaker groups, and Assist when the model is down
+
+### Heads-up when updating
+
+- **New option: *Use Home Assistant Assist when the model server is down*** (Advanced, on
+  by default). See below.
+
+### Added
+
+- **Radio stations by name.** "Play RTL radio", "Play Radio Eins" or "Play WDR 2" plays
+  the station through Music Assistant's radio search instead of a song of that name. "Play
+  radio" with no station asks which one, and a short answer to "Which station?" is taken
+  as the station's name.
+- **Music on a speaker or speaker group by name.** "Play jazz on all speakers" plays on a
+  Music Assistant group or speaker called that (name or alias), even when it belongs to no
+  room. A name that speech recognition got slightly wrong is matched by sound.
+- **Home Assistant Assist takes over when the model server is down.** If the model server
+  cannot be reached or does not answer in time, and nothing has happened yet in that turn,
+  the turn goes to Home Assistant's built-in Assist agent, so lights, timers and other
+  built-in commands still work by voice. For a minute after that, turns go straight to
+  Assist instead of waiting for the server again.
+- **"I'm leaving" gets a short goodbye** in all seven languages and ends the
+  conversation, instead of "I've noted that you're leaving".
+- **Automations with a conversation trigger now fire** through this agent. Before, Home
+  Assistant ran sentence triggers only for its own agent. A matching sentence answers with
+  the automation's response.
+- **A misheard message recipient is read as the name it sounds like.** Speech
+  recognition has no list of the home's names, so "Message *aren't* that I'm late" or the
+  answer to "Who should I tell?" is matched against the people with a phone (English and
+  German).
+
+### Fixed
+
+- **"Where am I?" answered with the home's address** while you were out. It now uses
+  your person entity, like "Where is Anna?".
+- **A question about an earlier conversation triggered a web search,** and a stranger's
+  page was read out as if it were yours. Such questions ("What were your thoughts about
+  …", "Did I tell you …") now stay with the diary and saved facts, and the diary finds
+  the note by its topic.
+- **A calendar event, alarm or reminder landed on the wrong weekday** when the model
+  miscounted the date. When you name exactly one weekday, it goes on that weekday.
+- **"What time is…" followed by a longer question was answered with the clock.**
+- **Turns answered from the calendar, alarms, devices or saved facts are left out of the
+  diary,** where a note would go stale when those change.
+- **A reply could be spoken twice:** a streamed sentence claiming something was saved or
+  done was still played after a check had replaced it.
+- **Faces such as "(⌐‿⌓c)" were read out in pieces.**
+- **Tools from integrations that start late were missing** from the first turns after a
+  Home Assistant restart.
+
 ## v1.2.0 — remembers earlier conversations, Home Assistant's tools built in
 
 ### Heads-up when updating

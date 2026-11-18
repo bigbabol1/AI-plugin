@@ -25,6 +25,9 @@ labels:
 # {label}" would be wrong for half of them. Article-free is correct for both
 # genders and is the normal register for reading a value out loud.
 templates:
+  # The reply to leaving.
+  farewell: "Tot straks."
+  play_station: "Speel de radiozender {name}."
   attr_state:        "{label} is {val}{unit}."
   attr_pct:          "{label} is {val}%."
   attr_humidity_fb:  "{label} is {val}%."
@@ -84,6 +87,10 @@ keywords:
   narration:     ["ik controleer", "ik kijk even", "ik ga kijken", "ik ga controleren", "even kijken", "ik zoek"]
 
 patterns:
+  # The user saying they are leaving: a short goodbye, never a fact to keep.
+  leaving:
+    - '^(?:(?:oké|ok|nou)\s+)?ik\s+(?:ga|vertrek|ben)\s+(?:(?:nu|dan)\s+)*(?:weg|ervandoor|vertrokken|gaan)$'
+    - '^(?:(?:oké|ok|nou)\s+)?ik\s+(?:ga|vertrek)(?:\s+(?:nu|dan))+$'
   # Forgetting the conversation diary, not a saved fact.
   diary_forget:
     - '\bvergeet\s+(?:al\s+)?(?:onze|mijn|de|die)\s+(?:eerdere\s+|oude\s+)?(?:gesprekken|gesprek)\b'

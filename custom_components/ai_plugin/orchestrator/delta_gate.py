@@ -34,8 +34,13 @@ class _DeltaGate:
         listener,  # Callable[[str], None] | None
         lang: str = "en",
         voice_mode: bool = False,
+        replaceable=None,  # Callable[[str], bool] | None
     ) -> None:
         self._listener = listener
+        # A sentence a check after the turn may replace ("I've noted that"
+        # with nothing saved) must not be spoken first: the speaker said
+        # "I've noted that you're leaving. I haven't saved that." (2026-11-16).
+        self._replaceable = replaceable
         self._lang = lang
         self._voice = voice_mode
         self._buf = ""
@@ -87,12 +92,17 @@ class _DeltaGate:
             self._emit(sentence)
 
     def _emit(self, sentence: str) -> None:
+        if self._closed:
+            return
         s = _strip_narration(sentence, lang=self._lang)
         s = _strip_emoji(s)
         if self._voice:
             s = _flatten_for_voice(s)
         s = s.strip()
         if not s:
+            return
+        if self._replaceable is not None and self._replaceable(s):
+            self.close()
             return
         self._forwarded.append(s)
         try:

@@ -199,6 +199,17 @@ def _refresh_tools_on_entity_changes(
         if pending is not None:
             pending.cancel()
 
+    # Integrations finish adding their tools by the time Home Assistant has
+    # started, and a tool can arrive with no entity changing: read them all
+    # once more then.
+    if not getattr(hass, "is_running", True):
+        from homeassistant.const import EVENT_HOMEASSISTANT_STARTED  # noqa: PLC0415
+
+        async def _started(_event=None) -> None:
+            await mcp.async_refresh_tools()
+
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _started)
+
     entry.async_on_unload(_cancel_pending)
     entry.async_on_unload(
         hass.bus.async_listen(EVENT_STATE_CHANGED, _entity_added_or_removed)

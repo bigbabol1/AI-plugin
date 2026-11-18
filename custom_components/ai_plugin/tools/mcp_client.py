@@ -629,6 +629,16 @@ class MCPToolRegistry:
         if any(c is True for c in changed):
             self._rebuild_tool_index()
 
+    async def async_refresh_builtin(self) -> None:
+        """Read Home Assistant's own tools again, if they are the ones in use.
+
+        In-process and cheap, unlike asking an MCP server.
+        """
+        if self._builtin is None or self._builtin not in self._servers:
+            return
+        if await self._builtin.async_refresh_tools() is True:
+            self._rebuild_tool_index()
+
     # ── tool access ───────────────────────────────────────────────────────────
 
     def _model_names(self) -> dict[str, str]:

@@ -18,6 +18,9 @@ labels:
   switches: "Schalter"
 
 templates:
+  # The reply to leaving.
+  farewell: "Bis später."
+  play_station: "Spiel den Radiosender {name}."
   attr_state:        "Die {label} ist {val}{unit}."
   attr_pct:          "Die {label} liegt bei {val}%."
   attr_humidity_fb:  "Die {label} ist {val}%."
@@ -77,6 +80,20 @@ keywords:
   narration:     ["ich prüfe", "ich überprüfe", "ich checke", "ich suche nach", "ich schaue", "ich sehe nach", "ich frage"]
 
 patterns:
+  # Where a message's recipient is named; (?P<name>) is the word heard there.
+  message_target:
+    - '^(?:bitte\s+)?(?:schreib(?:e)?|sag|schick(?:e)?)\s+(?:(?:eine\s+)?nachricht\s+an\s+)?(?P<name>[a-zäöüß][\w\x27’]*)\b'
+  # A reply asking who a message is for.
+  asks_who:
+    - '\b(?:wem|an\s+wen|für\s+wen)\b[^?]*\?\s*$'
+  # A reply asking which radio station to play.
+  asks_station:
+    - '\b(?:welche[nrs]?|was\s+für)\b[^?]*\b(?:sender|radiosender|station|radio)\b[^?]*\?\s*$'
+  # The user saying they are leaving: a short goodbye, never a fact to keep.
+  leaving:
+    - '^(?:(?:so|okay|ok|also)\s+)?ich\s+(?:gehe|geh|bin|mach\s+mich)\s+(?:(?:jetzt|dann|mal|nun)\s+)*(?:los|weg|raus|auf\s+den\s+weg)$'
+    - '^(?:(?:so|okay|ok|also)\s+)?ich\s+(?:gehe|geh)(?:\s+(?:jetzt|dann|nun))+$'
+    - '^(?:(?:so|okay|ok|also)\s+)?ich\s+(?:muss|muß)\s+(?:(?:jetzt|dann|mal|nun)\s+)*los$'
   # Forgetting the conversation diary, not a saved fact.
   diary_forget:
     - '\bvergiss\s+(?:alle\s+)?(?:unsere|meine|die)\s+(?:früheren\s+|alten\s+|bisherigen\s+)?(?:gespräche|unterhaltungen|unterhaltung|chats?)\b'

@@ -18,6 +18,9 @@ labels:
   switches: "gniazdka"
 
 templates:
+  # The reply to leaving.
+  farewell: "Do zobaczenia."
+  play_station: "Włącz stację radiową {name}."
   attr_state:        "{label} wynosi {val}{unit}."
   attr_pct:          "{label} jest na poziomie {val}%."
   attr_humidity_fb:  "{label} wynosi {val}%."
@@ -77,6 +80,9 @@ keywords:
   narration:     ["sprawdzam", "szukam", "patrzę", "zaraz sprawdzę", "zaraz poszukam"]
 
 patterns:
+  # The user saying they are leaving: a short goodbye, never a fact to keep.
+  leaving:
+    - '^(?:(?:no|dobra|ok)\s+)?(?:już\s+)?(?:wychodzę|wychodze|idę|ide|lecę|lece|muszę\s+iść|musze\s+isc)(?:\s+(?:już|juz|teraz))?$'
   # Forgetting the conversation diary, not a saved fact.
   diary_forget:
     - '\bzapomnij\s+(?:o\s+)?(?:nasze|naszych|moje|moich|wszystkie|wszystkich)\s+(?:wcześniejsze\s+|wcześniejszych\s+)?rozmow(?:y|ach)\b'

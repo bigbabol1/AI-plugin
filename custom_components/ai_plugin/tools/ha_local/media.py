@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import logging
 import random
 import re
@@ -14,6 +15,7 @@ from homeassistant.helpers import (
 )
 
 
+from ...voice_id import NAME_MATCH_LEAD, NAME_MATCH_MIN
 from .formatting import _s
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,6 +83,53 @@ def taste_genres(query: str) -> list[str]:
 def names_nothing_to_play(query: str) -> bool:
     """True for "music", "some music", "something different": no actual choice."""
     return bool(_NOTHING_NAMED_RE.match(query.strip().rstrip(".!?")))
+
+
+# A station asked for by name ("play RTL radio") went to a track search, and
+# Music Assistant played a news jingle called "RTL Nieuws 2004" (2026-11-18).
+# Words like these send the query to a radio station search first.
+_RADIO_WORDS_RE = re.compile(
+    r"\b(?:radio|radiosender|sender|station|radiostation|webradio|internetradio|"
+    r"r[aá]dio|emisora|zender|stacj[aęi]|rozgłośni[aę])\b",
+    re.IGNORECASE,
+)
+_STATION_FILLER = {
+    "play", "the", "a", "station", "channel", "some", "spiel", "den", "die", "das",
+    "sender", "radiosender", "radiostation", "webradio", "internetradio", "radio",
+    "rádio", "emisora", "zender", "stacja", "stacji", "stację", "on", "please", "bitte",
+}
+_STATIONS_SEARCHED = 5
+NO_STATION_NAMED_RESULT = (
+    "[Nothing played: no radio station was named. Ask which station they would like.]"
+)
+
+
+def station_words(query: str) -> set[str]:
+    """The words of a station request that name the station: "RTL radio" gives rtl."""
+    return {
+        w for w in re.findall(r"[\w’']+", query.casefold())
+        if w not in _STATION_FILLER
+    }
+
+
+def asks_for_radio(query: str) -> bool:
+    """True when the query names a radio or station: "RTL radio", "Radio Eins"."""
+    return bool(_RADIO_WORDS_RE.search(query))
+
+
+def best_station(query: str, stations: list[dict]) -> dict | None:
+    """The first station whose name shares a word with the request, or None.
+
+    Without a shared word the search found something else: "RTL" alone
+    listed a country stream first."""
+    wanted = station_words(query)
+    for station in stations:
+        if not station.get("uri"):
+            continue
+        name_words = set(re.findall(r"[\w’']+", str(station.get("name") or "").casefold()))
+        if wanted & name_words:
+            return station
+    return None
 
 
 class MediaToolsMixin:
@@ -155,6 +204,11 @@ class MediaToolsMixin:
         media_type = (media_type or "track").lower().strip()
         if media_type not in _MUSIC_MEDIA_TYPES:
             media_type = "track"
+        wants_station = media_type == "radio" or (
+            media_type == "track" and not from_taste and asks_for_radio(query)
+        )
+        if wants_station and not station_words(query):
+            return NO_STATION_NAMED_RESULT
 
         if not self._hass.services.has_service("music_assistant", "play_media"):
             return (
@@ -165,17 +219,34 @@ class MediaToolsMixin:
 
         target_area = self._music_area(area)
         if target_area is None:
-            return f"Unknown area {area!r}. Try list_areas."
-
-        entity_id = self._music_player_in_area(target_area, exposed_only)
-        if entity_id is None:
-            scope = "exposed " if exposed_only else ""
-            return f"No {scope}media_player in {target_area.name}."
+            # A speaker or speaker group by name: "all speakers" is a Music
+            # Assistant group with no area, and the model answered "I can only
+            # play music on one speaker at a time" (2026-11-18).
+            entity_id = self._music_player_named(area, exposed_only)
+            if entity_id is None:
+                return f"Unknown area or speaker {area!r}. Try list_areas."
+        else:
+            entity_id = self._music_player_in_area(target_area, exposed_only)
+            if entity_id is None:
+                scope = "exposed " if exposed_only else ""
+                return f"No {scope}media_player in {target_area.name}."
 
         title = query
         if from_taste:
             query, title = await self._taste_playlist(genres)
             media_type = "playlist"
+        elif wants_station:
+            station = await self._find_station(query)
+            if station is not None:
+                query = station["uri"]
+                title = str(station.get("name") or title).strip()
+                media_type = "radio"
+                radio_mode = False
+            elif media_type == "radio":
+                return (
+                    f"[No radio station found for {title!r}. Nothing played. Tell the "
+                    "user and ask for the station's name.]"
+                )
         await self._set_shuffle(entity_id, from_taste)
 
         try:
@@ -196,6 +267,28 @@ class MediaToolsMixin:
             return f"[play_music failed: {exc}]"
 
         return f"OK — playing {title!r} ({media_type}) on {entity_id}."
+
+    async def _find_station(self, query: str) -> dict | None:
+        """A radio station in Music Assistant for a request like "RTL radio"."""
+        try:
+            entries = self._hass.config_entries.async_entries("music_assistant")
+            response = await self._hass.services.async_call(
+                "music_assistant",
+                "search",
+                {
+                    "config_entry_id": entries[0].entry_id,
+                    "name": query,
+                    "media_type": ["radio"],
+                    "limit": _STATIONS_SEARCHED,
+                },
+                blocking=True,
+                return_response=True,
+            )
+            stations = list((response or {}).get("radio", []))
+        except Exception:  # noqa: BLE001 — falls back to playing the words as asked
+            _LOGGER.debug("AI Plugin play_music: station search failed", exc_info=True)
+            return None
+        return best_station(query, stations)
 
     async def _taste_playlist(self, genres: list[str]) -> tuple[str, str]:
         """A playlist for "play some music": (what to play, its name).
@@ -382,6 +475,44 @@ class MediaToolsMixin:
             target_area.name, len(ma_native), len(other), entity_id,
         )
         return entity_id
+
+    def _music_player_named(self, name: str, exposed_only: bool = True) -> str | None:
+        """The one Music Assistant player or group called ``name``, or None.
+
+        By name, alias or a word of one, then by sound: speech recognition
+        heard the group "Alle" as "Allah" (2026-11-18)."""
+        ent_reg = er.async_get(self._hass)
+
+        def _is_music(eid: str) -> bool:
+            entry = ent_reg.entities.get(eid)
+            return entry is not None and entry.platform == "music_assistant"
+
+        named = [eid for eid in self._media_players_named(name, exposed_only) if _is_music(eid)]
+        if len(named) == 1:
+            return named[0]
+        if named:
+            return None
+        wanted = name.strip().casefold()
+        best: dict[str, float] = {}
+        for eid, entry in ent_reg.entities.items():
+            if not eid.startswith("media_player.") or entry.platform != "music_assistant":
+                continue
+            if entry.disabled_by is not None or (exposed_only and not self._is_exposed(eid)):
+                continue
+            state = self._hass.states.get(eid)
+            names = [_s(entry.name), _s(entry.original_name)]
+            names.extend(_s(alias) for alias in (entry.aliases or ()))
+            if state:
+                names.append(_s(state.attributes.get("friendly_name")))
+            for n in (n.strip().casefold() for n in names if n):
+                ratio = difflib.SequenceMatcher(None, wanted, n).ratio()
+                best[eid] = max(best.get(eid, 0.0), ratio)
+        ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+        if not ranked or ranked[0][1] < NAME_MATCH_MIN:
+            return None
+        if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < NAME_MATCH_LEAD:
+            return None
+        return ranked[0][0]
 
     def _media_players_named(self, name: str, exposed_only: bool = True) -> list[str]:
         """Players called ``name``: exactly (name, alias or id), else with it as

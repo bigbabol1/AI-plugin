@@ -215,3 +215,43 @@ async def test_the_dispatch_passes_the_satellite_and_person() -> None:
     orch._mcp.call_tool.assert_awaited_once_with(
         "HassTurnOn", {"name": "Lamp"}, device_id="sat1", user_id="u1"
     )
+
+
+async def test_while_home_assistant_starts_each_turn_reads_its_tools_again() -> None:
+    orch = _baseline_orch()
+    orch._mcp = MagicMock()
+    orch._mcp.async_refresh_builtin = AsyncMock()
+    orch._hass = MagicMock()
+    orch._hass.is_running = False
+    await orch._refresh_tools_while_starting()
+    orch._mcp.async_refresh_builtin.assert_awaited_once()
+    orch._hass.is_running = True
+    await orch._refresh_tools_while_starting()
+    orch._mcp.async_refresh_builtin.assert_awaited_once()
+
+
+async def test_reading_the_built_in_tools_again_updates_the_routes() -> None:
+    builtin = _builtin(tools=("HassTurnOn",))
+    reg = MCPToolRegistry([], builtin=builtin, own_hosts=OWN)
+    await reg.async_setup()
+    assert not reg.is_home_assistant_tool("calendar_get_events")
+
+    async def refresh():
+        builtin.tools.append(SimpleNamespace(name="calendar_get_events", description="", input_schema={"type": "object", "properties": {}}))
+        return True
+
+    builtin.async_refresh_tools = refresh
+    await reg.async_refresh_builtin()
+    assert reg.is_home_assistant_tool("calendar_get_events")
+
+
+async def test_the_fallback_mcp_server_is_not_read_as_built_in() -> None:
+    builtin = _builtin(ok=False)
+    builtin.async_refresh_tools = AsyncMock(return_value=True)
+    reg = MCPToolRegistry(
+        [{"transport": "http", "url": "http://localhost:8123/api/mcp"}], builtin=builtin, own_hosts=OWN
+    )
+    with patch.object(_MCPServerConnection, "async_start", AsyncMock()):
+        await reg.async_setup()
+    await reg.async_refresh_builtin()
+    builtin.async_refresh_tools.assert_not_awaited()

@@ -251,3 +251,60 @@ async def test_forgetting_by_voice_clears_the_speakers_notes() -> None:
 
     assert reply == L.template("diary_forgotten", "en")
     assert all(e["owner"] != "person.anna" for e in diary.entries())
+
+
+async def test_a_turn_answered_from_the_home_is_not_written_down() -> None:
+    """A note of "the walk is on Saturday" was read back as today's
+    appointment after the walk had been put on Friday (2026-11-14)."""
+    diary = await _diary()
+    orch = _diary_orch(diary)
+    orch._mcp = MagicMock()
+    orch._mcp.is_home_assistant_tool = MagicMock(side_effect=lambda n: n == "calendar_get_events")
+    orch._ha_local = None
+    orch._provider = MagicMock()
+    orch._provider.async_complete = AsyncMock(return_value='{"notes": ["A note."]}')
+
+    def calls(*names):
+        return [{"role": "assistant", "tool_calls": [{"function": {"name": n}} for n in names]}]
+
+    orch._diary_note("c5", "user", "What's on the calendar on Saturday?", "person.anna", "en")
+    orch._diary_note("c5", "assistant", "A walk, all day.", acted=orch._turn_used_home_tools(calls("calendar_get_events")))
+    orch._diary_note("c5", "user", "Remind me at 9 to call mum.", "person.anna", "en")
+    orch._diary_note("c5", "assistant", "Reminder set.", acted=orch._turn_used_home_tools(calls("set_reminder")))
+    orch._diary_note("c5", "user", "How long do I boil an egg?", "person.anna", "en")
+    orch._diary_note("c5", "assistant", "Seven minutes.", acted=orch._turn_used_home_tools(calls("web_search")))
+    assert [t["content"] for t in orch._diary_convs["c5"]["turns"]] == [
+        "How long do I boil an egg?", "Seven minutes.",
+    ]
+
+
+async def test_a_conversation_only_with_the_home_leaves_no_note() -> None:
+    diary = await _diary()
+    orch = _diary_orch(diary)
+    orch._provider = MagicMock()
+    orch._provider.async_complete = AsyncMock(return_value='{"notes": ["x"]}')
+    orch._diary_note("c6", "user", "Delete that appointment.", "person.anna", "en")
+    orch._diary_note("c6", "assistant", "Removed.", acted=True)
+    orch._diary_convs["c6"]["last"] = 0.0
+    await orch._async_diary_tick()
+    orch._provider.async_complete.assert_not_awaited()
+    assert "c6" not in orch._diary_convs
+
+
+def test_a_question_referring_back_is_matched_on_its_topic() -> None:
+    """ "What were your thoughts again about Portugal?" found no note: the
+    words about remembering drowned the topic (2026-11-16)."""
+    from custom_components.ai_plugin.diary import _recall_query
+
+    assert _recall_query("What were your thoughts again about Portugal?") == "Portugal"
+    assert _recall_query("Was hatten wir nochmal über Indonesien gesagt?") == "Indonesien"
+    assert _recall_query("What did I tell you about Christmas gifts?") == "Christmas gifts"
+
+
+def test_a_question_that_does_not_refer_back_is_matched_as_it_is() -> None:
+    from custom_components.ai_plugin.diary import _recall_query
+
+    for text in ("How are you today?", "Thank you very much.", "Wie spät ist es?"):
+        assert _recall_query(text) == text
+    # Nothing left after the filler: the question itself is used.
+    assert _recall_query("What did we talk about?") == "What did we talk about?"

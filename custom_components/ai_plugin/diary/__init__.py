@@ -52,6 +52,47 @@ BLOCK_HEAD = (
 )
 
 
+# A question that refers back ("What were your thoughts again about
+# Portugal?") is mostly words about remembering, and they drown the topic:
+# the note on Portugal's floods scored 0.063, under _MIN_SIMILARITY, and
+# 0.359 for the topic alone (2026-11-16). Such a question is matched on its
+# other words. On the eval set (60 follow-ups) the right note came first 51
+# times instead of 46, and no question without a cue changed.
+_REFERS_BACK_RE = re.compile(
+    r"\b(?:again|earlier|before|last\s+(?:time|week|weekend)"
+    r"|you\s+(?:said|suggested|recommended|mentioned|wrote|told)"
+    r"|your\s+(?:thoughts|opinion|views?|take)"
+    r"|(?:did|have|had)\s+(?:i|we)|we\s+(?:said|talked|discussed|had|wanted|planned|thought)"
+    r"|(?:do|did)\s+you\s+(?:still\s+)?remember|what\s+was"
+    r"|nochmal|noch\s*mal|vorhin|gestern|letzte[nsm]?|hattest\s+du|hatten\s+wir"
+    r"|wollten\s+wir|du\s+hast|habe\s+ich|hab\s+ich|was\s+war|wie\s+ging|wann\s+war"
+    r"|erinnerst\s+du|deine\s+(?:gedanken|meinung))\b",
+    re.IGNORECASE,
+)
+_RECALL_FILLER = frozenset("""
+what were was is are am be been your my our his her their its thoughts thought
+opinion again about regarding did do does we i you me us tell told say said talk
+talked talking speak spoke discuss discussed mention mentioned remember recall
+know knew the a an of to in on at for with and or that this those these there it
+how why when where which who whom so then just still please can could would will
+should
+war waren ist sind deine dein deinen meine mein unsere gedanken meinung nochmal
+noch mal über haben hatten hatte habe hab hast wir ich du dir mir uns erzählt
+erzaehlt gesagt gesprochen geredet erinnerst erinnern dich weißt weisst der die
+das den dem des ein eine einen einem und oder zu von im in am an auf für mit wie
+warum wann wo welche welcher welches wer dass bitte kannst
+""".split())
+
+
+def _recall_query(text: str) -> str:
+    """What a note is matched on: a question that refers back without its
+    words about remembering, anything else as it is."""
+    if not _REFERS_BACK_RE.search(text):
+        return text
+    kept = [w for w in re.findall(r"\w+", text) if w.lower() not in _RECALL_FILLER]
+    return " ".join(kept) if kept else text
+
+
 def _words(text: str) -> set[str]:
     """Longer words, cut to a stem-like prefix: "Linsensuppe" meets "Linsen"."""
     return {w[:6] for w in re.findall(r"\w+", text.lower()) if len(w) > 3}
@@ -201,7 +242,7 @@ class DiaryManager:
         if not pool or not text.strip():
             return []
         if self._encoder is not None:
-            query = self._encoder.embed(text)
+            query = self._encoder.embed(_recall_query(text))
             if query is None:
                 return []
             scored = []

@@ -28,12 +28,15 @@ from .const import (
     CONF_FEEDBACK_LOOP_DEVICES,
     CONF_FOLLOW_UP_DELAY,
     CONF_CONVERSATION_MEMORY,
+    CONF_OFFLINE_FALLBACK,
     CONF_SELF_ECHO_FILTER,
     CONVERSATION_CLOSE_PHRASES,
     DEFAULT_FOLLOW_UP_DELAY,
     DEFAULT_CONVERSATION_MEMORY,
     MAX_CONVERSATION_MEMORY,
+    DEFAULT_OFFLINE_FALLBACK,
     DEFAULT_SELF_ECHO_FILTER,
+    OFFLINE_RETRY_S,
     DOMAIN,
     ECHO_MATCH_THRESHOLD,
     ECHO_MIN_TOKENS,
@@ -42,10 +45,11 @@ from .const import (
     ends_with_question,
     follow_up_mode,
 )
-from .exceptions import OrchestratorError
+from .exceptions import BackendUnreachable, OrchestratorError
 from .i18n import L
 from .music_ducking import room_players
 from .orchestrator import Orchestrator
+from .shortcuts.farewell import says_leaving
 from .satellite_speech import mic2mp_for, satellite_entity
 from .shortcuts import looks_like_command
 
@@ -852,6 +856,46 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         )
         return True
 
+    # Until this monotonic time, turns go straight to Home Assistant Assist.
+    _backend_down_until: float = 0.0
+
+    def _offline_fallback_on(self) -> bool:
+        return bool(self._entry.options.get(CONF_OFFLINE_FALLBACK, DEFAULT_OFFLINE_FALLBACK))
+
+    async def _ask_home_assistant(
+        self, user_input: ConversationInput, conversation_id: str
+    ) -> ConversationResult | None:
+        """The turn answered by Home Assistant's built-in Assist agent, or None.
+
+        Used while the model server is unreachable, so lights, timers and
+        other built-in intents still work by voice."""
+        _LOGGER.warning(
+            "AI Plugin: model server unreachable, Home Assistant Assist answers %r",
+            user_input.text[:80],
+        )
+        try:
+            result = await conversation.async_converse(
+                hass=self.hass,
+                text=user_input.text,
+                conversation_id=None,
+                context=user_input.context,
+                language=user_input.language,
+                agent_id=getattr(conversation, "HOME_ASSISTANT_AGENT", "conversation.home_assistant"),
+                device_id=user_input.device_id,
+                satellite_id=getattr(user_input, "satellite_id", None),
+            )
+        except Exception:  # noqa: BLE001 — the plugin's own error reply follows
+            _LOGGER.warning("AI Plugin: Home Assistant Assist fallback failed", exc_info=True)
+            return None
+        speech = (result.response.speech or {}).get("plain", {}).get("speech", "")
+        if speech:
+            self._remember_reply(user_input.device_id, speech)
+        return ConversationResult(
+            response=result.response,
+            conversation_id=conversation_id,
+            continue_conversation=False,
+        )
+
     async def _async_handle_message(
         self, user_input: ConversationInput, chat_log
     ) -> ConversationResult:
@@ -964,9 +1008,28 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 consumer = asyncio.get_running_loop().create_task(_consume())
 
         stream_capable = hasattr(chat_log, "async_add_delta_content_stream")
+
+        async def _sentence_trigger() -> str | None:
+            # An automation with a sentence trigger ("I'm leaving") is the
+            # user's own answer to those words. Home Assistant runs them only
+            # for its own agent, so they are run here.
+            handle = getattr(conversation, "async_handle_sentence_triggers", None)
+            if handle is None:
+                return None
+            try:
+                return await handle(self.hass, user_input, chat_log)
+            except Exception:  # noqa: BLE001 — the turn goes on without it
+                _LOGGER.warning("AI Plugin: sentence triggers failed", exc_info=True)
+                return None
+
+        offline = False
         if is_echo:
             # Skip the LLM entirely; nothing to say, nothing to record.
             reply = ""
+        elif self._offline_fallback_on() and time.monotonic() < self._backend_down_until:
+            # The server failed moments ago: do not make this turn wait for it.
+            reply = ""
+            offline = True
         else:
             try:
                 reply = await self._orchestrator.async_process(
@@ -976,11 +1039,20 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                     device_id=user_input.device_id,
                     user_id=user_id,
                     on_delta=_on_delta if stream_capable else None,
+                    sentence_trigger=_sentence_trigger,
                 )
             except OrchestratorError as exc:
                 _LOGGER.error("AI Plugin error processing message: %s", exc)
                 _lang = (user_input.language or "en").split("-")[0].lower()
                 reply = f"{L.template('err_process', _lang)} ({exc})"
+                if (
+                    isinstance(exc, BackendUnreachable)
+                    and exc.nothing_done
+                    and consumer is None
+                    and self._offline_fallback_on()
+                ):
+                    self._backend_down_until = time.monotonic() + OFFLINE_RETRY_S
+                    offline = True
             finally:
                 if consumer is not None:
                     queue.put_nowait(None)
@@ -993,6 +1065,13 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
 
             # Record this reply so the next turn can recognise it as echo.
             self._remember_reply(user_input.device_id, reply)
+
+        if offline:
+            handed = await self._ask_home_assistant(user_input, conversation_id)
+            if handed is not None:
+                return handed
+            _lang = (user_input.language or "en").split("-")[0].lower()
+            reply = reply or L.template("err_process", _lang)
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(reply)
@@ -1037,6 +1116,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             None
             if self._enrollment_active(user_input.device_id)
             else _match_close_phrase(user_input.text)
+            or ("leaving" if says_leaving(user_input.text) else None)
         )
         if close_match is not None:
             _LOGGER.info(

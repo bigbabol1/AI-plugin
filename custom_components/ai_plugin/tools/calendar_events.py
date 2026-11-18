@@ -15,7 +15,7 @@ import re
 from typing import Any
 
 from ..i18n import L
-from ..scheduler.when import WhenError, parse_clock, parse_day
+from ..scheduler.when import WhenError, on_weekday_said, parse_clock, parse_day, weekday_said
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,6 +122,13 @@ async def async_add_event(
         lang = (language or "en").split("-")[0].lower()
         repeat = _repeat(arguments, user_message, lang)
         day = parse_day(arguments.get("day"), now.date())
+        # The model works out the date and sometimes miscounts: "on Saturday"
+        # said on a Thursday was stored on Friday (2026-11-12). The weekday
+        # the user named wins.
+        # A weekday inside the name ("Sunday brunch") is not the date.
+        said = weekday_said(user_message)
+        if said is not None and weekday_said(summary) is None and day.weekday() != said:
+            day = on_weekday_said(day, said, now.date())
         # "Added" for a date gone by, with no year said, is an entry nobody ever
         # sees again. A repeating one comes round again, so its date may be past.
         if day < now.date() and repeat is None:

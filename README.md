@@ -43,6 +43,8 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
 - **Calendar entries by voice**: "Put the dentist on my calendar for Friday at 10", and "Delete the dentist on Friday". It asks before removing anything you didn't name.
 - **Doors, windows and blinds**: "Are all windows closed?" reads the sensors, "Close all blinds except the bedroom" leaves the bedroom and the awning alone.
 - **Messages and moving music**: "Tell Anna dinner is ready", "Tell the kitchen…", "Move the music to the bedroom".
+- **Radio and speaker groups**: "Play Radio Eins", "Play jazz on all speakers".
+- **Still works when the model is down**: commands go to Home Assistant's own Assist until the model server is back.
 - **Voice recognition** *(optional)*: knows who is speaking, so each person gets their own memory. It runs inside Home Assistant, with no add-on and no cloud.
 - **Find my phone**: "Where is my phone?" rings it loudly, even on silent.
 - **Where people are**: "Where's my wife?", "Is Anna home?", "Who is home?" are answered from Home Assistant's people.
@@ -237,6 +239,8 @@ Timers count down a length of time and only ring. These are for a clock time, an
 | *"Tell everyone dinner is ready"* | Home Assistant's own broadcast to every satellite |
 | *"Remind Anna to buy milk at 5"* | The reminder goes to Anna's phone, or is spoken here if she has none |
 | *"Move the music to the bedroom"*, *"Take this to the kitchen"* | What is playing moves to that room. Needs Music Assistant |
+| *"Play Radio Eins"*, *"Play RTL radio"* | The station, found through Music Assistant's radio search. *"Play radio"* alone asks which station |
+| *"Play jazz on all speakers"* | Plays on the Music Assistant speaker or group with that name or alias, even one in no room |
 
 *"Play some music"* with nothing named plays from the taste you saved (*"Remember that I like jazz and soul"*): a different playlist each time, shuffled. With none saved, it asks what you would like to hear.
 
@@ -392,6 +396,7 @@ On a 7–12B model, latency is won or lost in three places:
 | Minimum match score | `0.35` | Higher means fewer wrong names and more "unknown" |
 | Minimum lead over the next person | `0.10` | How clearly the best match must beat the second |
 | Ignore the satellite hearing its own reply | on | Self-echo filter |
+| Use Home Assistant Assist when the model server is down | on | A turn the model server cannot take goes to Home Assistant's built-in Assist agent; for a minute after that, turns go there directly |
 | Force-end conversations on these satellites | none | Feedback-loop guard for setups with TTS on a separate speaker |
 | Location bias | on | Scopes "near me" searches to your home (fails open) |
 | Location entity | unset | Live location source instead of HA's home coordinates |
@@ -405,6 +410,7 @@ On a 7–12B model, latency is won or lost in three places:
 | Model asks questions instead of acting | Lower the temperature to 0.1–0.3, or use a stronger tool-calling model. |
 | Slow first reply after a quiet period | Set **Ollama keep-alive**. |
 | Replies don't start speaking early | Streaming needs the Ollama backend and a streaming-capable TTS engine. Other setups get the full reply at once. |
+| Answers sound like Home Assistant's own Assist ("Sorry, I couldn't understand that") | The model server was unreachable, so Assist answered. Check that Ollama is running; the plugin tries the server again after a minute |
 | *Let the AI decide* listens after every reply | The model is closing with filler questions. Add "Do not end with a question unless you need an answer" to the system prompt, or try a stronger model. |
 | The assistant answers itself in a loop | Replies are playing on a separate speaker. See [Follow-up listening](#follow-up-listening). |
 | Timer LEDs count down but there's no sound | The ring plays on the satellite's own speaker. Enable **Announce timers**. |

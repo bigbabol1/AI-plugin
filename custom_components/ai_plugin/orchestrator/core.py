@@ -69,6 +69,7 @@ from ..const import (
 from ..context_manager import ContextManager
 from ..diary import BLOCK_MARKER as DIARY_MARKER, format_block as format_diary_block
 from ..diary.writer import build_prompt as diary_prompt, parse_notes as diary_notes
+from ..exceptions import BackendUnreachable
 from ..i18n import L, SUPPORTED_LANGS
 from ..providers.openai_compat import OpenAICompatProvider
 from ..shortcuts import (
@@ -77,6 +78,7 @@ from ..shortcuts import (
     async_try_media_shortcut,
     try_shortcut,
 )
+from ..shortcuts.farewell import try_farewell
 from ..shortcuts.phone import (
     RING_PHONE_SCHEMA,
     RING_PHONE_TOOL,
@@ -141,6 +143,8 @@ if TYPE_CHECKING:
     from ..tools.mcp_client import MCPToolRegistry
 
 from .delta_gate import _DeltaGate
+from .heard_name import with_heard_name
+from .station_answer import as_station_request
 from .grounding import (
     _TIMER_WRITE_TOOL_NAMES,
     _ACTUATOR_TOOL_NAMES,
@@ -152,6 +156,8 @@ from .grounding import (
     _any_media_success,
     _claims_undone_action,
     _claims_unsent_message,
+    claims_action_done,
+    claims_message_sent,
     _any_tool_call,
     _any_unobservable_action,
     _get_entity_missed,
@@ -391,6 +397,17 @@ def _remember_was_refused(tool_msgs: list[dict]) -> bool:
     )
 
 
+def _claim_a_check_may_replace(sentence: str) -> bool:
+    """True when the checks after a turn may replace a reply holding this
+    sentence: it says something was saved, sent, done or rescheduled."""
+    return (
+        claims_saved(sentence)
+        or claims_message_sent(sentence)
+        or claims_action_done(sentence)
+        or claims_schedule_changed(sentence)
+    )
+
+
 class Orchestrator(
     EntityContextMixin, PromptBlocksMixin, PromptWarmupMixin, TimerAnnounceMixin
 ):
@@ -586,6 +603,18 @@ class Orchestrator(
             ]
         return tool_schemas
 
+    async def _refresh_tools_while_starting(self) -> None:
+        hass = getattr(self, "_hass", None)
+        if hass is None or self._mcp is None or getattr(hass, "is_running", True) is not False:
+            return
+        refresh = getattr(self._mcp, "async_refresh_builtin", None)
+        if refresh is None:
+            return
+        try:
+            await refresh()
+        except Exception:  # noqa: BLE001 — a turn must not fail over this
+            _LOGGER.debug("AI Plugin: tool refresh during startup failed", exc_info=True)
+
     async def async_process(
         self,
         message: str,
@@ -594,6 +623,7 @@ class Orchestrator(
         device_id: str | None = None,
         user_id: str | None = None,
         on_delta=None,
+        sentence_trigger=None,  # Callable[[], Awaitable[str | None]] | None
     ) -> str:
         """Process a user message and return the assistant's reply.
 
@@ -603,6 +633,8 @@ class Orchestrator(
             language: BCP-47 language code (passed through from HA Assist).
             device_id: Optional device ID (used for voice mode detection
                        in future; currently unused in Week 1).
+            sentence_trigger: Runs Home Assistant's sentence triggers for
+                       this turn; their reply, or None when none matched.
 
         Returns:
             The assistant's reply text.
@@ -631,6 +663,13 @@ class Orchestrator(
         from ..const import TIMER_DONE_SENTINEL  # noqa: PLC0415
         if message.startswith(TIMER_DONE_SENTINEL):
             return await self._handle_timer_done(message, device_id, lang)
+
+        # While Home Assistant is still starting, integrations bring their
+        # tools without any entity changing (the calendar read was missing
+        # from the list read at setup, so "Is anything on the calendar on
+        # Saturday?" searched the web and an event was written, 2026-11-12,
+        # 11 s before Home Assistant reported started). Read them again.
+        await self._refresh_tools_while_starting()
 
         # A voice-enrollment session on this satellite owns the turn: the
         # answer is a voice sample, never a command (runs before shortcuts,
@@ -664,6 +703,7 @@ class Orchestrator(
             on_delta if stream_safe else None,
             lang=lang,
             voice_mode=voice_mode,
+            replaceable=_claim_a_check_may_replace,
         )
         # v0.5.15: no more [HOME CONTEXT] YAML dump. Small LLMs drown in it and
         # hallucinate their way through inventory questions. The model instead
@@ -693,6 +733,27 @@ class Orchestrator(
                 ),
                 "",
             ))
+            # A recipient's name misheard as another word ("aren't" for a
+            # name): corrected before anything reads the message.
+            if self._feature_on(CONF_TOOL_MESSAGES) and getattr(self, "_hass", None) is not None:
+                try:
+                    heard = with_heard_name(
+                        message, _PREVIOUS_REPLY.get(),
+                        people_with_phones(self._hass).values(), lang,
+                    )
+                except Exception:  # noqa: BLE001 — the turn goes on as heard
+                    _LOGGER.debug("AI Plugin: name correction failed", exc_info=True)
+                    heard = message
+                if heard != message:
+                    _LOGGER.info("AI Plugin: heard %r as %r", message[:80], heard[:80])
+                    message = heard
+
+            # An answer to "Which station?" asks for that station.
+            station_request = as_station_request(message, _PREVIOUS_REPLY.get(), lang)
+            if station_request != message:
+                _LOGGER.info("AI Plugin: %r answers which station: %r", message[:80], station_request[:80])
+                message = station_request
+
             # 1. Add user turn to history.
             await self._context_mgr.add_turn(conversation_id, "user", message)
 
@@ -721,6 +782,27 @@ class Orchestrator(
                     conversation_id, "assistant", message_reply
                 )
                 return message_reply
+
+            # An automation with a sentence trigger for these words answers
+            # them. After the answer turns above, for the same reason as the
+            # goodbye below.
+            if sentence_trigger is not None:
+                trigger_reply = await sentence_trigger()
+                if trigger_reply is not None:
+                    _LOGGER.info("AI Plugin: a sentence trigger answered %r", message[:80])
+                    await self._context_mgr.add_turn(
+                        conversation_id, "assistant", trigger_reply
+                    )
+                    return trigger_reply
+
+            # "I'm leaving.": a goodbye. Left to the model it was "noted" as a
+            # fact, and the unbacked-claim check then said "I haven't saved
+            # that" (2026-11-16). After the answer turns above, where the same
+            # words can be the message to pass on.
+            farewell = try_farewell(message, lang)
+            if farewell is not None:
+                await self._context_mgr.add_turn(conversation_id, "assistant", farewell)
+                return farewell
 
             # 1b. Deterministic pre-LLM shortcut for "<attr> in <area>" questions.
             # Bypasses the tool loop entirely when we can answer from the
@@ -990,8 +1072,12 @@ class Orchestrator(
                     report["pct"] * 100,
                 )
 
+            # Safeguards that changed this turn, logged once at its end so
+            # each can be judged on what it did (helped or hurt).
+            fired: list[str] = []
             # 5. Call LLM — native tool loop when tools available, plain
             #    completion otherwise.
+            sent_messages = len(messages)
             try:
                 if tool_schemas:
                     reply, tool_msgs = await self._tool_loop(
@@ -1007,11 +1093,16 @@ class Orchestrator(
                 else:
                     reply = await self._provider.async_complete(messages)
                     tool_msgs = []
-            except Exception:
+            except Exception as exc:
+                # The first request failed before any tool ran: nothing in the
+                # home changed, so another agent may take the turn.
+                if isinstance(exc, BackendUnreachable) and len(messages) == sent_messages:
+                    exc.nothing_done = True
                 # Roll back the user turn so history stays consistent.
                 await self._context_mgr.remove_last_turn(conversation_id)
                 raise
 
+            model_reply = reply
             # 5b. Grounding verifier: if the user asked a state-set question
             # ("any lights on?", "which switches are off?") and the tool loop
             # never called list_entities, the model is answering from imagination.
@@ -1036,6 +1127,7 @@ class Orchestrator(
                 and not _any_tool_call(tool_msgs, "timer_status")
                 and not _any_tool_call(tool_msgs, "list_scheduled")
             ):
+                fired.append("state_set_retry")
                 _LOGGER.info(
                     "AI Plugin: grounding retry — state-set query had no list_entities call"
                 )
@@ -1071,6 +1163,7 @@ class Orchestrator(
                 and readonly_schemas
                 and not _any_tool_call(tool_msgs, "search_entities")
             ):
+                fired.append("fuzzy_retry")
                 _LOGGER.info(
                     "AI Plugin: fuzzy-resolve retry — get_entity(%r) missed, "
                     "search_entities was not called",
@@ -1127,6 +1220,7 @@ class Orchestrator(
                 and not _answers_from_notes(reply, diary_texts)
             )
             if _needs_search:
+                fired.append("forced_search")
                 _LOGGER.info(
                     "AI Plugin: web-search grounding — orchestrator injecting mandatory search"
                 )
@@ -1183,6 +1277,7 @@ class Orchestrator(
                 # Only schedule_action can do it later, and it is switched off.
                 and not (later and not self._feature_on(CONF_TOOL_ALARMS))
             ):
+                fired.append("action_retry")
                 _LOGGER.info(
                     "AI Plugin: action-command grounding retry — %r had no actuator call",
                     message[:80],
@@ -1233,6 +1328,7 @@ class Orchestrator(
                         # "I'll turn off all the lights" now would tell the
                         # user the action succeeded while nothing moved —
                         # replace it with the truth.
+                        fired.append("action_not_done")
                         _LOGGER.warning(
                             "AI Plugin: action command %r produced no actuator "
                             "call — replacing promise reply %r with failure "
@@ -1257,6 +1353,7 @@ class Orchestrator(
             if narration_stripped:
                 stored_reply = narration_stripped
             elif reply.strip():
+                fired.append("narration_only")
                 _LOGGER.warning(
                     "AI Plugin: reply was pure narration (%r) — "
                     "downgrading to fallback so user isn't told an action "
@@ -1302,6 +1399,7 @@ class Orchestrator(
             if (
                 not tool_msgs or _remember_was_refused(tool_msgs)
             ) and claims_saved(stored_reply):
+                fired.append("saved_claim")
                 _LOGGER.info(
                     "AI Plugin: reply claimed a fact was saved, but none was: %r",
                     stored_reply[:120],
@@ -1313,12 +1411,14 @@ class Orchestrator(
                     lang,
                 )
             if _claims_unsent_message(message, stored_reply, tool_msgs):
+                fired.append("sent_claim")
                 _LOGGER.info(
                     "AI Plugin: reply claimed a message went out, but none did: %r",
                     stored_reply[:120],
                 )
                 stored_reply = reply = L.template("message_not_sent", lang)
             if _claims_undone_action(message, stored_reply, tool_msgs):
+                fired.append("action_claim")
                 _LOGGER.info(
                     "AI Plugin: reply claimed an action, but none was done: %r",
                     stored_reply[:120],
@@ -1339,6 +1439,7 @@ class Orchestrator(
                     if claims_schedule_changed(stored_reply) and not self._brought_tool_ran(
                         tool_msgs
                     ):
+                        fired.append("schedule_claim")
                         _LOGGER.info(
                             "AI Plugin: reply claimed a schedule change, but none was made: %r",
                             stored_reply[:120],
@@ -1380,6 +1481,7 @@ class Orchestrator(
                 # Defensive: small models occasionally return empty content
                 # with no tool calls (prompt/tool confusion). Surface a
                 # user-facing fallback so TTS doesn't play silence.
+                fired.append("empty_reply")
                 _LOGGER.warning(
                     "AI Plugin: empty reply from model (conv=%s, tools_called=%d) — substituting fallback",
                     conversation_id, len(tool_msgs),
@@ -1392,10 +1494,20 @@ class Orchestrator(
             # was not yet forwarded (or the whole reply when nothing was).
             # TTS-suppressed turns arrive here with an empty stored_reply —
             # flush_final sends nothing for those.
+            if fired:
+                _LOGGER.info(
+                    "AI Plugin safeguard: %s | asked=%r | tools=%s | model=%r | final=%r",
+                    ",".join(fired), message[:200],
+                    [tc.get("function", {}).get("name") for m in tool_msgs for tc in m.get("tool_calls") or []],
+                    (model_reply or "")[:300], (stored_reply or "")[:300],
+                )
             gate.flush_final(stored_reply)
 
             await self._context_mgr.add_turn(conversation_id, "assistant", history_reply)
-            self._diary_note(conversation_id, "assistant", history_reply)
+            self._diary_note(
+                conversation_id, "assistant", history_reply,
+                acted=self._turn_used_home_tools(tool_msgs),
+            )
             await self._announce_thinking_refused()
 
             # Track last-controlled entities for explicit context injection.
@@ -2196,13 +2308,27 @@ class Orchestrator(
         content: str,
         owner: str | None = None,
         language: str | None = None,
+        acted: bool = False,
     ) -> None:
-        """Keep the turn for the diary writer (history itself gets summarised)."""
-        if getattr(self, "_diary", None) is None or not content:
+        """Keep the turn for the diary writer (history itself gets summarised).
+
+        ``acted``: the reply came from the home (calendar, alarms, reminders,
+        devices, saved facts), so the whole turn stays out. Those are kept
+        where they live, and a note goes stale when they change: "the walk is
+        on Saturday" was read back after the walk had been put on Friday, and
+        the user was told of a walk today that was not there (2026-11-14).
+        """
+        if getattr(self, "_diary", None) is None:
             return
         meta = self.__dict__.setdefault("_diary_convs", {}).setdefault(
             conversation_id, _new_diary_conv()
         )
+        if acted:
+            if meta["turns"] and meta["turns"][-1]["role"] == "user":
+                meta["turns"].pop()
+            return
+        if not content:
+            return
         if role == "user":
             if meta["turns"] and meta["owner"] != owner:
                 meta["mixed"] = True
@@ -2211,6 +2337,14 @@ class Orchestrator(
         meta["turns"].append({"role": role, "content": content})
         meta["last"] = time.monotonic()
         meta["when"] = datetime.now(timezone.utc)
+
+    def _turn_used_home_tools(self, tool_msgs: list[dict]) -> bool:
+        """True when the turn called anything but a look-up on the web."""
+        return any(
+            not self._is_lookup_tool(tc.get("function", {}).get("name") or "")
+            for m in tool_msgs or []
+            for tc in m.get("tool_calls") or []
+        )
 
     async def _async_diary_tick(self, _now=None) -> None:
         """Write the notes of conversations that went quiet; prune once a day."""
@@ -2224,7 +2358,10 @@ class Orchestrator(
             self._diary_pruned = now
             await diary.async_prune(self._diary_days)
         for conv_id, meta in list(self._diary_convs.items()):
-            if now - meta["last"] < DIARY_QUIET_S or not meta["turns"]:
+            if now - meta["last"] < DIARY_QUIET_S:
+                continue
+            if not meta["turns"]:
+                self._diary_convs.pop(conv_id, None)
                 continue
             self._diary_convs.pop(conv_id, None)
             await self._async_write_diary(meta)
