@@ -224,7 +224,7 @@ async def test_a_conversation_of_two_people_belongs_to_nobody() -> None:
     orch._provider.async_complete = AsyncMock(return_value='{"notes": ["A note."]}')
     orch._diary_note("c3", "user", "First question here.", "person.anna", "en")
     orch._diary_note("c3", "user", "Second question here.", "person.ben", "en")
-    orch._diary_convs["c3"]["last"] = 0.0
+    orch._diary_convs["c3"]["last"] -= core.DIARY_QUIET_S + 1
     await orch._async_diary_tick()
     assert diary.entries()[-1]["owner"] is None
 
@@ -235,7 +235,7 @@ async def test_no_notes_are_written_while_a_turn_runs() -> None:
     orch._provider = MagicMock()
     orch._provider.async_complete = AsyncMock(return_value='{"notes": ["x"]}')
     orch._diary_note("c4", "user", "Some question here.", "person.anna", "en")
-    orch._diary_convs["c4"]["last"] = 0.0
+    orch._diary_convs["c4"]["last"] -= core.DIARY_QUIET_S + 1
     lock = orch._get_conv_lock("other")
     async with lock:
         await orch._async_diary_tick()
@@ -285,7 +285,7 @@ async def test_a_conversation_only_with_the_home_leaves_no_note() -> None:
     orch._provider.async_complete = AsyncMock(return_value='{"notes": ["x"]}')
     orch._diary_note("c6", "user", "Delete that appointment.", "person.anna", "en")
     orch._diary_note("c6", "assistant", "Removed.", acted=True)
-    orch._diary_convs["c6"]["last"] = 0.0
+    orch._diary_convs["c6"]["last"] -= core.DIARY_QUIET_S + 1
     await orch._async_diary_tick()
     orch._provider.async_complete.assert_not_awaited()
     assert "c6" not in orch._diary_convs
