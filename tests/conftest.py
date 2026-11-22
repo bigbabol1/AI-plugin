@@ -65,6 +65,8 @@ class _Platform:
     CONVERSATION = "conversation"
     AI_TASK = "ai_task"
     STT = "stt"
+    SENSOR = "sensor"
+    BINARY_SENSOR = "binary_sensor"
 
 
 _make_module("homeassistant.const", Platform=_Platform, EVENT_STATE_CHANGED="state_changed",

@@ -33,6 +33,14 @@ templates:
   err_action_failed: "I couldn't carry that out. Try naming the device or the room."
   sweep_all_on:  "OK, all {label} are on."
   sweep_all_off: "OK, all {label} are off."
+  # A switch confirmed in words where nobody sees it (text chat, the app).
+  action_done_on: "{name} is on."
+  action_done_off: "{name} is off."
+  action_done_open: "{name} is open."
+  action_done_close: "{name} is closed."
+  sweep_room_on: "OK, the {label} in {area} are on."
+  sweep_room_off: "OK, the {label} in {area} are off."
+  action_done: "Done."
   note_tool_limit:   "[Note: reached tool call limit — response may be incomplete.]"
   tool_wait:         "One second."
 

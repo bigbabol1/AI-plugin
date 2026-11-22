@@ -217,3 +217,20 @@ def _is_online_followup(text: str, tool_msgs: list[dict]) -> bool:
     # Only treat as online follow-up when there is evidence of a prior
     # web search in the current conversation turn's tool messages.
     return _any_tool_call(tool_msgs, "web_search")
+
+
+# The user speaks of themselves: "Which film did I pick last weekend?", "What
+# did we plan?". Only such a question can be answered from a note of an earlier
+# conversation. A question about the world cannot: "Is there any celebrations
+# happening in Berlin today?" was answered from a note of 13 November about
+# that weekend's events, and the search it needed was skipped (2026-11-22).
+_ABOUT_THE_USER_RE = re.compile(
+    r"\b(?:i|me|my|mine|we|us|our|ours|"
+    r"ich|mich|mir|mein\w*|wir|uns|unser\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _speaks_of_the_user(text: str) -> bool:
+    """True when the message is about the speaker, not only about the world."""
+    return bool(text and _ABOUT_THE_USER_RE.search(text))

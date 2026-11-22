@@ -543,12 +543,22 @@ class LightToolsMixin:
                 if exposed_only and not self._is_exposed(eid):
                     continue
                 st = hass.states.get(eid)
-                friendly = _s((st.attributes.get("friendly_name") if st else "")).lower()
-                if needle in (eid.lower(), friendly) or needle in friendly:
+                # Aliases count: "bed left" is how a German-named lamp is
+                # called in English, and the on/off shortcut already finds it
+                # that way. Missing it here made the model fall back to the
+                # whole room (2026-11-21).
+                names = [
+                    _s(st.attributes.get("friendly_name")) if st else "",
+                    _s(entry.name), _s(entry.original_name),
+                    *(_s(a) for a in (entry.aliases or ()) if a),
+                ]
+                names = [n.lower() for n in names if n]
+                if needle == eid.lower() or any(needle in n for n in names):
                     ids.append(eid)
             if not ids:
                 return (
-                    f"No exposed light matches {name!r}. Try search_entities."
+                    f"No exposed light matches {name!r}. Try search_entities; "
+                    "do not set the whole room instead."
                 )
             ids.sort()
             scope_label = name

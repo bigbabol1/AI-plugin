@@ -99,6 +99,9 @@ _STATION_FILLER = {
     "rádio", "emisora", "zender", "stacja", "stacji", "stację", "on", "please", "bitte",
 }
 _STATIONS_SEARCHED = 5
+# Radio Browser keeps dead streams: the first "BBC World Service" answered
+# 410 Gone while the next one played (2026-11-21). Try a few before giving up.
+_STATIONS_TRIED = 3
 NO_STATION_NAMED_RESULT = (
     "[Nothing played: no radio station was named. Ask which station they would like.]"
 )
@@ -117,19 +120,34 @@ def asks_for_radio(query: str) -> bool:
     return bool(_RADIO_WORDS_RE.search(query))
 
 
-def best_station(query: str, stations: list[dict]) -> dict | None:
-    """The first station whose name shares a word with the request, or None.
+def matching_stations(query: str, stations: list[dict]) -> list[dict]:
+    """The stations whose name shares a word with the request, in search order.
 
     Without a shared word the search found something else: "RTL" alone
     listed a country stream first."""
     wanted = station_words(query)
+    found = []
     for station in stations:
         if not station.get("uri"):
             continue
         name_words = set(re.findall(r"[\w’']+", str(station.get("name") or "").casefold()))
         if wanted & name_words:
-            return station
-    return None
+            found.append(station)
+    return found
+
+
+def best_station(query: str, stations: list[dict]) -> dict | None:
+    """The first matching station, or None."""
+    found = matching_stations(query, stations)
+    return found[0] if found else None
+
+
+def station_name_only(query: str) -> str:
+    """The request without the words that only say it is a station: "BBC
+    World Service Radio" gives "BBC World Service". Radio Browser wants every
+    searched word in the name, and no BBC World Service entry says "Radio"."""
+    words = re.findall(r"[\w’']+", query)
+    return " ".join(w for w in words if w.casefold() not in _STATION_FILLER)
 
 
 class MediaToolsMixin:
@@ -232,14 +250,13 @@ class MediaToolsMixin:
                 return f"No {scope}media_player in {target_area.name}."
 
         title = query
+        stations: list[dict] = []
         if from_taste:
             query, title = await self._taste_playlist(genres)
             media_type = "playlist"
         elif wants_station:
-            station = await self._find_station(query)
-            if station is not None:
-                query = station["uri"]
-                title = str(station.get("name") or title).strip()
+            stations = await self._find_stations(query)
+            if stations:
                 media_type = "radio"
                 radio_mode = False
             elif media_type == "radio":
@@ -249,46 +266,77 @@ class MediaToolsMixin:
                 )
         await self._set_shuffle(entity_id, from_taste)
 
+        if stations:
+            for station in stations[:_STATIONS_TRIED]:
+                name = str(station.get("name") or title).strip()
+                try:
+                    await self._play_media(entity_id, station["uri"], "radio", False)
+                except Exception as exc:  # noqa: BLE001 — a dead stream: try the next one
+                    _LOGGER.warning(
+                        "AI Plugin play_music: station %r (%s) did not play: %s",
+                        name, station["uri"], exc,
+                    )
+                    continue
+                return f"OK — playing {name!r} (radio) on {entity_id}."
+            return (
+                f"[No working stream found for {title!r}: the stations found did not "
+                "play. Nothing is playing. Tell the user.]"
+            )
+
         try:
             _auto_radio = radio_mode if radio_mode is not None else (media_type == "track")
-            await self._hass.services.async_call(
-                "music_assistant",
-                "play_media",
-                target={"entity_id": entity_id},
-                service_data={
-                    "media_id": query,
-                    "media_type": media_type,
-                    "radio_mode": _auto_radio,
-                },
-                blocking=True,
-            )
+            await self._play_media(entity_id, query, media_type, _auto_radio)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("AI Plugin play_music failed")
             return f"[play_music failed: {exc}]"
 
         return f"OK — playing {title!r} ({media_type}) on {entity_id}."
 
-    async def _find_station(self, query: str) -> dict | None:
-        """A radio station in Music Assistant for a request like "RTL radio"."""
-        try:
-            entries = self._hass.config_entries.async_entries("music_assistant")
-            response = await self._hass.services.async_call(
-                "music_assistant",
-                "search",
-                {
-                    "config_entry_id": entries[0].entry_id,
-                    "name": query,
-                    "media_type": ["radio"],
-                    "limit": _STATIONS_SEARCHED,
-                },
-                blocking=True,
-                return_response=True,
-            )
-            stations = list((response or {}).get("radio", []))
-        except Exception:  # noqa: BLE001 — falls back to playing the words as asked
-            _LOGGER.debug("AI Plugin play_music: station search failed", exc_info=True)
-            return None
-        return best_station(query, stations)
+    async def _play_media(
+        self, entity_id: str, media_id: str, media_type: str, radio_mode: bool
+    ) -> None:
+        await self._hass.services.async_call(
+            "music_assistant",
+            "play_media",
+            target={"entity_id": entity_id},
+            service_data={
+                "media_id": media_id,
+                "media_type": media_type,
+                "radio_mode": radio_mode,
+            },
+            blocking=True,
+        )
+
+    async def _find_stations(self, query: str) -> list[dict]:
+        """Radio stations in Music Assistant for a request like "RTL radio",
+        best first. Searched as said, then without words like "radio"."""
+        tries = [query]
+        bare = station_name_only(query)
+        if bare and bare.casefold() != query.strip().casefold():
+            tries.append(bare)
+        for name in tries:
+            try:
+                entries = self._hass.config_entries.async_entries("music_assistant")
+                response = await self._hass.services.async_call(
+                    "music_assistant",
+                    "search",
+                    {
+                        "config_entry_id": entries[0].entry_id,
+                        "name": name,
+                        "media_type": ["radio"],
+                        "limit": _STATIONS_SEARCHED,
+                    },
+                    blocking=True,
+                    return_response=True,
+                )
+                stations = list((response or {}).get("radio", []))
+            except Exception:  # noqa: BLE001 — falls back to playing the words as asked
+                _LOGGER.debug("AI Plugin play_music: station search failed", exc_info=True)
+                return []
+            found = matching_stations(query, stations)
+            if found:
+                return found
+        return []
 
     async def _taste_playlist(self, genres: list[str]) -> tuple[str, str]:
         """A playlist for "play some music": (what to play, its name).

@@ -859,6 +859,47 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
     # Until this monotonic time, turns go straight to Home Assistant Assist.
     _backend_down_until: float = 0.0
 
+    def _activity(self):
+        """The entry's activity log for the sidebar panel, if set up."""
+        hass = getattr(self, "hass", None)
+        entry = getattr(self, "_entry", None)
+        if hass is None or entry is None:
+            return None
+        data = (getattr(hass, "data", None) or {}).get(DOMAIN, {})
+        data = data.get(entry.entry_id) if isinstance(data, dict) else None
+        return data.get("activity") if isinstance(data, dict) else None
+
+    def _log_activity(
+        self,
+        user_input,
+        reply: str,
+        started: float,
+        kind: str,
+        error: str | None,
+        conversation_id: str | None = None,
+    ) -> None:
+        """Note the turn for the panel; never lets the turn fail on it."""
+        activity = self._activity()
+        if activity is None:
+            return
+        try:
+            last = getattr(self._orchestrator, "last_turn", None) or {}
+            if kind != "answered":
+                last = {}
+            activity.record(
+                text=user_input.text,
+                reply=reply,
+                seconds=time.monotonic() - started,
+                device=user_input.device_id,
+                kind=kind,
+                tools=list(last.get("tools") or []),
+                safeguards=list(last.get("safeguards") or []),
+                error=error,
+                conversation_id=conversation_id,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: activity log failed", exc_info=True)
+
     def _offline_fallback_on(self) -> bool:
         return bool(self._entry.options.get(CONF_OFFLINE_FALLBACK, DEFAULT_OFFLINE_FALLBACK))
 
@@ -914,6 +955,8 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
         # Honour HA's session conversation_id so history resets when the
         # Assist panel is reopened or a new session begins. Long-term memory
         # lives in the remember/recall tool, not in conversation history.
+        started = time.monotonic()
+        error_text: str | None = None
         conversation_id = (
             getattr(chat_log, "conversation_id", None)
             or user_input.conversation_id
@@ -1043,6 +1086,7 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                 )
             except OrchestratorError as exc:
                 _LOGGER.error("AI Plugin error processing message: %s", exc)
+                error_text = str(exc)
                 _lang = (user_input.language or "en").split("-")[0].lower()
                 reply = f"{L.template('err_process', _lang)} ({exc})"
                 if (
@@ -1052,6 +1096,9 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
                     and self._offline_fallback_on()
                 ):
                     self._backend_down_until = time.monotonic() + OFFLINE_RETRY_S
+                    activity = self._activity()
+                    if activity is not None:
+                        activity.backend_down_until = self._backend_down_until
                     offline = True
             finally:
                 if consumer is not None:
@@ -1066,6 +1113,13 @@ class AIPluginConversationEntity(conversation.ConversationEntity):
             # Record this reply so the next turn can recognise it as echo.
             self._remember_reply(user_input.device_id, reply)
 
+        self._log_activity(
+            user_input, reply, started,
+            "echo" if is_echo else "offline" if offline
+            else "error" if error_text else "answered",
+            error_text,
+            conversation_id,
+        )
         if offline:
             handed = await self._ask_home_assistant(user_input, conversation_id)
             if handed is not None:

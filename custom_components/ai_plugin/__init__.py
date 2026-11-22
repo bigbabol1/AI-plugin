@@ -14,6 +14,7 @@ from .const import (
     DEFAULT_MEMORY_ENABLED,
     DOMAIN,
 )
+from .activity import ActivityLog, async_watch_sentence_triggers
 from .music_ducking import async_setup_listening_duck
 from .diary import DiaryManager
 from .scheduler import Scheduler
@@ -25,7 +26,13 @@ from .voice_id import VoiceIDManager
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CONVERSATION, Platform.AI_TASK, Platform.STT]
+PLATFORMS = [
+    Platform.CONVERSATION,
+    Platform.AI_TASK,
+    Platform.STT,
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -74,11 +81,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "voice_id": voice_id,
         "scheduler": scheduler,
         "diary": diary,
+        "activity": ActivityLog(),
     }
+    _watch_sentence_triggers(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _schedule_pipeline_sync(hass, entry, voice_id)
     _refresh_tools_on_entity_changes(hass, entry, mcp)
+
+    # The sidebar page: status, settings, voices, MCP servers, memory.
+    try:
+        from .panel import async_setup_panel  # noqa: PLC0415
+
+        await async_setup_panel(hass, entry)
+    except Exception:  # noqa: BLE001 — the assistant works without its page
+        _LOGGER.warning("AI Plugin: sidebar page not available", exc_info=True)
 
     # Quieter music while any satellite listens.
     entry.async_on_unload(async_setup_listening_duck(hass))
@@ -100,6 +117,28 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await mcp.async_teardown()
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+def _watch_sentence_triggers(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Show the turns an automation's sentence trigger answered in the panel's
+    feed. With several entries, a turn goes to the entry that had the
+    conversation before, or to the only entry."""
+    activity: ActivityLog = hass.data[DOMAIN][entry.entry_id]["activity"]
+
+    def owns(conversation_id: str) -> bool:
+        if activity.knows(conversation_id):
+            return True
+        others = [
+            d.get("activity")
+            for eid, d in hass.data.get(DOMAIN, {}).items()
+            if eid != entry.entry_id and isinstance(d, dict) and d.get("activity")
+        ]
+        return not others
+
+    try:
+        entry.async_on_unload(async_watch_sentence_triggers(hass, activity, owns))
+    except Exception:  # noqa: BLE001 — the feed is a nicety
+        _LOGGER.debug("AI Plugin: cannot watch sentence triggers", exc_info=True)
 
 
 def _own_hosts(hass: HomeAssistant) -> frozenset[str]:
@@ -228,6 +267,12 @@ def _refresh_tools_on_entity_changes(
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Integration removed: give the pipelines their original STT back."""
+    try:
+        from .panel import async_entry_removed  # noqa: PLC0415
+
+        await async_entry_removed(hass, entry)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("AI Plugin: sidebar page cleanup failed", exc_info=True)
     from .voice_id import pipelines  # noqa: PLC0415
 
     voice_id = VoiceIDManager(hass, entry)

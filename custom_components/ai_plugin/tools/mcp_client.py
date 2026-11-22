@@ -565,6 +565,7 @@ class MCPToolRegistry:
         own_hosts: frozenset[str] = frozenset(),
     ) -> None:
         self._builtin = builtin
+        self._configs = list(server_configs)
         self._replaced: list[dict[str, Any]] = []
         self._servers: list[Any] = []
         for cfg in server_configs:
@@ -607,6 +608,33 @@ class MCPToolRegistry:
                     "Home Assistant MCP server is no longer used"
                 )
             self._rebuild_tool_index()
+
+    def server_status(self) -> list[dict[str, Any]]:
+        """State and tool count of each configured server, in config order.
+
+        A server replaced by Home Assistant's built-in tools reports
+        ``builtin``. For the sidebar panel.
+        """
+        out: list[dict[str, Any]] = []
+        for cfg in self._configs:
+            conn = next(
+                (s for s in self._servers if getattr(s, "_config", None) is cfg), None
+            )
+            if conn is None:
+                out.append({"state": "builtin" if cfg in self._replaced else "off", "tools": 0})
+                continue
+            state = getattr(conn, "state", None)
+            out.append({
+                "state": getattr(state, "name", str(state)).lower(),
+                "tools": len(conn.tools or []) if conn.connected else 0,
+            })
+        return out
+
+    def builtin_tool_count(self) -> int:
+        """How many of Home Assistant's own tools are built in right now."""
+        if self._builtin is None or self._builtin not in self._servers:
+            return 0
+        return len(getattr(self._builtin, "tools", None) or [])
 
     async def async_teardown(self) -> None:
         """Disconnect all servers and kill stdio subprocesses.

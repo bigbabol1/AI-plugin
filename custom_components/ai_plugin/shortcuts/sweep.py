@@ -115,6 +115,7 @@ async def async_try_domain_sweep_shortcut(
     *,
     lang: str = "en",
     device_id: str | None = None,
+    confirm: bool = False,
 ) -> tuple[bool, str] | None:
     """Pre-LLM shortcut: switch every light/fan/socket in a scope on or off.
 
@@ -135,7 +136,9 @@ async def async_try_domain_sweep_shortcut(
     Returns (handled, reply), or None. A whole-home sweep gets a short spoken
     confirmation — the user cannot see the rooms they are not in, so silence
     there is indistinguishable from "nothing happened". Room-scoped and
-    caller-room sweeps stay silent: the change is right in front of them.
+    caller-room sweeps stay silent on a satellite: the change is right in
+    front of them. With ``confirm`` (text chat, the app) they are confirmed
+    too, because nobody there sees the room.
     """
     if not message:
         return None
@@ -196,8 +199,17 @@ async def async_try_domain_sweep_shortcut(
         "AI Plugin sweep shortcut: %s %d %s(s) in %s (lang=%s)",
         service, len(ids), domain, scope, lang,
     )
+    label = L.label(_SWEEP_LABEL_KEYS[domain], lang)
     if area_id is None:
         key = "sweep_all_on" if service == "turn_on" else "sweep_all_off"
-        label = L.label(_SWEEP_LABEL_KEYS[domain], lang)
         return (True, L.template(key, lang, label=label))
+    if confirm:
+        key = "sweep_room_on" if service == "turn_on" else "sweep_room_off"
+        room = area.name if area is not None else _area_name(hass, area_id)
+        return (True, L.template(key, lang, label=label, area=room))
     return (True, "")
+
+
+def _area_name(hass: HomeAssistant, area_id: str) -> str:
+    found = registry.ar.async_get(hass).async_get_area(area_id)
+    return found.name if found is not None else area_id

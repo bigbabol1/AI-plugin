@@ -20,22 +20,12 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from ..const import (
-    CONF_CONVERSATION_MEMORY,
-    CONF_DIARY_DAYS,
-    CONF_ENABLE_THINKING,
     BACKEND_SEARXNG,
     CONF_API_KEY,
     CONF_BASE_URL,
-    CONF_CONTEXT_WINDOW,
-    CONF_MAX_RESULTS,
-    CONF_MAX_TOKENS,
-    CONF_MAX_TOOL_ITERATIONS,
     CONF_MCP_SERVERS,
     CONF_MODEL,
-    CONF_RESPONSE_TIMEOUT,
     CONF_SEARXNG_URL,
-    CONF_TEMPERATURE,
-    CONF_TOP_P,
     CONF_WEB_SEARCH_BACKEND,
     CONF_WEB_SEARCH_ENABLED,
     DEFAULT_BASE_URL,
@@ -45,16 +35,14 @@ from ..const import (
     ERROR_MODEL_REQUIRED,
 )
 from ..exceptions import CannotConnect
-from ..option_values import merge_advanced_options
 from ..providers.openai_compat import (
     async_fetch_models,
     async_show_model,
     model_capabilities,
-    model_context_length,
-    model_limit_errors,
 )
 
 
+from .apply import apply_advanced, apply_memory
 from .mcp_steps import MCPServerStepsMixin
 from .voice_id_steps import VoiceIDStepsMixin
 from .schemas import (
@@ -62,7 +50,6 @@ from .schemas import (
     _memory_schema,
     _is_valid_url,
     _tools_schema,
-    _validate_advanced_input,
     _web_search_schema,
 )
 
@@ -252,10 +239,7 @@ class AIPluginOptionsFlow(MCPServerStepsMixin, VoiceIDStepsMixin, config_entries
     ) -> config_entries.FlowResult:
         """Saved facts, the conversation on a satellite, and the diary."""
         if user_input is not None:
-            for key in (CONF_CONVERSATION_MEMORY, CONF_DIARY_DAYS):
-                if key in user_input:
-                    user_input[key] = int(user_input[key])
-            self._options = {**self._options, **user_input}
+            self._options = apply_memory(self._options, user_input)
             return self.async_create_entry(title="", data=self._options)
         return self.async_show_form(
             step_id="memory",
@@ -283,36 +267,14 @@ class AIPluginOptionsFlow(MCPServerStepsMixin, VoiceIDStepsMixin, config_entries
     ) -> config_entries.FlowResult:
         """Edit advanced settings."""
         if user_input is not None:
-            errors = _validate_advanced_input(user_input)
-            if not errors and (
-                user_input.get(CONF_CONTEXT_WINDOW)
-                or user_input.get(CONF_ENABLE_THINKING)
-            ):
-                # Fail-open Ollama check: refuse what the model cannot do,
-                # here where it can be said, not later on a voice turn.
-                _show = await async_show_model(
-                    str(self._options.get(CONF_BASE_URL, "")),
-                    str(self._options.get(CONF_MODEL, "")),
-                    api_key=self._options.get(CONF_API_KEY),
-                )
-                errors = model_limit_errors(
-                    user_input,
-                    model_capabilities(_show),
-                    model_context_length(_show),
-                )
+            options, errors = await apply_advanced(self._options, user_input)
             if errors:
                 return self.async_show_form(
                     step_id="advanced",
                     data_schema=_advanced_schema(user_input, self.hass),
                     errors=errors,
                 )
-            for key in (CONF_CONTEXT_WINDOW, CONF_MAX_TOOL_ITERATIONS, CONF_RESPONSE_TIMEOUT, CONF_MAX_RESULTS, CONF_MAX_TOKENS):
-                if key in user_input:
-                    user_input[key] = int(user_input[key])
-            for key in (CONF_TEMPERATURE, CONF_TOP_P):
-                if key in user_input:
-                    user_input[key] = float(user_input[key])
-            self._options = merge_advanced_options(self._options, user_input)
+            self._options = options
             return self.async_create_entry(title="", data=self._options)
 
         return self.async_show_form(

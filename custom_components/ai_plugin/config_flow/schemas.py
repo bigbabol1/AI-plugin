@@ -40,6 +40,7 @@ from ..const import (
     CONF_RESPONSE_TIMEOUT,
     CONF_OFFLINE_FALLBACK,
     CONF_SELF_ECHO_FILTER,
+    CONF_SHOW_PANEL,
     CONF_SUMMARIZATION_ENABLED,
     CONF_SYSTEM_PROMPT,
     CONF_TIMER_ANNOUNCE,
@@ -68,6 +69,7 @@ from ..const import (
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_OFFLINE_FALLBACK,
     DEFAULT_SELF_ECHO_FILTER,
+    DEFAULT_SHOW_PANEL,
     DEFAULT_TIMER_ANNOUNCE,
     DEFAULT_MEMORY_ENABLED,
     DEFAULT_SUMMARIZATION_ENABLED,
@@ -335,6 +337,10 @@ def _advanced_schema(current: dict[str, Any], hass: Any) -> vol.Schema:
             vol.Optional(
                 CONF_OFFLINE_FALLBACK,
                 default=current.get(CONF_OFFLINE_FALLBACK, DEFAULT_OFFLINE_FALLBACK),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_SHOW_PANEL,
+                default=current.get(CONF_SHOW_PANEL, DEFAULT_SHOW_PANEL),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_TIMER_ANNOUNCE,

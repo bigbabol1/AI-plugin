@@ -175,6 +175,37 @@ class DiaryManager:
                     self._vectors[entry["id"]] = self._encoder.embed(entry["text"])
         return added
 
+    async def async_edit(self, note_id: str, text: str, expected: str | None = None) -> bool:
+        """Change one note's text (the sidebar panel's edit).
+
+        With ``expected``, only while the note still reads that, so a note
+        changed meanwhile is not overwritten. Its search vector is rebuilt.
+        """
+        text = re.sub(r"\s+", " ", str(text or "")).strip()[:_MAX_NOTE_CHARS]
+        entry = next((e for e in self._entries if e.get("id") == note_id), None)
+        if not text or entry is None or (expected is not None and entry.get("text") != expected):
+            return False
+        if entry["text"] == text:
+            return True
+        entry["text"] = text
+        await self._async_save()
+        if self._encoder is not None:
+            encoder = self._encoder
+            self._vectors[note_id] = await self._hass.async_add_executor_job(encoder.embed, text)
+        else:
+            self._vectors.pop(note_id, None)
+        return True
+
+    async def async_delete(self, note_id: str) -> bool:
+        """Remove one note by its id (the sidebar panel's delete)."""
+        keep = [e for e in self._entries if e.get("id") != note_id]
+        if len(keep) == len(self._entries):
+            return False
+        self._entries = keep
+        self._vectors.pop(note_id, None)
+        await self._async_save()
+        return True
+
     async def async_forget(self, owner: str | None) -> int:
         """Remove one person's notes (unrecognised voices: owner None)."""
         keep = [e for e in self._entries if e.get("owner") != owner]

@@ -4,6 +4,61 @@ All notable changes to AI Plugin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## v1.4.0 — the control center
+
+### Heads-up when updating
+
+- **New: the AI Plugin control center in the sidebar** (administrators only). See below.
+  If you do not want it, switch off *Show AI Plugin in the sidebar* under Configure →
+  Advanced.
+- **Six new diagnostic entities** appear on the AI Plugin device. None of them is exposed
+  to Assist.
+- **Keep *Prefer handling commands locally* off** in your voice assistant. The README now
+  says why: with it on, follow-ups such as "set it to 60%" lose their target, those turns
+  are missing from the control center, and the plugin's timers are bypassed.
+
+### Added
+
+- **Control center: the AI Plugin page in the sidebar.** One place to see what the
+  assistant is doing and to change how it works:
+  - **Model link**: whether the model server answers and how fast, with a *Check now*
+    button, *Reload plugin*, and, on Ollama, how much of the model sits on the GPU, its
+    context and when it unloads. Small charts show the last health checks and reply times.
+  - **Live feed** of the last 50 turns, with the satellite, the reply time, the tools each
+    turn used and any safeguard that stepped in. Turns answered by an automation's
+    sentence trigger are shown too. Counters since the last start.
+  - **Every setting on tabs** instead of form steps: model server with a model picker,
+    model tuning, dialog, voice recognition with enrollment per person, built-in features,
+    web search and an in-place MCP server editor.
+  - **Memory you can edit**: add, change or delete saved facts per person, edit or delete
+    diary notes, and cancel alarms, reminders and scheduled actions.
+  - API keys, search keys, MCP tokens and environment values never reach the page: it
+    shows only whether one is stored. Turns are kept in memory only.
+  - New option *Show AI Plugin in the sidebar* (Advanced, on by default). The options form
+    keeps every setting.
+- **Diagnostic entities** for dashboards and automations: *Last reply time* (seconds, with
+  the satellite and tools), *Turns* and *Safeguard triggers* (counts per kind, kept across
+  restarts), *Next alarm* (a timestamp), *Model server* (connectivity, with response time)
+  and *Model loaded* (Ollama only: whether the model is in memory).
+- **Travel time home.** When a Waze, Google Maps or HERE travel time sensor starts at a
+  person (or one of their trackers) and is exposed, "How's the traffic on the way home?"
+  and "When will Anna be home?" are answered from it, not from a web search.
+- **Written confirmations in text chat and the app.** "Turn off the printer" typed in
+  Assist or the Companion app now answers "Printer is off." Satellites stay silent after
+  an action, as before.
+
+### Fixed
+
+- **"Set it to 60%" changed the wrong lights** after a lamp was switched on by its alias.
+  Brightness and thermostat commands now match aliases too, and the next "it" knows which
+  lamp was meant.
+- **"Play BBC World Service Radio" found no station.** A station name with "radio" or
+  "station" in it is searched again without that word, and a station whose stream is dead
+  is skipped for the next one with the same name (up to three).
+- **A question about the world was answered from an old diary note.** "Any celebrations
+  in Berlin today?" repeated events a note from an earlier week mentioned, without a web
+  search. A note now stands in for a search only when the question is about you.
+
 ## v1.3.0 — radio stations, speaker groups, and Assist when the model is down
 
 ### Heads-up when updating

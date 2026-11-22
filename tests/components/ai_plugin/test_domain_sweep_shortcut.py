@@ -315,3 +315,16 @@ async def test_confirmation_localized_de(patched):
     )
 
     assert result == (True, "OK, alle Lichter sind aus.")
+
+
+@pytest.mark.asyncio
+async def test_text_chat_confirms_a_room_sweep(patched):
+    """Nobody in the app sees the kitchen, so the sweep says what it did."""
+    hass, ent_reg, dev_reg, area_reg = _make_hass()
+    patched(hass, ent_reg, dev_reg, area_reg)
+
+    result = await async_try_domain_sweep_shortcut(
+        hass, "turn off all lights in the kitchen", lang="en", confirm=True
+    )
+
+    assert result == (True, "OK, the lights in Kitchen are off.")

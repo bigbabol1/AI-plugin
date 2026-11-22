@@ -58,6 +58,8 @@ CONF_SELF_ECHO_FILTER = "self_echo_filter"
 # built-in Assist agent so lights and timers still work by voice.
 CONF_OFFLINE_FALLBACK = "offline_fallback"
 DEFAULT_OFFLINE_FALLBACK = True
+CONF_SHOW_PANEL = "show_panel"
+DEFAULT_SHOW_PANEL = True
 # After a failed connection, later turns go straight to Assist for this long
 # instead of waiting for the server again.
 OFFLINE_RETRY_S = 60.0
@@ -330,7 +332,7 @@ SYSTEM_PROMPT_DEFAULT = (
     "- Proper-named devices like 'Gustav', 'Dora', 'mood light', 'stehlampe', 'flurlicht' are ENTITY names, NOT areas. Call get_entity or search_entities to resolve them.\n"
     "- DEVICE-NOUN commands ('air purifier', 'humidifier', 'kettle', 'air filter', 'luftreiniger', 'luftbefeuchter', 'wasserkocher', 'wasserkocher', 'fan', 'reading lamp', 'mood light', 'TV', 'speaker') refer to a SPECIFIC device, NOT an area or a domain category. For these you MUST: (1) CALL search_entities with the device noun as query, (2) read the returned list, pick the most likely match, (3) CALL HassTurnOn / HassTurnOff with the returned entity_id. NEVER use set_area_state for these — set_area_state is only for plural-domain commands ('lights', 'fans', 'covers' as a category) or whole-home/whole-room sweeps.\n"
     "- Areas are ROOMS only ('kitchen', 'bedroom', 'living room', 'hallway'). If a tool says 'area X doesn't exist', the user named an entity — retry via get_entity / search_entities instead of giving up.\n"
-    "- To answer where a household member is ('where is Anna', 'is my wife home', 'who is home', and 'where am I', 'what's my location' for the speaker named in [SPEAKER]): each member is a person entity whose state says where they are. Turn a relation ('my wife', 'my husband') into the name from [USER FACTS] first, then CALL list_entities(domain: 'person') and answer from that person's row: [home] = at home, [not_home] = away from home, any other state = the place they are at; a last address in the row is where they were last seen. Never say you lack location information without calling it.\n"
+    "- To answer where a household member is ('where is Anna', 'is my wife home', 'who is home', and 'where am I', 'what's my location' for the speaker named in [SPEAKER]): each member is a person entity whose state says where they are. Turn a relation ('my wife', 'my husband') into the name from [USER FACTS] first, then CALL list_entities(domain: 'person') and answer from that person's row: [home] = at home, [not_home] = away from home, any other state = the place they are at; a last address in the row is where they were last seen. The row may also give their travel time to home now with current traffic: answer 'how is the traffic on my way home', 'how long until I'm home', 'when will Anna be home' from it, never with web_search. Say the minutes and the route; the time already includes traffic, so do not call the traffic good or bad. Never say you lack location information without calling it.\n"
     "- Never invent entity_ids, area names, or states. If a discovery tool returns empty, say so plainly; do not fabricate.\n"
     "- Discovery tools default to entities exposed to the conversation assistant. To inspect hidden or diagnostic entities, pass exposed_only: false.\n"
     "\n"
@@ -506,8 +508,12 @@ SYSTEM_PROMPT_VOICE = (
     "(\"my wife\", \"my husband\") into the name from [USER FACTS] first. CALL "
     "list_entities(domain: \"person\") and answer from that person's row: [home] = at home, "
     "[not_home] = away from home, any other state = the place they are at; a last address in the "
-    "row is where they were last seen, give its street and city. Never say you lack location "
-    "information without calling it.\n"
+    "row is where they were last seen, give its street and city. The row may also give their "
+    "travel time to home now with current traffic: answer \"how's the traffic on my way home\", "
+    "\"how long until I'm home\", \"when will Anna be home\" from it, never with web_search. "
+    "Say the minutes and the route; the time already includes traffic, so do not call the traffic "
+    "good or bad. "
+    "Never say you lack location information without calling it.\n"
     "- Never invent entity_ids or area names. "
     "If unsure, call a discovery tool first.\n"
     "\n"

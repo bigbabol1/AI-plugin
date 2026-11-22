@@ -19,6 +19,9 @@ from . import exposure  # noqa: F401 — re-exported for callers that patch it
 from .formatting import _INTERESTING_ATTRS, _cap, _s
 from .lights import _SWEEP_ALL_KEYWORDS
 
+# Integrations whose sensor holds the travel time from an origin entity.
+_TRAVEL_DOMAINS = ("waze_travel_time", "google_travel_time", "here_travel_time")
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -128,6 +131,9 @@ class EntityToolsMixin:
             address = self._person_address(entity_id, ent_state, exposed_only)
             if address:
                 state_val = f"{state_val}, last address: {address}"
+            travel = self._person_travel(entity_id, ent_state, exposed_only)
+            if travel:
+                state_val = f"{state_val}, {travel}"
             rows.append((entity_id, friendly, a_name or "-", state_val))
 
         if not rows:
@@ -255,6 +261,9 @@ class EntityToolsMixin:
         address = self._person_address(entity_id, state, exposed_only)
         if address:
             lines.append(f"last address: {address}")
+        travel = self._person_travel(entity_id, state, exposed_only)
+        if travel:
+            lines.append(travel)
         if attrs:
             lines.append("attributes:")
             lines.extend(attrs)
@@ -378,6 +387,59 @@ class EntityToolsMixin:
             )
             return f"{head}\n{head_extra}\n" + "\n".join(other)
         return raw
+
+    def _person_travel(self, entity_id: str, state, exposed_only: bool) -> str | None:
+        """Travel time with live traffic for a person who is away, or None.
+
+        Comes from a travel time integration (Waze, Google Maps, HERE) set up
+        with the person, or one of their trackers, as the origin. With
+        exposed_only, its sensor must be exposed too.
+        """
+        if not entity_id.startswith("person.") or state is None or state.state == "home":
+            return None
+        origins = {entity_id, *(state.attributes.get("device_trackers") or ())}
+        ent_reg = er.async_get(self._hass)
+        parts: list[str] = []
+        for domain in _TRAVEL_DOMAINS:
+            for entry in self._hass.config_entries.async_entries(domain):
+                data = getattr(entry, "data", None) or {}
+                origin = data.get("origin") or data.get("origin_entity_id")
+                if origin not in origins:
+                    continue
+                dest = data.get("destination") or data.get("destination_entity_id") or ""
+                text = self._travel_sensor_text(ent_reg, entry.entry_id, dest, exposed_only)
+                if text:
+                    parts.append(text)
+        return "; ".join(parts) or None
+
+    def _travel_sensor_text(self, ent_reg, entry_id: str, dest: str, exposed_only: bool) -> str | None:
+        for eid, reg in ent_reg.entities.items():
+            if getattr(reg, "config_entry_id", None) != entry_id or not eid.startswith("sensor."):
+                continue
+            if exposed_only and not self._is_exposed(eid):
+                continue
+            sensor = self._hass.states.get(eid)
+            if sensor is None:
+                continue
+            try:
+                minutes = round(float(sensor.state))
+            except (TypeError, ValueError):
+                continue
+            if dest == "zone.home":
+                where = "home"
+            else:
+                dest_state = self._hass.states.get(dest) if dest else None
+                where = _s(dest_state.attributes.get("friendly_name")) if dest_state else ""
+                where = where or dest or "the destination"
+            text = f"travel time to {where} now: {minutes} min with current traffic"
+            distance = sensor.attributes.get("distance")
+            if isinstance(distance, (int, float)):
+                text += f", {distance:.1f} km"
+            route = _s(sensor.attributes.get("route"))
+            if route:
+                text += f" via {route}"
+            return text
+        return None
 
     def _person_address(self, entity_id: str, state, exposed_only: bool) -> str | None:
         """The street address of a person who is not at home, or None.

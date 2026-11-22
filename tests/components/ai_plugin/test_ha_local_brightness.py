@@ -560,3 +560,33 @@ def test_both_prompts_route_colour_to_set_brightness() -> None:
         s for s in TOOL_SCHEMAS if s["function"]["name"] == "set_brightness"
     )
     assert "color" in schema["function"]["parameters"]["properties"]
+
+
+async def test_a_lamp_is_found_by_its_alias(patched_registries) -> None:
+    """'bed left' is an alias of a German-named lamp; only that lamp changes.
+    Before, the name missed, and the model then set the whole room."""
+    areas = [_area("a1", "bedroom")]
+    left = _entity("light.bett_links", area_id="a1")
+    left.aliases = {"Bed left", None}
+    ents = [left, _entity("light.bett_rechts", area_id="a1")]
+    states = {
+        "light.bett_links": SimpleNamespace(state="on", attributes={"brightness": 255, "friendly_name": "Bett Links"}),
+        "light.bett_rechts": SimpleNamespace(state="off", attributes={"friendly_name": "Bett Rechts"}),
+    }
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, states)
+    patched_registries(ar_, er_, dr_)
+
+    await HALocalToolRegistry(hass)._set_brightness(command="set", level=60, name="bed left")
+    assert _calls(hass) == {60: ["light.bett_links"]}
+
+
+async def test_an_unknown_lamp_does_not_widen_to_the_room(patched_registries) -> None:
+    areas = [_area("a1", "bedroom")]
+    ents = [_entity("light.bett_links", area_id="a1")]
+    states = {"light.bett_links": _state("on", 255)}
+    hass, ar_, er_, dr_ = _make_hass(areas, ents, states)
+    patched_registries(ar_, er_, dr_)
+
+    out = await HALocalToolRegistry(hass)._set_brightness(command="set", level=60, name="sofa")
+    assert out.startswith("No exposed light matches 'sofa'")
+    hass.services.async_call.assert_not_awaited()

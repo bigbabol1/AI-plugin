@@ -731,6 +731,8 @@ def _voice_orch_with_intent(tool_name: str, reply: str) -> Orchestrator:
     )
     mcp.call_tool = AsyncMock(return_value='{"response_type": "action_done"}')
     orch._mcp = mcp
+    # Spoken on a satellite: only there does a switched light stay silent.
+    orch._is_voice_device = lambda device_id: True
     return orch
 
 
@@ -833,6 +835,34 @@ async def test_voice_thermostat_change_keeps_its_confirmation() -> None:
     )
 
     assert reply == "Heating set to 21 degrees."
+
+
+async def test_text_chat_keeps_the_confirmation_with_voice_mode_on() -> None:
+    """The voice-mode option shortens replies everywhere, but only a satellite
+    stays silent after a switch: in the app nobody sees the device."""
+    orch = _voice_orch_with_intent("HassTurnOn", "The kitchen light is on.")
+    orch._is_voice_device = lambda device_id: False
+
+    reply = await orch.async_process(
+        message="Turn on the kitchen light.",
+        conversation_id="conv-text",
+        language="en",
+    )
+
+    assert reply == "The kitchen light is on."
+
+
+async def test_text_chat_gets_done_when_the_model_says_nothing() -> None:
+    orch = _voice_orch_with_intent("HassTurnOn", "")
+    orch._is_voice_device = lambda device_id: False
+
+    reply = await orch.async_process(
+        message="Turn on the kitchen light.",
+        conversation_id="conv-text-empty",
+        language="en",
+    )
+
+    assert reply == "Done."
 
 
 async def test_voice_light_switch_stays_silent() -> None:

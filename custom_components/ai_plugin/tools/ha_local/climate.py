@@ -84,8 +84,15 @@ class ClimateToolsMixin:
             targets = []
             for entry in climates:
                 st = hass.states.get(entry.entity_id)
-                friendly = _s(st.attributes.get("friendly_name") if st else "").lower()
-                if needle == entry.entity_id.lower() or needle in friendly:
+                names = [
+                    _s(st.attributes.get("friendly_name")) if st else "",
+                    _s(getattr(entry, "name", None)),
+                    _s(getattr(entry, "original_name", None)),
+                    *(_s(a) for a in (getattr(entry, "aliases", None) or ()) if a),
+                ]
+                if needle == entry.entity_id.lower() or any(
+                    n and needle in n.lower() for n in names
+                ):
                     targets.append(entry)
             # With one thermostat in the home, "the heating" or "Heizung"
             # can only mean that one.

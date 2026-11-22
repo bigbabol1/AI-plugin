@@ -115,3 +115,24 @@ class EntityContextMixin:
                 else:
                     parts.append(f"{name}(area={area_arg})")
         return "; ".join(parts) if parts else None
+
+    def _remember_shortcut_target(
+        self, conversation_id: str, touched: list[tuple[str, str]]
+    ) -> None:
+        """[LAST ACTION] for a device a shortcut switched without the model."""
+        if not touched:
+            return
+        calls = [
+            {"function": {
+                "name": "HassTurnOn" if service == "turn_on" else "HassTurnOff",
+                "arguments": {"entity_id": entity_id},
+            }}
+            for service, entity_id in touched
+        ]
+        try:
+            ctx = self._extract_entity_context([{"role": "assistant", "tool_calls": calls}])
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("AI Plugin: shortcut target not remembered", exc_info=True)
+            return
+        if ctx:
+            self._last_entities[conversation_id] = ctx

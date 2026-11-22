@@ -32,6 +32,57 @@ from ..const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def satellites(hass) -> dict[str, tuple[str, str]]:
+    """device_id → (assist_satellite entity_id, display name)."""
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    out: dict[str, tuple[str, str]] = {}
+    for entry in er.async_get(hass).entities.values():
+        if entry.entity_id.startswith("assist_satellite.") and entry.device_id:
+            state = hass.states.get(entry.entity_id)
+            name = (state.attributes.get("friendly_name") if state else None) or entry.entity_id
+            out[entry.device_id] = (entry.entity_id, name)
+    return out
+
+
+def mic_group_rooms(hass, mgr) -> dict[str, str]:
+    """mic group → names of the satellites in it."""
+    rooms: dict[str, list[str]] = {}
+    for device_id, (_eid, name) in satellites(hass).items():
+        rooms.setdefault(mgr.mic_group(device_id), []).append(name)
+    return {g: " / ".join(sorted(n)) for g, n in rooms.items()}
+
+
+def voice_id_settings_schema(opts: dict[str, Any]) -> vol.Schema:
+    """On/off, voice-started enrollment and the two thresholds."""
+    from ..voice_id.matching import DEFAULT_MARGIN, DEFAULT_THRESHOLD  # noqa: PLC0415
+
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_VOICE_ID_ENABLED,
+                default=opts.get(CONF_VOICE_ID_ENABLED, DEFAULT_VOICE_ID_ENABLED),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_VOICE_ID_VOICE_ENROLL,
+                default=opts.get(CONF_VOICE_ID_VOICE_ENROLL, DEFAULT_VOICE_ID_VOICE_ENROLL),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_VOICE_ID_THRESHOLD,
+                default=opts.get(CONF_VOICE_ID_THRESHOLD, DEFAULT_THRESHOLD),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.2, max=0.8, step=0.01, mode="box")
+            ),
+            vol.Required(
+                CONF_VOICE_ID_MARGIN,
+                default=opts.get(CONF_VOICE_ID_MARGIN, DEFAULT_MARGIN),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.0, max=0.4, step=0.01, mode="box")
+            ),
+        }
+    )
+
+
 class VoiceIDStepsMixin:
     """Voice recognition screens. Mixed into AIPluginOptionsFlow."""
 
@@ -76,23 +127,11 @@ class VoiceIDStepsMixin:
 
     def _satellites(self) -> dict[str, tuple[str, str]]:
         """device_id → (assist_satellite entity_id, display name)."""
-        from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
-
-        out: dict[str, tuple[str, str]] = {}
-        for entry in er.async_get(self.hass).entities.values():
-            if entry.entity_id.startswith("assist_satellite.") and entry.device_id:
-                state = self.hass.states.get(entry.entity_id)
-                name = (state.attributes.get("friendly_name") if state else None) or entry.entity_id
-                out[entry.device_id] = (entry.entity_id, name)
-        return out
+        return satellites(self.hass)
 
     def _mic_group_rooms(self) -> dict[str, str]:
         """mic group → names of the satellites in it, for the status lines."""
-        mgr = self._voice_manager()
-        rooms: dict[str, list[str]] = {}
-        for device_id, (_eid, name) in self._satellites().items():
-            rooms.setdefault(mgr.mic_group(device_id), []).append(name)
-        return {g: " / ".join(sorted(n)) for g, n in rooms.items()}
+        return mic_group_rooms(self.hass, self._voice_manager())
 
     async def async_step_voice_id(self, user_input: dict[str, Any] | None = None):
         return self.async_show_menu(
@@ -102,37 +141,12 @@ class VoiceIDStepsMixin:
         )
 
     async def async_step_voice_id_settings(self, user_input: dict[str, Any] | None = None):
-        from ..voice_id.matching import DEFAULT_MARGIN, DEFAULT_THRESHOLD  # noqa: PLC0415
-
         if user_input is not None:
             self._options.update(user_input)
             return self.async_create_entry(title="", data=self._options)
-        opts = self._options
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_VOICE_ID_ENABLED,
-                    default=opts.get(CONF_VOICE_ID_ENABLED, DEFAULT_VOICE_ID_ENABLED),
-                ): bool,
-                vol.Required(
-                    CONF_VOICE_ID_VOICE_ENROLL,
-                    default=opts.get(CONF_VOICE_ID_VOICE_ENROLL, DEFAULT_VOICE_ID_VOICE_ENROLL),
-                ): bool,
-                vol.Required(
-                    CONF_VOICE_ID_THRESHOLD,
-                    default=opts.get(CONF_VOICE_ID_THRESHOLD, DEFAULT_THRESHOLD),
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=0.2, max=0.8, step=0.01, mode="box")
-                ),
-                vol.Required(
-                    CONF_VOICE_ID_MARGIN,
-                    default=opts.get(CONF_VOICE_ID_MARGIN, DEFAULT_MARGIN),
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=0.0, max=0.4, step=0.01, mode="box")
-                ),
-            }
+        return self.async_show_form(
+            step_id="voice_id_settings", data_schema=voice_id_settings_schema(self._options)
         )
-        return self.async_show_form(step_id="voice_id_settings", data_schema=schema)
 
     async def async_step_voice_id_enroll(self, user_input: dict[str, Any] | None = None):
         mgr = self._voice_manager()

@@ -263,3 +263,67 @@ async def test_a_word_shared_with_fragments_stays_ambiguous(patched):
     assert await async_try_action_shortcut(hass, "Schalte Lampe ein", lang="de") is None
     hass.services.async_call.assert_not_awaited()
 
+
+
+@pytest.mark.asyncio
+async def test_shortcut_reports_the_device_it_switched(patched):
+    """The caller remembers it, so "put it to 60%" next turn means that lamp."""
+    ents = [_entity("light.bed_left", name="Bed left", area_id="bedroom")]
+    hass, ent_reg, dev_reg = _make_hass(ents)
+    patched(hass, ent_reg, dev_reg)
+    touched: list = []
+    result = await async_try_action_shortcut(hass, "turn on bed left", lang="en", touched=touched)
+    assert result == (True, "")
+    assert touched == [("turn_on", "light.bed_left")]
+
+
+def test_shortcut_target_becomes_last_action() -> None:
+    from custom_components.ai_plugin.orchestrator.entity_context import EntityContextMixin
+
+    class _O(EntityContextMixin):
+        def __init__(self):
+            self._last_entities = {}
+
+        def _resolve_entity_area(self, name_or_id):
+            return (name_or_id, "Bedroom")
+
+    o = _O()
+    o._remember_shortcut_target("c1", [("turn_on", "light.bed_left")])
+    assert o._last_entities["c1"] == "HassTurnOn(light.bed_left → light.bed_left @ Bedroom)"
+    o._remember_shortcut_target("c2", [])
+    assert "c2" not in o._last_entities
+
+
+# ── a written confirmation where nobody sees the device ───────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "msg,lang,expected",
+    [
+        ("turn off the printer", "en", "3D Printer is off."),
+        ("turn on the printer", "en", "3D Printer is on."),
+        ("schalte den Drucker aus", "de", "3D Printer ist aus."),
+    ],
+)
+async def test_text_chat_gets_a_confirmation_naming_the_device(patched, msg, lang, expected):
+    """2026-11-21: "turn off the 3D printer" in the companion app switched it
+    and said nothing, so the user could not tell whether it worked."""
+    printer = _entity("switch.printer", name="3D Printer", aliases=("printer", "Drucker"))
+    hass, ent_reg, dev_reg = _make_hass([printer])
+    hass.states.get.side_effect = lambda eid: SimpleNamespace(
+        attributes={"friendly_name": "3D Printer"}
+    ) if eid == "switch.printer" else None
+    patched(hass, ent_reg, dev_reg)
+
+    result = await async_try_action_shortcut(hass, msg, lang=lang, confirm=True)
+
+    assert result == (True, expected)
+
+
+@pytest.mark.asyncio
+async def test_a_satellite_still_gets_silence(patched):
+    hass, ent_reg, dev_reg = _make_hass([TV()])
+    patched(hass, ent_reg, dev_reg)
+
+    assert await async_try_action_shortcut(hass, "turn on the TV", lang="en") == (True, "")

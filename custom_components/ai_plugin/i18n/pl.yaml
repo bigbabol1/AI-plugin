@@ -33,6 +33,14 @@ templates:
   err_action_failed: "Nie udało mi się tego wykonać. Podaj urządzenie lub pomieszczenie."
   sweep_all_on:  "OK, wszystko włączone."
   sweep_all_off: "OK, wszystko wyłączone."
+  # A switch confirmed in words where nobody sees it (text chat, the app).
+  action_done_on: "Włączono: {name}."
+  action_done_off: "Wyłączono: {name}."
+  action_done_open: "Otwarto: {name}."
+  action_done_close: "Zamknięto: {name}."
+  sweep_room_on: "OK, wszystko włączone ({area})."
+  sweep_room_off: "OK, wszystko wyłączone ({area})."
+  action_done: "Gotowe."
   note_tool_limit:   "[Uwaga: osiągnięto limit narzędzi — odpowiedź może być niepełna.]"
   tool_wait:         "Chwileczkę."
 

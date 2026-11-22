@@ -115,6 +115,53 @@ async def test_a_failed_station_search_plays_the_words_as_asked() -> None:
     assert _played(registry)["media_id"] == "North radio"
 
 
+WORLD = [
+    {"name": "World News", "uri": "radiobrowser://radio/dead"},
+    {"name": "World News", "uri": "radiobrowser://radio/live"},
+    {"name": "World News Europe", "uri": "radiobrowser://radio/eu"},
+]
+
+
+def _picky_registry(dead=()):
+    """Search wants every word in the name, like Radio Browser; ``dead``
+    streams fail to play, like a 410 Gone."""
+    registry = _registry()
+
+    async def _call(domain, service, *args, **kwargs):
+        if service == "search":
+            words = args[0]["name"].casefold().split()
+            return {"radio": [s for s in WORLD if all(w in s["name"].casefold() for w in words)]}
+        if kwargs["service_data"]["media_id"] in dead:
+            raise RuntimeError("The requested media item could not be found.")
+        return None
+
+    registry._hass.services.async_call = AsyncMock(side_effect=_call)
+    return registry
+
+
+async def test_a_station_is_searched_again_without_the_word_radio() -> None:
+    """Live 2026-11-21: "Play BBC World Service Radio." found nothing,
+    because no station of that name says "Radio"."""
+    registry = _picky_registry()
+    result = await registry._play_music("World News Radio", "kitchen")
+    assert [c.args[2]["name"] for c in _searches(registry)] == ["World News Radio", "World News"]
+    assert result == f"OK — playing 'World News' (radio) on {SPEAKER}."
+
+
+async def test_a_dead_stream_falls_through_to_the_next_station() -> None:
+    """Live 2026-11-21: the first BBC World Service entry answered 410 Gone."""
+    registry = _picky_registry(dead={"radiobrowser://radio/dead"})
+    result = await registry._play_music("World News", "kitchen", media_type="radio")
+    assert result == f"OK — playing 'World News' (radio) on {SPEAKER}."
+    assert _played(registry)["media_id"] == "radiobrowser://radio/live"
+
+
+async def test_when_no_stream_plays_the_user_is_told() -> None:
+    registry = _picky_registry(dead={s["uri"] for s in WORLD})
+    result = await registry._play_music("World News", "kitchen", media_type="radio")
+    assert result.startswith("[No working stream found for 'World News'")
+
+
 @pytest.mark.parametrize("prompt", [SYSTEM_PROMPT_DEFAULT, SYSTEM_PROMPT_VOICE])
 def test_both_prompts_name_media_type_radio(prompt) -> None:
     assert "media_type: 'radio'" in prompt

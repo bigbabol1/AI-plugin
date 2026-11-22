@@ -23,6 +23,14 @@ _LOGGER = logging.getLogger(__name__)
 # HassTurnOn-equivalent domains a deterministic on/off may actuate.
 _ACTION_DOMAINS = ("switch", "light", "fan", "input_boolean", "humidifier", "siren")
 
+# The written confirmation for each service, where nobody sees the change.
+_CONFIRM_KEYS = {
+    "turn_on": "action_done_on",
+    "turn_off": "action_done_off",
+    "open_cover": "action_done_open",
+    "close_cover": "action_done_close",
+}
+
 def _resolve_named_entity(
     hass: HomeAssistant,
     name: str,
@@ -122,6 +130,8 @@ async def async_try_action_shortcut(
     *,
     lang: str = "en",
     device_id: str | None = None,
+    touched: list[tuple[str, str]] | None = None,
+    confirm: bool = False,
 ) -> tuple[bool, str] | None:
     """Pre-LLM shortcut: turn a single named device on/off, in any language.
 
@@ -132,8 +142,13 @@ async def async_try_action_shortcut(
     name to one exposed entity, and dispatches homeassistant.turn_on/off
     directly. 'switch'/'schalte' is the verb here, never a domain.
 
-    Returns (handled, reply) with reply="" for TTS suppression, or None to
-    fall through to the LLM (no match / unresolved / ambiguous device).
+    Returns (handled, reply), or None to fall through to the LLM (no match /
+    unresolved / ambiguous device). The reply is empty on a satellite, where
+    the change itself is the confirmation; with ``confirm`` (text chat, the
+    companion app) it names the device and its new state, because nobody
+    there can see whether it worked.
+    On success, ``touched`` (if given) gets (service, entity_id), so the
+    caller can remember the device for "it" in the next turn.
     """
     if not message:
         return None
@@ -170,4 +185,11 @@ async def async_try_action_shortcut(
         "AI Plugin action shortcut: %s.%s → %s (lang=%s)",
         service_domain, service, entity_id, lang,
     )
-    return (True, "")
+    if touched is not None:
+        touched.append((service, entity_id))
+    if not confirm:
+        return (True, "")
+    state = hass.states.get(entity_id)
+    shown = (state.attributes.get("friendly_name") if state is not None else None) or name
+    key = _CONFIRM_KEYS.get(service, "action_done")
+    return (True, L.template(key, lang, name=shown))

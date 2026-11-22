@@ -1015,6 +1015,57 @@ async def test_get_entity_gives_an_away_persons_last_address(
     assert f"last address: {_ADDRESS}" in out
 
 
+def _travel_setup(patched_registries, monkeypatch, *, anna_state: str, exposed: set[str]):
+    """_people_setup plus a Waze sensor from Anna to home."""
+    reg = _people_setup(patched_registries, monkeypatch, anna_state=anna_state, exposed=exposed)
+    hass = reg._hass
+    from custom_components.ai_plugin.tools.ha_local import entities as _ents
+
+    er_r = _ents.er.async_get(hass)  # the registry mock patched_registries attached
+    er_r.entities["sensor.waze_anna_to_home"] = SimpleNamespace(
+        **vars(_entity("sensor.waze_anna_to_home")), config_entry_id="waze1"
+    )
+    hass.config_entries.async_entries = lambda domain: (
+        [SimpleNamespace(entry_id="waze1", data={"origin": "person.anna", "destination": "zone.home"})]
+        if domain == "waze_travel_time" else []
+    )
+    states_get = hass.states.get.side_effect
+    waze = SimpleNamespace(state="23.4", attributes={"distance": 9.24, "route": "A100 Example"})
+    hass.states.get.side_effect = lambda eid: waze if eid == "sensor.waze_anna_to_home" else states_get(eid)
+    return reg
+
+
+@pytest.mark.asyncio
+async def test_away_person_row_gives_travel_time_home(patched_registries, monkeypatch) -> None:
+    reg = _travel_setup(
+        patched_registries, monkeypatch, anna_state="not_home",
+        exposed={"person.anna", "person.ben", "sensor.waze_anna_to_home"},
+    )
+    out = await reg.call_tool("list_entities", {"domain": "person"})
+    assert ("person.anna — Anna [not_home, travel time to home now: 23 min with current traffic, "
+            "9.2 km via A100 Example]") in out
+    out = await reg.call_tool("get_entity", {"name_or_id": "person.anna"})
+    assert "travel time to home now: 23 min" in out
+
+
+@pytest.mark.asyncio
+async def test_travel_time_hidden_when_unexposed(patched_registries, monkeypatch) -> None:
+    reg = _travel_setup(
+        patched_registries, monkeypatch, anna_state="not_home",
+        exposed={"person.anna", "person.ben"},
+    )
+    assert "travel time" not in await reg.call_tool("list_entities", {"domain": "person"})
+
+
+@pytest.mark.asyncio
+async def test_no_travel_time_for_a_person_at_home(patched_registries, monkeypatch) -> None:
+    reg = _travel_setup(
+        patched_registries, monkeypatch, anna_state="home",
+        exposed={"person.anna", "person.ben", "sensor.waze_anna_to_home"},
+    )
+    assert "travel time" not in await reg.call_tool("list_entities", {"domain": "person"})
+
+
 def test_prompts_route_people_questions_to_the_person_list() -> None:
     from custom_components.ai_plugin.const import SYSTEM_PROMPT_DEFAULT, SYSTEM_PROMPT_VOICE
 

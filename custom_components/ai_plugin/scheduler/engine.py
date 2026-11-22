@@ -97,6 +97,8 @@ class Scheduler:
         self._rings: dict[str, _Ring] = {}
         self._tasks: set[asyncio.Task] = set()
         self._runner: Callable[[Job], Awaitable[str]] | None = None
+        # Called whenever the jobs change: the next-alarm sensor.
+        self._listeners: list[Callable[[], None]] = []
 
     # ── time ────────────────────────────────────────────────────────────
 
@@ -158,6 +160,20 @@ class Scheduler:
     def jobs(self) -> list[Job]:
         return sorted(self._jobs, key=lambda j: j.due)
 
+    def next_alarm(self) -> Job | None:
+        """The alarm that rings next, if any."""
+        return next((j for j in self.jobs() if j.kind == KIND_ALARM), None)
+
+    def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Call ``listener()`` whenever the jobs change; returns the undo."""
+        self._listeners.append(listener)
+
+        def remove() -> None:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+        return remove
+
     async def async_add(self, kind: str, due: datetime, **fields) -> Job:
         job = Job(id=uuid.uuid4().hex[:8], kind=kind, due=due, **fields)
         self._jobs.append(job)
@@ -181,6 +197,11 @@ class Scheduler:
             self._unsub = async_track_point_in_utc_time(
                 self._hass, self._async_on_timer, min(j.due for j in self._jobs)
             )
+        for listener in list(self._listeners):
+            try:
+                listener()
+            except Exception:  # noqa: BLE001 — a sensor never stops the scheduler
+                _LOGGER.debug("AI Plugin scheduler: listener failed", exc_info=True)
 
     async def _async_on_timer(self, _fired_at: datetime | None = None) -> None:
         self._unsub = None

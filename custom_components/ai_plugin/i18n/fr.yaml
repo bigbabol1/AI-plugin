@@ -33,6 +33,14 @@ templates:
   err_action_failed: "Je n'ai pas pu exécuter cela. Précisez l'appareil ou la pièce."
   sweep_all_on:  "C'est fait, tout est allumé."
   sweep_all_off: "C'est fait, tout est éteint."
+  # A switch confirmed in words where nobody sees it (text chat, the app).
+  action_done_on: "Allumé : {name}."
+  action_done_off: "Éteint : {name}."
+  action_done_open: "Ouvert : {name}."
+  action_done_close: "Fermé : {name}."
+  sweep_room_on: "C'est fait, tout est allumé dans {area}."
+  sweep_room_off: "C'est fait, tout est éteint dans {area}."
+  action_done: "C'est fait."
   note_tool_limit:   "[Note : limite d'appels d'outils atteinte — la réponse peut être incomplète.]"
   tool_wait:         "Un instant."
 

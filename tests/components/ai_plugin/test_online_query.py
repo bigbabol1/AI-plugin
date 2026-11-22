@@ -233,3 +233,51 @@ def test_a_question_about_an_earlier_conversation_forces_no_search(text: str) ->
 )
 def test_news_about_a_place_still_forces_a_search(text: str) -> None:
     assert _is_online_query(text)
+
+
+_FESTIVAL_NOTE = (
+    "The user asked about events in Berlin this weekend. The assistant "
+    "mentioned the International Short Film Festival and the Italian Film Festival."
+)
+
+
+def _orch_repeating_a_note(note: str, reply: str):
+    orch = _orch_answering([])
+    orch._diary_recall_block = AsyncMock(return_value=("", [note]))
+    orch._provider.async_chat = AsyncMock(return_value=SimpleNamespace(
+        has_tool_calls=False, tool_calls=[], reply_text=lambda: reply,
+    ))
+    return orch
+
+
+async def test_an_old_note_does_not_answer_what_is_on_today() -> None:
+    """2026-11-22: "Is there any celebrations happening in Berlin today?" was
+    answered from a 13 November note on that weekend's festivals, no search."""
+    orch = _orch_repeating_a_note(
+        _FESTIVAL_NOTE,
+        "The International Short Film Festival and the Italian Film Festival are running.",
+    )
+    await orch.async_process("Is there any celebrations happening in Berlin today?", "c3", "en")
+    orch._web_search.async_search.assert_awaited_once()
+
+
+async def test_a_note_still_answers_a_question_about_the_user() -> None:
+    """2026-11-10: "Which film did I pick last weekend?" came from the note."""
+    orch = _orch_repeating_a_note(
+        "Recommended Arrival and Dune; he chose Arrival.", "You chose Arrival last weekend.",
+    )
+    await orch.async_process("Which film did I pick last weekend?", "c4", "en")
+    orch._web_search.async_search.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("Which film did I pick last weekend?", True),
+    ("What did we plan for the weekend?", True),
+    ("Was habe ich letzte Woche gekocht?", True),
+    ("Is there any celebrations happening in Berlin today?", False),
+    ("What is the news in Germany today?", False),
+    ("Was passiert heute in Berlin?", False),
+])
+def test_who_the_question_is_about(text, expected) -> None:
+    from custom_components.ai_plugin.orchestrator.online import _speaks_of_the_user
+    assert _speaks_of_the_user(text) is expected

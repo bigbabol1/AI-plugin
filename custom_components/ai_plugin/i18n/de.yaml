@@ -33,6 +33,14 @@ templates:
   err_action_failed: "Das konnte ich nicht ausführen. Nenne bitte das Gerät oder den Raum."
   sweep_all_on:  "OK, alle {label} sind an."
   sweep_all_off: "OK, alle {label} sind aus."
+  # A switch confirmed in words where nobody sees it (text chat, the app).
+  action_done_on: "{name} ist an."
+  action_done_off: "{name} ist aus."
+  action_done_open: "{name} ist offen."
+  action_done_close: "{name} ist geschlossen."
+  sweep_room_on: "OK, die {label} in {area} sind an."
+  sweep_room_off: "OK, die {label} in {area} sind aus."
+  action_done: "Erledigt."
   note_tool_limit:   "[Hinweis: Werkzeuglimit erreicht — die Antwort ist möglicherweise unvollständig.]"
   tool_wait:         "Einen Moment."
 

@@ -33,6 +33,14 @@ templates:
   err_action_failed: "No pude ejecutar eso. Indica el dispositivo o la habitación."
   sweep_all_on:  "Listo, todo encendido."
   sweep_all_off: "Listo, todo apagado."
+  # A switch confirmed in words where nobody sees it (text chat, the app).
+  action_done_on: "Encendido: {name}."
+  action_done_off: "Apagado: {name}."
+  action_done_open: "Abierto: {name}."
+  action_done_close: "Cerrado: {name}."
+  sweep_room_on: "Listo, todo encendido en {area}."
+  sweep_room_off: "Listo, todo apagado en {area}."
+  action_done: "Hecho."
   note_tool_limit:   "[Nota: se alcanzó el límite de herramientas — la respuesta puede estar incompleta.]"
   tool_wait:         "Un momento."
 

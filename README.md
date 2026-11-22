@@ -33,6 +33,10 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
 
 ## Highlights
 
+**🎛️ Control center**
+- **The AI Plugin page in the sidebar** shows whether the model server answers and how fast, the last 50 turns with the tools and safeguards each one used, and every setting on tabs. Saved facts, diary notes and scheduled items can be edited there. See [Control center](#control-center).
+- Diagnostic entities for dashboards: last reply time, turns, safeguard triggers, next alarm, model server and model loaded.
+
 **🎙️ Built for voice**
 - Streaming replies: voice pipelines with streaming TTS start talking after the first sentence.
 - Follow-up listening: always, never, or **let the model decide** by asking a question.
@@ -101,6 +105,15 @@ It is designed around a constraint most agents ignore: **a 7–12B model on an 8
    [![Open your Home Assistant instance and start setting up AI Plugin.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=ai_plugin)
 
 4. Go to **Settings → Voice assistants**, open your assistant and set **Conversation agent** to *AI Plugin*.
+5. In the same dialog, switch **Prefer handling commands locally** **off**.
+
+> [!IMPORTANT]
+> **Keep *Prefer handling commands locally* off.** When it is on, Home Assistant's built-in agent answers every command it understands (on/off, brightness, timers) and AI Plugin never sees those turns. As a result:
+> - **Follow-ups break.** After *"turn on the desk lamp"* is handled locally, *"set it to 60%"* reaches the plugin with no idea which lamp *it* is.
+> - **The panel's dialog history has gaps.** Locally handled turns are not recorded there.
+> - **The plugin's timer handling is bypassed**, including announce mode.
+>
+> Switching it off costs no speed. The plugin's own shortcut layer already answers plain on/off commands without calling the model, in about 0.01–0.05 s. Your custom sentence triggers keep working either way, because Home Assistant always checks them before any agent.
 
 Every setting can be changed later under **Settings → Devices & services → AI Plugin → Configure**.
 
@@ -165,6 +178,21 @@ Pass counts alone hide *how* a model fails, so these notes separate honest misse
 | Web Search | DuckDuckGo (default), or Tavily/Brave with a key |
 
 ## Features in depth
+
+### Control center
+
+Administrators get an **AI Plugin** entry in the sidebar.
+
+- **Model link**: whether the model server answers and how fast. *Check now* asks again, *Reload plugin* reloads the integration. On Ollama it also shows the model's size, how much of it is on the GPU, its context and when it unloads.
+- **Live feed**: the last 50 turns with the satellite, the reply time, the tools used and any safeguard that changed the reply. Turns an automation's sentence trigger answered show up as *automation*. The feed lives in memory and starts empty after a restart.
+- **Settings**: every option of the options form, on tabs. Saving reloads the integration, as the options form does. API keys, search keys and MCP tokens are never sent to the page; it shows only whether one is stored. Leave the field empty to keep it, type to replace it, or press *Clear* to remove it.
+- **Voices**: enroll or delete a person's voice for [voice recognition](#voice-recognition).
+- **Memory**: saved facts per person (add, edit, forget), diary notes (edit, delete) and alarms, reminders and scheduled actions (cancel).
+- **MCP servers**: add, edit or remove servers in place.
+
+Switch it off with *Show AI Plugin in the sidebar* under Configure → Advanced.
+
+The integration's device also carries six diagnostic entities: **Last reply time**, **Turns**, **Safeguard triggers**, **Next alarm**, **Model server** (connectivity) and **Model loaded** (Ollama only). None of them is exposed to Assist.
 
 ### Follow-up listening
 
@@ -417,6 +445,7 @@ On a 7–12B model, latency is won or lost in three places:
 | Empty replies from reasoning models | Upgrade Ollama to 0.20+. |
 | My voice is often not recognised | Enroll again on that type of satellite: samples from the same kind of microphone count first. If it still misses, lower **Minimum match score** a little. |
 | The iPhone shows the find-my-phone notification but makes no sound | Allow **Critical Alerts** for the Home Assistant app in the iPhone's notification settings. |
+| *"Set it to 60%"* changes the wrong lights, or turns are missing from the panel's dialog history | Switch **Prefer handling commands locally** off in the voice assistant. See [Install](#install). |
 | "Where is Anna?" says it has no information | Expose Anna's **person** entity to Assist. For a street address when she is away, also expose her phone's *Geocoded location* sensor. |
 
 ## Development

@@ -168,7 +168,7 @@ from .grounding import (
 from .entity_context import EntityContextMixin
 from .location import LocationProvider
 from .prompts import PromptBlocksMixin
-from .online import _is_online_followup, _is_online_query
+from .online import _is_online_followup, _is_online_query, _speaks_of_the_user
 from .textproc import (
     _flatten_for_voice,
     _strip_emoji,
@@ -425,6 +425,7 @@ class Orchestrator(
     # enrollment introduction to speak verbatim when the tool started one.
     _turn_speakers: dict | None = None
     _enroll_replies: dict | None = None
+    last_turn: dict | None = None
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._hass = hass
@@ -651,11 +652,14 @@ class Orchestrator(
         # turning rich web_search results into vague summaries.
         # CONF_VOICE_MODE remains as an explicit override for installs
         # that want the compact prompt always.
-        voice_mode: bool = self._is_voice_device(device_id) or bool(
+        on_satellite = self._is_voice_device(device_id)
+        voice_mode: bool = on_satellite or bool(
             self._entry.options.get(CONF_VOICE_MODE, False)
         )
         # Normalize HA's BCP-47 language ("de-DE", "fr-CA") to bare ISO 639-1.
         lang = (language or "en").split("-")[0].lower()
+        # What this turn used, for the sidebar panel's activity list.
+        self.last_turn: dict[str, list[str]] = {"tools": [], "safeguards": []}
 
         # Machine callback from HA's TimerManager (announce-mode timers set
         # a conversation_command that routes back to this agent at expiry).
@@ -882,7 +886,8 @@ class Orchestrator(
             # home untouched; this dispatches the sweep deterministically.
             try:
                 sweep_result = None if later else await async_try_domain_sweep_shortcut(
-                    self._hass, message, lang=lang, device_id=device_id
+                    self._hass, message, lang=lang, device_id=device_id,
+                    confirm=not on_satellite,
                 )
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("AI Plugin: sweep shortcut raised", exc_info=True)
@@ -905,9 +910,11 @@ class Orchestrator(
             # order); this resolves the named device and dispatches the
             # service directly, returning an empty reply for TTS
             # suppression. Misses / ambiguous devices fall through to the LLM.
+            touched: list[tuple[str, str]] = []
             try:
                 action_result = None if later else await async_try_action_shortcut(
-                    self._hass, message, lang=lang, device_id=device_id
+                    self._hass, message, lang=lang, device_id=device_id, touched=touched,
+                    confirm=not on_satellite,
                 )
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("AI Plugin: action shortcut raised", exc_info=True)
@@ -919,6 +926,9 @@ class Orchestrator(
                         "AI Plugin: action shortcut hit for conv=%s",
                         conversation_id,
                     )
+                    # Remember the device, so "put it to 60%" next turn
+                    # finds it in [LAST ACTION] instead of the whole room.
+                    self._remember_shortcut_target(conversation_id, touched)
                     await self._context_mgr.add_turn(
                         conversation_id, "assistant", action_reply
                     )
@@ -1209,6 +1219,8 @@ class Orchestrator(
             # Not when the reply came from a diary note: "Which film did I pick
             # last weekend?" was answered "Arrival" from the note, and the
             # search forced by "last weekend" would only bury it (2026-11-10).
+            # Only for a question about the user, though: a note cannot say
+            # what is on in Berlin today (see _speaks_of_the_user).
             _needs_search = (
                 self._web_search is not None
                 and readonly_schemas
@@ -1217,7 +1229,10 @@ class Orchestrator(
                     _is_online_query(message)
                     or _is_online_followup(message, tool_msgs)
                 )
-                and not _answers_from_notes(reply, diary_texts)
+                and not (
+                    _speaks_of_the_user(message)
+                    and _answers_from_notes(reply, diary_texts)
+                )
             )
             if _needs_search:
                 fired.append("forced_search")
@@ -1464,13 +1479,18 @@ class Orchestrator(
                                 len(replaced), [job.id for job in replaced],
                             )
             history_reply = stored_reply
+            # Only a satellite stays silent: the voice-mode option shortens
+            # replies everywhere, but in text chat or the companion app
+            # nobody sees the device, and silence read as "did it work?".
             if (
                 actuator_acted
-                and voice_mode
+                and on_satellite
                 and not _any_unobservable_action(tool_msgs)
             ):
                 stored_reply = ""
                 reply = ""
+            elif actuator_acted and not stored_reply.strip():
+                reply = stored_reply = history_reply = L.template("action_done", lang)
             elif media_acted:
                 # Music tools always suppress regardless of voice/text —
                 # the audio change IS the confirmation and TTS would talk
@@ -1494,6 +1514,13 @@ class Orchestrator(
             # was not yet forwarded (or the whole reply when nothing was).
             # TTS-suppressed turns arrive here with an empty stored_reply —
             # flush_final sends nothing for those.
+            self.last_turn = {
+                "tools": [
+                    tc.get("function", {}).get("name")
+                    for m in tool_msgs for tc in m.get("tool_calls") or []
+                ],
+                "safeguards": list(fired),
+            }
             if fired:
                 _LOGGER.info(
                     "AI Plugin safeguard: %s | asked=%r | tools=%s | model=%r | final=%r",

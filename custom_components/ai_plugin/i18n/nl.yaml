@@ -40,6 +40,14 @@ templates:
   err_action_failed: "Dat kon ik niet uitvoeren. Noem het apparaat of de kamer."
   sweep_all_on:  "OK, alle {label} zijn aan."
   sweep_all_off: "OK, alle {label} zijn uit."
+  # A switch confirmed in words where nobody sees it (text chat, the app).
+  action_done_on: "{name} staat aan."
+  action_done_off: "{name} staat uit."
+  action_done_open: "{name} is open."
+  action_done_close: "{name} is dicht."
+  sweep_room_on: "OK, de {label} in {area} zijn aan."
+  sweep_room_off: "OK, de {label} in {area} zijn uit."
+  action_done: "Klaar."
   note_tool_limit:   "[Let op: limiet voor tool-aanroepen bereikt — het antwoord kan onvolledig zijn.]"
   tool_wait:         "Een momentje."
 
